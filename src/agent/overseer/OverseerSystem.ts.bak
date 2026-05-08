@@ -1,0 +1,1411 @@
+/**
+ * Overseer System - Autonomous Business Monitoring and Incident Resolution
+ * 
+ * This system oversees the entire business operation, monitoring events, logs,
+ * and issues. It autonomously creates incidents and resolves them by triggering
+ * microtasks that are shredded into smaller, manageable units.
+ */
+
+import { EventEmitter } from 'events'
+import { randomUUID } from 'crypto'
+
+import type {
+  Context,
+  autonomusConfig,
+  Action,
+  ActionResult,
+  Decision,
+  Plan
+} from '../types'
+
+import { autonomusEngine } from '../core/autonomusEngine'
+import { ContextManager } from '../core/ContextManager'
+import { PlanningEngine } from '../core/PlanningEngine'
+import { ActionExecutor } from '../core/ActionExecutor'
+import { LearningSystem } from '../core/LearningSystem'
+
+// Import all intelligence modules
+import { ConversationIntelligence } from '../intelligence/ConversationIntelligence'
+import { CodebaseIntelligence } from '../intelligence/CodebaseIntelligence'
+import { TaskIntelligence } from '../intelligence/TaskIntelligence'
+import { ProjectIntelligence } from '../intelligence/ProjectIntelligence'
+
+// Import all agents
+import { TicketAgent } from '../agents/TicketAgent'
+import { TaskAgent } from '../agents/TaskAgent'
+import { CodeAgent } from '../agents/CodeAgent'
+import { PlannerAgent } from '../agents/PlannerAgent'
+
+/**
+ * OverseerSystem - The autonomous entity that watches over everything
+ */
+export class OverseerSystem extends EventEmitter {
+  private autonomusEngine: autonomusEngine
+  private contextManager: ContextManager
+  private planningEngine: PlanningEngine
+  private actionExecutor: ActionExecutor
+  private learningSystem: LearningSystem
+  
+  // Intelligence modules
+  private conversationIntel: ConversationIntelligence
+  private codebaseIntel: CodebaseIntelligence
+  private taskIntel: TaskIntelligence
+  private projectIntel: ProjectIntelligence
+  
+  // Autonomous agents
+  private ticketAgent: TicketAgent
+  private taskAgent: TaskAgent
+  private codeAgent: CodeAgent
+  private plannerAgent: PlannerAgent
+  
+  // Overseer state
+  private activeIncidents = new Map<string, Incident>()
+  private activeTasks = new Map<string, MicroTask[]>()
+  private monitoringStreams = new Map<string, MonitoringStream>()
+  private overseerMetrics: OverseerMetrics
+  
+  // Configuration
+  private microtaskConfig: MicrotaskConfig = {
+    maxDepth: 5,
+    maxTasksPerLevel: 10,
+    minConfidenceToSplit: 0.7,
+    iterationStrategy: 'progressive',
+    parallelizationEnabled: true
+  }
+
+  constructor(private config: autonomusConfig & OverseerConfig) {
+    super()
+    
+    // Initialize core components
+    this.autonomusEngine = new autonomusEngine(config)
+    this.contextManager = new ContextManager(config)
+    this.planningEngine = new PlanningEngine(config)
+    this.actionExecutor = new ActionExecutor(config)
+    this.learningSystem = new LearningSystem(config)
+    
+    // Initialize intelligence modules
+    this.conversationIntel = new ConversationIntelligence(config)
+    this.codebaseIntel = new CodebaseIntelligence(config)
+    this.taskIntel = new TaskIntelligence(config)
+    this.projectIntel = new ProjectIntelligence(config)
+    
+    // Initialize agents
+    this.ticketAgent = new TicketAgent(config)
+    this.taskAgent = new TaskAgent(config)
+    this.codeAgent = new CodeAgent(config)
+    this.plannerAgent = new PlannerAgent(config)
+    
+    this.overseerMetrics = this.initializeMetrics()
+  }
+
+  async initialize(): Promise<void> {
+    console.log('👁️  Initializing Overseer System...')
+    
+    // Initialize all components
+    await Promise.all([
+      this.autonomusEngine.initialize(),
+      this.contextManager.initialize(),
+      this.planningEngine.initialize(),
+      this.actionExecutor.initialize(),
+      this.learningSystem.initialize(),
+      this.conversationIntel.initialize(),
+      this.codebaseIntel.initialize(),
+      this.taskIntel.initialize(),
+      this.projectIntel.initialize(),
+      this.ticketAgent.initialize(),
+      this.taskAgent.initialize(),
+      this.codeAgent.initialize(),
+      this.plannerAgent.initialize()
+    ])
+    
+    // Set up event listeners
+    this.setupEventListeners()
+    
+    // Start monitoring
+    await this.startMonitoring()
+    
+    console.log('✅ Overseer System ready - watching over the business')
+  }
+
+  /**
+   * Start monitoring all business operations
+   */
+  async startMonitoring(): Promise<void> {
+    // Monitor logs
+    await this.startLogMonitoring()
+    
+    // Monitor events
+    await this.startEventMonitoring()
+    
+    // Monitor metrics
+    await this.startMetricsMonitoring()
+    
+    // Monitor user activity
+    await this.startUserActivityMonitoring()
+    
+    // Start health checks
+    this.startHealthChecks()
+    
+    this.emit('monitoring_started', {
+      streams: Array.from(this.monitoringStreams.keys()),
+      timestamp: new Date().toISOString()
+    })
+  }
+
+  /**
+   * Process incoming event and determine if action is needed
+   */
+  async processEvent(event: BusinessEvent): Promise<EventProcessingResult> {
+    const startTime = Date.now()
+    
+    try {
+      console.log(`👁️  Processing event: ${event.type}`)
+      
+      // Build context from event
+      const context = await this.buildEventContext(event)
+      
+      // Analyze event for anomalies or issues
+      const analysis = await this.analyzeEvent(event, context)
+      
+      // Determine if incident should be created
+      if (analysis.requiresIncident) {
+        const incident = await this.createIncident({
+          event,
+          analysis,
+          context,
+          severity: analysis.severity,
+          autoResolve: analysis.confidence > this.config.confidenceThreshold.high
+        })
+        
+        if (incident.autoResolve) {
+          await this.resolveIncidentAutonomously(incident)
+        }
+      }
+      
+      // Process for learning
+      await this.learningSystem.recordInteraction({
+        type: 'event_processing',
+        input: event,
+        analysis,
+        outcome: analysis.requiresIncident ? 'incident_created' : 'no_action',
+        timestamp: new Date().toISOString()
+      })
+      
+      this.updateMetrics('event_processed', Date.now() - startTime)
+      
+      return {
+        event,
+        analysis,
+        actionTaken: analysis.requiresIncident,
+        processingTime: Date.now() - startTime
+      }
+      
+    } catch (error) {
+      console.error('❌ Event processing failed:', error)
+      this.updateMetrics('event_failed')
+      throw error
+    }
+  }
+
+  /**
+   * Create an incident from detected issue
+   */
+  async createIncident(params: {
+    event?: BusinessEvent
+    analysis: EventAnalysis
+    context: Context
+    severity: 'low' | 'medium' | 'high' | 'critical'
+    autoResolve?: boolean
+  }): Promise<Incident> {
+    const incident: Incident = {
+      id: randomUUID(),
+      title: params.analysis.title || 'Detected Issue',
+      description: params.analysis.description,
+      severity: params.severity,
+      status: 'open',
+      autoResolve: params.autoResolve || false,
+      createdAt: new Date().toISOString(),
+      context: params.context,
+      triggerEvent: params.event,
+      analysis: params.analysis,
+      resolutionPlan: null,
+      resolutionTasks: []
+    }
+    
+    this.activeIncidents.set(incident.id, incident)
+    
+    // Create ticket for tracking
+    const ticketResult = await this.ticketAgent.createTicketAutonomously({
+      context: params.context,
+      conversationAnalysis: {
+        intent: { primary: 'incident_report', secondary: ['urgent'] },
+        entities: {
+          issue: incident.title,
+          severity: incident.severity,
+          type: 'incident'
+        },
+        sentiment: { score: -0.5, label: 'negative' },
+        urgency: incident.severity === 'critical' ? 'critical' : 'high',
+        confidence: 0.9
+      },
+      confidence: 0.9,
+      urgency: incident.severity === 'critical' ? 'critical' : 'high'
+    })
+    
+    if (ticketResult.ticket) {
+      incident.ticketId = ticketResult.ticket.id
+    }
+    
+    this.emit('incident_created', incident)
+    
+    return incident
+  }
+
+  /**
+   * Resolve incident autonomously using microtask shredding
+   */
+  async resolveIncidentAutonomously(incident: Incident): Promise<ResolutionResult> {
+    try {
+      console.log(`🔧 Autonomously resolving incident: ${incident.id}`)
+      
+      // Create resolution plan
+      const resolutionPlan = await this.createResolutionPlan(incident)
+      incident.resolutionPlan = resolutionPlan
+      
+      // Shred plan into microtasks
+      const microtasks = await this.shredIntoMicrotasks(resolutionPlan, incident.context)
+      this.activeTasks.set(incident.id, microtasks)
+      
+      // Execute microtasks with iteration
+      const executionResult = await this.executeMicrotasksWithIteration({
+        tasks: microtasks,
+        incident,
+        context: incident.context,
+        maxIterations: 5
+      })
+      
+      // Update incident status
+      incident.status = executionResult.success ? 'resolved' : 'failed'
+      incident.resolvedAt = new Date().toISOString()
+      incident.resolutionResult = executionResult
+      
+      // Learn from resolution
+      await this.learningSystem.recordInteraction({
+        type: 'incident_resolution',
+        input: incident,
+        outcome: executionResult,
+        timestamp: new Date().toISOString()
+      })
+      
+      this.emit('incident_resolved', {
+        incident,
+        result: executionResult
+      })
+      
+      return executionResult
+      
+    } catch (error) {
+      console.error('❌ Incident resolution failed:', error)
+      incident.status = 'failed'
+      throw error
+    }
+  }
+
+  /**
+   * Shred a task into smaller microtasks
+   */
+  async shredIntoMicrotasks(
+    task: Task | Plan,
+    context: Context,
+    depth: number = 0
+  ): Promise<MicroTask[]> {
+    if (depth >= this.microtaskConfig.maxDepth) {
+      // Max depth reached, return as single task
+      return [{
+        id: randomUUID(),
+        parentId: null,
+        depth,
+        task: this.convertToTask(task),
+        status: 'pending',
+        confidence: 0.8,
+        dependencies: [],
+        createdAt: new Date().toISOString()
+      }]
+    }
+    
+    // Analyze task complexity
+    const complexity = await this.analyzeTaskComplexity(task, context)
+    
+    // Determine if task should be split
+    if (complexity.shouldSplit && complexity.confidence > this.microtaskConfig.minConfidenceToSplit) {
+      // Use task agent to break down
+      const breakdown = await this.taskAgent.breakdownTask({
+        taskId: task.id || randomUUID(),
+        description: this.getTaskDescription(task),
+        context,
+        maxDepth: this.microtaskConfig.maxDepth - depth,
+        targetGranularity: 'atomic'
+      })
+      
+      // Convert subtasks to microtasks
+      const microtasks: MicroTask[] = []
+      
+      for (const subtask of breakdown.subtasks) {
+        // Recursively shred each subtask
+        const subMicrotasks = await this.shredIntoMicrotasks(
+          subtask,
+          context,
+          depth + 1
+        )
+        
+        microtasks.push(...subMicrotasks.map(mt => ({
+          ...mt,
+          parentId: task.id || randomUUID()
+        })))
+      }
+      
+      return microtasks
+    }
+    
+    // Task is simple enough, return as single microtask
+    return [{
+      id: randomUUID(),
+      parentId: null,
+      depth,
+      task: this.convertToTask(task),
+      status: 'pending',
+      confidence: complexity.confidence,
+      dependencies: this.extractDependencies(task),
+      createdAt: new Date().toISOString()
+    }]
+  }
+
+  /**
+   * Execute microtasks with iteration and continuous improvement
+   */
+  async executeMicrotasksWithIteration(params: {
+    tasks: MicroTask[]
+    incident: Incident
+    context: Context
+    maxIterations: number
+  }): Promise<ResolutionResult> {
+    const { tasks, incident, context, maxIterations } = params
+    let iteration = 0
+    let overallSuccess = false
+    const executionHistory: IterationResult[] = []
+    
+    while (iteration < maxIterations && !overallSuccess) {
+      console.log(`🔄 Iteration ${iteration + 1} of incident resolution`)
+      
+      // Group tasks by dependencies for parallel execution
+      const taskGroups = this.groupTasksByDependencies(tasks)
+      const iterationResult: IterationResult = {
+        iteration,
+        tasksExecuted: 0,
+        tasksSucceeded: 0,
+        tasksFailed: 0,
+        improvements: [],
+        newInsights: []
+      }
+      
+      // Execute task groups
+      for (const group of taskGroups) {
+        const groupResults = await this.executeTaskGroup(group, context)
+        
+        iterationResult.tasksExecuted += groupResults.length
+        iterationResult.tasksSucceeded += groupResults.filter(r => r.success).length
+        iterationResult.tasksFailed += groupResults.filter(r => !r.success).length
+        
+        // Learn from failures
+        for (const result of groupResults.filter(r => !r.success)) {
+          const improvement = await this.analyzeFailureAndImprove(result, context)
+          if (improvement) {
+            iterationResult.improvements.push(improvement)
+            
+            // Update task with improvement
+            const task = tasks.find(t => t.id === result.taskId)
+            if (task) {
+              task.task = this.applyImprovement(task.task, improvement)
+            }
+          }
+        }
+      }
+      
+      // Check if resolution is complete
+      overallSuccess = iterationResult.tasksFailed === 0
+      
+      // Gather new insights from this iteration
+      const insights = await this.gatherIterationInsights(iterationResult, context)
+      iterationResult.newInsights = insights
+      
+      executionHistory.push(iterationResult)
+      
+      // Emit iteration complete event
+      this.emit('iteration_complete', {
+        incident,
+        iteration: iterationResult,
+        overallProgress: this.calculateProgress(tasks)
+      })
+      
+      iteration++
+    }
+    
+    return {
+      success: overallSuccess,
+      iterations: executionHistory,
+      finalStatus: this.determineFinalStatus(tasks),
+      totalDuration: this.calculateTotalDuration(executionHistory),
+      learnings: await this.extractLearnings(executionHistory, context)
+    }
+  }
+
+  /**
+   * Monitor logs for issues and anomalies
+   */
+  private async startLogMonitoring(): Promise<void> {
+    const logStream: MonitoringStream = {
+      id: 'log-monitor',
+      type: 'logs',
+      status: 'active',
+      handler: async (logEntry: LogEntry) => {
+        // Analyze log for errors or anomalies
+        const analysis = await this.analyzeLogEntry(logEntry)
+        
+        if (analysis.isAnomaly || analysis.isError) {
+          await this.processEvent({
+            id: randomUUID(),
+            type: 'log_anomaly',
+            source: 'log_monitor',
+            data: {
+              logEntry,
+              analysis
+            },
+            timestamp: new Date().toISOString(),
+            severity: analysis.severity
+          })
+        }
+      }
+    }
+    
+    this.monitoringStreams.set(logStream.id, logStream)
+  }
+
+  /**
+   * Monitor events for patterns and issues
+   */
+  private async startEventMonitoring(): Promise<void> {
+    const eventStream: MonitoringStream = {
+      id: 'event-monitor',
+      type: 'events',
+      status: 'active',
+      handler: async (event: any) => {
+        // Pattern detection
+        const patterns = await this.detectEventPatterns(event)
+        
+        if (patterns.anomalous) {
+          await this.processEvent({
+            id: randomUUID(),
+            type: 'event_pattern_anomaly',
+            source: 'event_monitor',
+            data: {
+              event,
+              patterns
+            },
+            timestamp: new Date().toISOString(),
+            severity: patterns.severity
+          })
+        }
+      }
+    }
+    
+    this.monitoringStreams.set(eventStream.id, eventStream)
+  }
+
+  /**
+   * Monitor system metrics
+   */
+  private async startMetricsMonitoring(): Promise<void> {
+    const metricsStream: MonitoringStream = {
+      id: 'metrics-monitor',
+      type: 'metrics',
+      status: 'active',
+      handler: async (metrics: SystemMetrics) => {
+        // Check thresholds
+        const violations = this.checkMetricThresholds(metrics)
+        
+        if (violations.length > 0) {
+          await this.processEvent({
+            id: randomUUID(),
+            type: 'metric_threshold_violation',
+            source: 'metrics_monitor',
+            data: {
+              metrics,
+              violations
+            },
+            timestamp: new Date().toISOString(),
+            severity: this.determineMetricSeverity(violations)
+          })
+        }
+      }
+    }
+    
+    this.monitoringStreams.set(metricsStream.id, metricsStream)
+  }
+
+  /**
+   * Monitor user activity including typing
+   */
+  private async startUserActivityMonitoring(): Promise<void> {
+    const activityStream: MonitoringStream = {
+      id: 'user-activity-monitor',
+      type: 'user_activity',
+      status: 'active',
+      handler: async (activity: UserActivity) => {
+        // Analyze user behavior
+        const analysis = await this.analyzeUserActivity(activity)
+        
+        // Detect frustration or confusion
+        if (analysis.frustrationLevel > 0.7) {
+          await this.processEvent({
+            id: randomUUID(),
+            type: 'user_frustration_detected',
+            source: 'activity_monitor',
+            data: {
+              activity,
+              analysis
+            },
+            timestamp: new Date().toISOString(),
+            severity: 'medium'
+          })
+        }
+        
+        // Pre-emptive assistance for typing
+        if (activity.type === 'typing' && analysis.needsAssistance) {
+          this.emit('user_needs_assistance', {
+            activity,
+            suggestions: analysis.suggestions
+          })
+        }
+      }
+    }
+    
+    this.monitoringStreams.set(activityStream.id, activityStream)
+  }
+
+  /**
+   * Regular health checks
+   */
+  private startHealthChecks(): void {
+    setInterval(async () => {
+      const health = await this.performHealthCheck()
+      
+      if (!health.healthy) {
+        await this.processEvent({
+          id: randomUUID(),
+          type: 'health_check_failed',
+          source: 'health_monitor',
+          data: health,
+          timestamp: new Date().toISOString(),
+          severity: 'high'
+        })
+      }
+    }, 60000) // Every minute
+  }
+
+  /**
+   * Integrate with Inngest for event-driven orchestration
+   */
+  async triggerInngestFunction(params: {
+    function: string
+    data: any
+    incident?: Incident
+  }): Promise<void> {
+    // Emit event that Inngest will pick up
+    this.emit('inngest_trigger', {
+      function: params.function,
+      data: {
+        ...params.data,
+        overseer: {
+          incidentId: params.incident?.id,
+          context: params.incident?.context,
+          timestamp: new Date().toISOString()
+        }
+      }
+    })
+  }
+
+  /**
+   * Get overseer insights and metrics
+   */
+  getOverseerInsights(): OverseerInsights {
+    return {
+      metrics: { ...this.overseerMetrics },
+      activeIncidents: this.activeIncidents.size,
+      activeTasks: this.getTotalActiveTasks(),
+      monitoringStreams: this.monitoringStreams.size,
+      incidentInsights: this.getIncidentInsights(),
+      performanceInsights: this.getPerformanceInsights(),
+      recommendations: this.generateRecommendations()
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Helper Methods
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private async buildEventContext(event: BusinessEvent): Promise<Context> {
+    return this.contextManager.buildContext({
+      conversation: {
+        id: `event-${event.id}`,
+        messages: [],
+        metadata: { event }
+      },
+      project: {
+        id: event.projectId || 'system',
+        name: 'System',
+        type: 'monitoring',
+        description: 'Overseer monitoring context'
+      },
+      user: {
+        id: 'overseer',
+        name: 'Overseer System',
+        role: 'system',
+        expertise: 'expert'
+      },
+      system: {
+        platform: process.platform,
+        environment: process.env.NODE_ENV || 'production',
+        capabilities: ['full_access'],
+        resources: {
+          cpu: 100,
+          memory: 100000,
+          storage: 1000000
+        }
+      }
+    })
+  }
+
+  private async analyzeEvent(event: BusinessEvent, context: Context): Promise<EventAnalysis> {
+    // Use intelligence modules to analyze
+    const analysis: EventAnalysis = {
+      event,
+      requiresIncident: false,
+      severity: 'low',
+      confidence: 0,
+      title: '',
+      description: '',
+      suggestedActions: []
+    }
+    
+    // Determine based on event type and data
+    if (event.type === 'error' || event.type === 'exception') {
+      analysis.requiresIncident = true
+      analysis.severity = event.severity || 'high'
+      analysis.confidence = 0.9
+      analysis.title = `Error: ${event.data.message || 'Unknown error'}`
+      analysis.description = `An error occurred: ${JSON.stringify(event.data)}`
+    }
+    
+    return analysis
+  }
+
+  private async createResolutionPlan(incident: Incident): Promise<Plan> {
+    return this.plannerAgent.createStrategicPlan({
+      objective: {
+        id: `resolve-${incident.id}`,
+        type: 'operational',
+        description: `Resolve incident: ${incident.title}`,
+        priority: incident.severity === 'critical' ? 'critical' : 'high',
+        successCriteria: ['incident_resolved', 'root_cause_fixed'],
+        stakeholders: ['operations', 'engineering']
+      },
+      context: incident.context,
+      timeHorizon: 'short',
+      riskTolerance: 'low'
+    }).then(result => result.plan!)
+  }
+
+  private async analyzeTaskComplexity(task: Task | Plan, context: Context): Promise<ComplexityAnalysis> {
+    // Simple heuristic for now
+    const description = this.getTaskDescription(task)
+    const wordCount = description.split(' ').length
+    
+    return {
+      complexity: wordCount > 20 ? 'complex' : 'simple',
+      shouldSplit: wordCount > 20,
+      confidence: 0.8,
+      factors: {
+        descriptionLength: wordCount,
+        estimatedEffort: wordCount * 0.5
+      }
+    }
+  }
+
+  private convertToTask(item: Task | Plan): Task {
+    if ('phases' in item) {
+      // It's a plan, convert to task
+      return {
+        id: item.id,
+        description: `Execute plan: ${item.objective}`,
+        type: 'plan_execution',
+        data: item
+      }
+    }
+    return item
+  }
+
+  private getTaskDescription(task: Task | Plan): string {
+    if ('description' in task) {
+      return task.description
+    }
+    if ('objective' in task) {
+      return task.objective
+    }
+    return 'Unknown task'
+  }
+
+  private extractDependencies(task: Task | Plan): string[] {
+    if ('dependencies' in task) {
+      return task.dependencies || []
+    }
+    return []
+  }
+
+  private groupTasksByDependencies(tasks: MicroTask[]): MicroTask[][] {
+    const groups: MicroTask[][] = []
+    const completed = new Set<string>()
+    
+    while (completed.size < tasks.length) {
+      const group = tasks.filter(task => {
+        if (completed.has(task.id)) return false
+        return task.dependencies.every(dep => completed.has(dep))
+      })
+      
+      if (group.length === 0) {
+        // Circular dependency or error
+        console.warn('⚠️  Circular dependency detected in tasks')
+        break
+      }
+      
+      groups.push(group)
+      group.forEach(task => completed.add(task.id))
+    }
+    
+    return groups
+  }
+
+  private async executeTaskGroup(tasks: MicroTask[], context: Context): Promise<TaskExecutionResult[]> {
+    if (this.microtaskConfig.parallelizationEnabled) {
+      // Execute in parallel
+      return Promise.all(tasks.map(task => this.executeMicroTask(task, context)))
+    } else {
+      // Execute sequentially
+      const results: TaskExecutionResult[] = []
+      for (const task of tasks) {
+        results.push(await this.executeMicroTask(task, context))
+      }
+      return results
+    }
+  }
+
+  private async executeMicroTask(task: MicroTask, context: Context): Promise<TaskExecutionResult> {
+    try {
+      task.status = 'executing'
+      task.startedAt = new Date().toISOString()
+      
+      // Execute using action executor
+      const result = await this.actionExecutor.executeAction({
+        type: 'execute_task',
+        target: 'task',
+        parameters: task.task
+      }, context)
+      
+      task.status = result.success ? 'completed' : 'failed'
+      task.completedAt = new Date().toISOString()
+      task.result = result
+      
+      return {
+        taskId: task.id,
+        success: result.success,
+        result,
+        duration: Date.now() - new Date(task.startedAt).getTime()
+      }
+    } catch (error) {
+      task.status = 'failed'
+      task.error = error.toString()
+      
+      return {
+        taskId: task.id,
+        success: false,
+        error: error.toString(),
+        duration: 0
+      }
+    }
+  }
+
+  private async analyzeFailureAndImprove(
+    result: TaskExecutionResult,
+    context: Context
+  ): Promise<TaskImprovement | null> {
+    // Analyze failure reason
+    const failureAnalysis = await this.analyzeFailure(result)
+    
+    if (failureAnalysis.improvable) {
+      return {
+        type: failureAnalysis.improvementType,
+        description: failureAnalysis.improvementDescription,
+        modifications: failureAnalysis.suggestedModifications,
+        confidence: failureAnalysis.confidence
+      }
+    }
+    
+    return null
+  }
+
+  private applyImprovement(task: Task, improvement: TaskImprovement): Task {
+    // Apply modifications to task
+    return {
+      ...task,
+      ...improvement.modifications,
+      metadata: {
+        ...task.metadata,
+        improved: true,
+        improvementType: improvement.type
+      }
+    }
+  }
+
+  private calculateProgress(tasks: MicroTask[]): number {
+    const completed = tasks.filter(t => t.status === 'completed').length
+    return (completed / tasks.length) * 100
+  }
+
+  private determineFinalStatus(tasks: MicroTask[]): string {
+    const allCompleted = tasks.every(t => t.status === 'completed')
+    const anyFailed = tasks.some(t => t.status === 'failed')
+    
+    if (allCompleted) return 'success'
+    if (anyFailed) return 'partial_success'
+    return 'in_progress'
+  }
+
+  private calculateTotalDuration(history: IterationResult[]): number {
+    // Sum of all task durations across iterations
+    return history.reduce((total, iteration) => {
+      return total + (iteration.duration || 0)
+    }, 0)
+  }
+
+  private async gatherIterationInsights(
+    iteration: IterationResult,
+    context: Context
+  ): Promise<string[]> {
+    const insights: string[] = []
+    
+    if (iteration.tasksFailed > 0) {
+      insights.push(`${iteration.tasksFailed} tasks failed - improvements applied`)
+    }
+    
+    if (iteration.improvements.length > 0) {
+      insights.push(`${iteration.improvements.length} improvements identified`)
+    }
+    
+    return insights
+  }
+
+  private async extractLearnings(
+    history: IterationResult[],
+    context: Context
+  ): Promise<ResolutionLearning[]> {
+    const learnings: ResolutionLearning[] = []
+    
+    // Analyze patterns across iterations
+    const failurePatterns = this.identifyFailurePatterns(history)
+    const successPatterns = this.identifySuccessPatterns(history)
+    
+    learnings.push(...failurePatterns.map(pattern => ({
+      type: 'failure_pattern',
+      description: pattern.description,
+      recommendation: pattern.avoidanceStrategy,
+      confidence: pattern.confidence
+    })))
+    
+    learnings.push(...successPatterns.map(pattern => ({
+      type: 'success_pattern',
+      description: pattern.description,
+      recommendation: pattern.replicationStrategy,
+      confidence: pattern.confidence
+    })))
+    
+    return learnings
+  }
+
+  private async analyzeLogEntry(entry: LogEntry): Promise<LogAnalysis> {
+    return {
+      isAnomaly: entry.level === 'error' || entry.level === 'fatal',
+      isError: entry.level === 'error' || entry.level === 'fatal',
+      severity: entry.level === 'fatal' ? 'critical' : 'high',
+      patterns: []
+    }
+  }
+
+  private async detectEventPatterns(event: any): Promise<PatternAnalysis> {
+    // Simple pattern detection
+    return {
+      anomalous: false,
+      patterns: [],
+      severity: 'low'
+    }
+  }
+
+  private checkMetricThresholds(metrics: SystemMetrics): MetricViolation[] {
+    const violations: MetricViolation[] = []
+    
+    if (metrics.cpu > 90) {
+      violations.push({
+        metric: 'cpu',
+        value: metrics.cpu,
+        threshold: 90,
+        severity: 'high'
+      })
+    }
+    
+    if (metrics.memory > 85) {
+      violations.push({
+        metric: 'memory',
+        value: metrics.memory,
+        threshold: 85,
+        severity: 'medium'
+      })
+    }
+    
+    return violations
+  }
+
+  private determineMetricSeverity(violations: MetricViolation[]): 'low' | 'medium' | 'high' | 'critical' {
+    const maxSeverity = violations.reduce((max, v) => {
+      const severityOrder = ['low', 'medium', 'high', 'critical']
+      return severityOrder.indexOf(v.severity) > severityOrder.indexOf(max) ? v.severity : max
+    }, 'low' as any)
+    
+    return maxSeverity
+  }
+
+  private async analyzeUserActivity(activity: UserActivity): Promise<UserActivityAnalysis> {
+    return {
+      frustrationLevel: 0,
+      needsAssistance: false,
+      suggestions: []
+    }
+  }
+
+  private async performHealthCheck(): Promise<HealthCheckResult> {
+    return {
+      healthy: true,
+      services: [],
+      timestamp: new Date().toISOString()
+    }
+  }
+
+  private async analyzeFailure(result: TaskExecutionResult): Promise<FailureAnalysis> {
+    return {
+      reason: result.error || 'Unknown',
+      improvable: true,
+      improvementType: 'retry_with_modification',
+      improvementDescription: 'Retry with adjusted parameters',
+      suggestedModifications: {},
+      confidence: 0.7
+    }
+  }
+
+  private identifyFailurePatterns(history: IterationResult[]): FailurePattern[] {
+    return []
+  }
+
+  private identifySuccessPatterns(history: IterationResult[]): SuccessPattern[] {
+    return []
+  }
+
+  private getTotalActiveTasks(): number {
+    let total = 0
+    this.activeTasks.forEach(tasks => {
+      total += tasks.length
+    })
+    return total
+  }
+
+  private getIncidentInsights(): any {
+    const incidents = Array.from(this.activeIncidents.values())
+    return {
+      total: incidents.length,
+      bySeverity: this.groupBySeverity(incidents),
+      averageResolutionTime: this.calculateAverageResolutionTime(incidents)
+    }
+  }
+
+  private getPerformanceInsights(): string[] {
+    const insights: string[] = []
+    
+    if (this.overseerMetrics.averageResolutionTime > 300000) { // 5 minutes
+      insights.push('Average resolution time is high - consider optimization')
+    }
+    
+    if (this.overseerMetrics.incidentRecurrence > 0.2) {
+      insights.push('High incident recurrence rate - address root causes')
+    }
+    
+    return insights
+  }
+
+  private generateRecommendations(): string[] {
+    const recommendations: string[] = []
+    
+    if (this.activeIncidents.size > 10) {
+      recommendations.push('High number of active incidents - prioritize critical issues')
+    }
+    
+    if (this.overseerMetrics.autonomousResolutionRate < 0.7) {
+      recommendations.push('Low autonomous resolution rate - improve automation')
+    }
+    
+    return recommendations
+  }
+
+  private groupBySeverity(incidents: Incident[]): Record<string, number> {
+    const groups: Record<string, number> = {
+      low: 0,
+      medium: 0,
+      high: 0,
+      critical: 0
+    }
+    
+    incidents.forEach(incident => {
+      groups[incident.severity]++
+    })
+    
+    return groups
+  }
+
+  private calculateAverageResolutionTime(incidents: Incident[]): number {
+    const resolved = incidents.filter(i => i.status === 'resolved' && i.resolvedAt)
+    if (resolved.length === 0) return 0
+    
+    const totalTime = resolved.reduce((sum, incident) => {
+      const start = new Date(incident.createdAt).getTime()
+      const end = new Date(incident.resolvedAt!).getTime()
+      return sum + (end - start)
+    }, 0)
+    
+    return totalTime / resolved.length
+  }
+
+  private setupEventListeners(): void {
+    // Listen to all component events
+    this.autonomusEngine.on('decision_made', (event) => {
+      this.emit('overseer_decision', event)
+    })
+    
+    this.ticketAgent.on('ticket_created_autonomously', (event) => {
+      this.emit('overseer_ticket_created', event)
+    })
+    
+    this.taskAgent.on('task_created_autonomously', (event) => {
+      this.emit('overseer_task_created', event)
+    })
+  }
+
+  private updateMetrics(event: string, duration?: number): void {
+    switch (event) {
+      case 'event_processed':
+        this.overseerMetrics.eventsProcessed++
+        if (duration) {
+          this.overseerMetrics.averageEventProcessingTime = 
+            (this.overseerMetrics.averageEventProcessingTime + duration) / 2
+        }
+        break
+      case 'event_failed':
+        this.overseerMetrics.eventsFailed++
+        break
+      case 'incident_created':
+        this.overseerMetrics.incidentsCreated++
+        break
+      case 'incident_resolved':
+        this.overseerMetrics.incidentsResolved++
+        this.overseerMetrics.autonomousResolutionRate = 
+          this.overseerMetrics.incidentsResolved / this.overseerMetrics.incidentsCreated
+        break
+    }
+  }
+
+  private initializeMetrics(): OverseerMetrics {
+    return {
+      eventsProcessed: 0,
+      eventsFailed: 0,
+      incidentsCreated: 0,
+      incidentsResolved: 0,
+      averageEventProcessingTime: 0,
+      averageResolutionTime: 0,
+      autonomousResolutionRate: 0,
+      incidentRecurrence: 0,
+      systemUptime: Date.now()
+    }
+  }
+}
+
+// Supporting Interfaces
+interface OverseerConfig {
+  enableAutoResolution?: boolean
+  incidentThresholds?: {
+    error: number
+    warning: number
+    anomaly: number
+  }
+  monitoringConfig?: {
+    logLevel: 'debug' | 'info' | 'warn' | 'error'
+    metricsInterval: number
+    healthCheckInterval: number
+  }
+}
+
+interface BusinessEvent {
+  id: string
+  type: string
+  source: string
+  data: any
+  timestamp: string
+  projectId?: string
+  severity?: 'low' | 'medium' | 'high' | 'critical'
+}
+
+interface EventAnalysis {
+  event: BusinessEvent
+  requiresIncident: boolean
+  severity: 'low' | 'medium' | 'high' | 'critical'
+  confidence: number
+  title: string
+  description: string
+  suggestedActions: string[]
+}
+
+interface Incident {
+  id: string
+  title: string
+  description: string
+  severity: 'low' | 'medium' | 'high' | 'critical'
+  status: 'open' | 'investigating' | 'resolving' | 'resolved' | 'failed'
+  autoResolve: boolean
+  createdAt: string
+  resolvedAt?: string
+  context: Context
+  triggerEvent?: BusinessEvent
+  analysis: EventAnalysis
+  ticketId?: string
+  resolutionPlan: Plan | null
+  resolutionTasks: MicroTask[]
+  resolutionResult?: ResolutionResult
+}
+
+interface MicroTask {
+  id: string
+  parentId: string | null
+  depth: number
+  task: Task
+  status: 'pending' | 'executing' | 'completed' | 'failed'
+  confidence: number
+  dependencies: string[]
+  createdAt: string
+  startedAt?: string
+  completedAt?: string
+  result?: ActionResult
+  error?: string
+}
+
+interface Task {
+  id?: string
+  description: string
+  type: string
+  data?: any
+  dependencies?: string[]
+  metadata?: Record<string, any>
+}
+
+interface MicrotaskConfig {
+  maxDepth: number
+  maxTasksPerLevel: number
+  minConfidenceToSplit: number
+  iterationStrategy: 'progressive' | 'adaptive' | 'aggressive'
+  parallelizationEnabled: boolean
+}
+
+interface ResolutionResult {
+  success: boolean
+  iterations: IterationResult[]
+  finalStatus: string
+  totalDuration: number
+  learnings: ResolutionLearning[]
+}
+
+interface IterationResult {
+  iteration: number
+  tasksExecuted: number
+  tasksSucceeded: number
+  tasksFailed: number
+  improvements: TaskImprovement[]
+  newInsights: string[]
+  duration?: number
+}
+
+interface TaskImprovement {
+  type: string
+  description: string
+  modifications: Record<string, any>
+  confidence: number
+}
+
+interface ResolutionLearning {
+  type: 'failure_pattern' | 'success_pattern' | 'optimization'
+  description: string
+  recommendation: string
+  confidence: number
+}
+
+interface MonitoringStream {
+  id: string
+  type: 'logs' | 'events' | 'metrics' | 'user_activity'
+  status: 'active' | 'paused' | 'error'
+  handler: (data: any) => Promise<void>
+}
+
+interface EventProcessingResult {
+  event: BusinessEvent
+  analysis: EventAnalysis
+  actionTaken: boolean
+  processingTime: number
+}
+
+interface ComplexityAnalysis {
+  complexity: 'simple' | 'moderate' | 'complex'
+  shouldSplit: boolean
+  confidence: number
+  factors: Record<string, any>
+}
+
+interface TaskExecutionResult {
+  taskId: string
+  success: boolean
+  result?: ActionResult
+  error?: string
+  duration: number
+}
+
+interface LogEntry {
+  level: 'debug' | 'info' | 'warn' | 'error' | 'fatal'
+  message: string
+  timestamp: string
+  metadata?: Record<string, any>
+}
+
+interface LogAnalysis {
+  isAnomaly: boolean
+  isError: boolean
+  severity: 'low' | 'medium' | 'high' | 'critical'
+  patterns: string[]
+}
+
+interface SystemMetrics {
+  cpu: number
+  memory: number
+  disk: number
+  network: number
+  timestamp: string
+}
+
+interface MetricViolation {
+  metric: string
+  value: number
+  threshold: number
+  severity: 'low' | 'medium' | 'high' | 'critical'
+}
+
+interface PatternAnalysis {
+  anomalous: boolean
+  patterns: string[]
+  severity: 'low' | 'medium' | 'high' | 'critical'
+}
+
+interface UserActivity {
+  type: 'typing' | 'clicking' | 'scrolling' | 'idle'
+  data: any
+  timestamp: string
+  userId: string
+}
+
+interface UserActivityAnalysis {
+  frustrationLevel: number
+  needsAssistance: boolean
+  suggestions: string[]
+}
+
+interface HealthCheckResult {
+  healthy: boolean
+  services: Array<{
+    name: string
+    status: 'healthy' | 'degraded' | 'unhealthy'
+  }>
+  timestamp: string
+}
+
+interface FailureAnalysis {
+  reason: string
+  improvable: boolean
+  improvementType: string
+  improvementDescription: string
+  suggestedModifications: Record<string, any>
+  confidence: number
+}
+
+interface FailurePattern {
+  description: string
+  occurrences: number
+  avoidanceStrategy: string
+  confidence: number
+}
+
+interface SuccessPattern {
+  description: string
+  occurrences: number
+  replicationStrategy: string
+  confidence: number
+}
+
+interface OverseerMetrics {
+  eventsProcessed: number
+  eventsFailed: number
+  incidentsCreated: number
+  incidentsResolved: number
+  averageEventProcessingTime: number
+  averageResolutionTime: number
+  autonomousResolutionRate: number
+  incidentRecurrence: number
+  systemUptime: number
+}
+
+interface OverseerInsights {
+  metrics: OverseerMetrics
+  activeIncidents: number
+  activeTasks: number
+  monitoringStreams: number
+  incidentInsights: any
+  performanceInsights: string[]
+  recommendations: string[]
+}
+
+// Re-export for convenience
+export type {
+  OverseerConfig,
+  BusinessEvent,
+  Incident,
+  MicroTask,
+  ResolutionResult,
+  OverseerInsights
+}

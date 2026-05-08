@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codmir.com/schemas/runner-protocol-v1.json",
+  "title": "Codmir Runner Protocol V1",
+  "type": "object",
+  "description": "Canonical task + worker protocol contracts for Codmir Runner V1 (SSE-first).",
+  "definitions": {
+    "executionTarget": {
+      "type": "string",
+      "enum": ["auto", "local_runner", "remote_worker"]
+    },
+    "runnerState": {
+      "type": "string",
+      "enum": ["queued", "assigned", "running", "awaiting_approval", "completed", "failed", "cancelled"]
+    },
+    "createTaskRequest": {
+      "type": "object",
+      "required": ["goal"],
+      "properties": {
+        "goal": { "type": "string", "minLength": 1 },
+        "projectId": { "type": "string" },
+        "workspace": { "type": "string" },
+        "executionTarget": { "$ref": "#/definitions/executionTarget" },
+        "metadata": { "type": "object", "additionalProperties": true },
+        "requiredCapabilities": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "createTaskResponse": {
+      "type": "object",
+      "required": ["taskId", "state", "executionTarget"],
+      "properties": {
+        "taskId": { "type": "string" },
+        "state": { "$ref": "#/definitions/runnerState" },
+        "executionTarget": { "$ref": "#/definitions/executionTarget" },
+        "assignedWorkerId": { "type": "string" },
+        "attemptId": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "taskStatusResponse": {
+      "type": "object",
+      "required": ["taskId", "state", "executionTarget", "goal", "createdAt", "updatedAt"],
+      "properties": {
+        "taskId": { "type": "string" },
+        "state": { "$ref": "#/definitions/runnerState" },
+        "executionTarget": { "$ref": "#/definitions/executionTarget" },
+        "projectId": { "type": "string" },
+        "goal": { "type": "string" },
+        "assignedWorkerId": { "type": "string" },
+        "attemptId": { "type": "string" },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" },
+        "result": {},
+        "error": { "type": "string" },
+        "metadata": { "type": "object", "additionalProperties": true },
+        "currentAttempt": {
+          "type": "object",
+          "required": ["attemptId", "state", "assignedAt"],
+          "properties": {
+            "attemptId": { "type": "string" },
+            "workerId": { "type": "string" },
+            "state": {
+              "type": "string",
+              "enum": [
+                "assigned",
+                "claimed",
+                "running",
+                "awaiting_approval",
+                "completed",
+                "failed",
+                "cancelled",
+                "abandoned"
+              ]
+            },
+            "assignedAt": { "type": "integer" },
+            "startedAt": { "type": "integer" },
+            "finishedAt": { "type": "integer" },
+            "leaseExpiresAt": { "type": "integer" },
+            "stepId": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "canonicalTaskEvent": {
+      "type": "object",
+      "required": ["version", "id", "seq", "taskId", "type", "timestamp", "source", "payload"],
+      "properties": {
+        "version": { "type": "string", "const": "v1" },
+        "id": { "type": "string" },
+        "seq": { "type": "integer", "minimum": 0 },
+        "taskId": { "type": "string" },
+        "type": { "type": "string" },
+        "timestamp": { "type": "integer" },
+        "source": { "type": "string" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "registerWorkerRequest": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "metadata": { "type": "object", "additionalProperties": true },
+        "maxConcurrentTasks": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "registerWorkerResponse": {
+      "type": "object",
+      "required": ["workerId", "workerToken", "heartbeatIntervalMs", "assignmentsStreamUrl"],
+      "properties": {
+        "workerId": { "type": "string" },
+        "workerToken": { "type": "string" },
+        "heartbeatIntervalMs": { "type": "integer", "minimum": 1 },
+        "assignmentsStreamUrl": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "workerHeartbeatRequest": {
+      "type": "object",
+      "properties": {
+        "currentLoad": { "type": "integer", "minimum": 0 },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "metadata": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": false
+    },
+    "workerAssignmentEvent": {
+      "type": "object",
+      "required": ["id", "type", "workerId", "timestamp", "payload"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": {
+          "type": "string",
+          "enum": ["task_assigned", "task_cancelled", "task_control", "ping"]
+        },
+        "workerId": { "type": "string" },
+        "timestamp": { "type": "integer" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "claimTaskRequest": {
+      "type": "object",
+      "required": ["workerId"],
+      "properties": {
+        "workerId": { "type": "string" },
+        "attemptId": { "type": "string" },
+        "idempotencyKey": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "taskControlRequest": {
+      "type": "object",
+      "required": ["action"],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["pause", "resume", "cancel", "approve", "reject"]
+        },
+        "attemptId": { "type": "string" },
+        "stepId": { "type": "string" },
+        "reason": { "type": "string" },
+        "metadata": { "type": "object", "additionalProperties": true },
+        "idempotencyKey": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

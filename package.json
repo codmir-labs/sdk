@@ -1,0 +1,153 @@
+{
+  "name": "@codmir/sdk",
+  "version": "1.0.1",
+  "description": "Official Codmir SDK - TypeScript/JavaScript library for the Codmir API",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.cjs",
+      "import": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "require": "./dist/client.cjs",
+      "import": "./dist/client.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "require": "./dist/types.cjs",
+      "import": "./dist/types.js"
+    },
+    "./overseer": {
+      "types": "./dist/overseer/index.d.ts",
+      "require": "./dist/overseer/index.cjs",
+      "import": "./dist/overseer/index.js"
+    },
+    "./nextjs": {
+      "types": "./dist/nextjs/index.d.ts",
+      "require": "./dist/nextjs/index.cjs",
+      "import": "./dist/nextjs/index.js"
+    },
+    "./react-native": {
+      "types": "./dist/react-native/index.d.ts",
+      "require": "./dist/react-native/index.cjs",
+      "import": "./dist/react-native/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser/index.d.ts",
+      "require": "./dist/browser/index.cjs",
+      "import": "./dist/browser/index.js"
+    },
+    "./replay": {
+      "types": "./dist/replay/index.d.ts",
+      "require": "./dist/replay/index.cjs",
+      "import": "./dist/replay/index.js"
+    },
+    "./serverless": {
+      "types": "./dist/serverless/index.d.ts",
+      "require": "./dist/serverless/index.cjs",
+      "import": "./dist/serverless/index.js"
+    },
+    "./council": {
+      "types": "./dist/council/index.d.ts",
+      "require": "./dist/council/index.cjs",
+      "import": "./dist/council/index.js"
+    },
+    "./runtime": {
+      "types": "./src/runtime/index.ts",
+      "require": "./dist/runtime/index.cjs",
+      "import": "./dist/runtime/index.js"
+    },
+    "./runtime/protocol": {
+      "types": "./src/runtime/protocol/index.ts",
+      "require": "./dist/runtime/protocol/index.cjs",
+      "import": "./dist/runtime/protocol/index.js"
+    },
+    "./agent": {
+      "types": "./dist/agent/index.d.ts",
+      "require": "./dist/agent/index.cjs",
+      "import": "./dist/agent/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "require": "./dist/mcp/index.cjs",
+      "import": "./dist/mcp/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts src/client.ts src/types.ts src/framework.ts src/overseer/index.ts src/nextjs/index.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/serverless/index.ts src/council/index.ts src/runtime/index.ts src/runtime/protocol/index.ts src/agent/index.ts src/mcp/index.ts --format cjs,esm --clean",
+    "dev": "tsup src/index.ts src/client.ts src/types.ts src/framework.ts src/overseer/index.ts src/nextjs/index.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/serverless/index.ts src/council/index.ts src/runtime/index.ts src/runtime/protocol/index.ts src/agent/index.ts src/mcp/index.ts --format cjs,esm --dts --watch",
+    "prepublishOnly": "pnpm build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src/"
+  },
+  "keywords": [
+    "codmir",
+    "sdk",
+    "api",
+    "client",
+    "typescript",
+    "ai",
+    "serverless",
+    "cloud",
+    "functions",
+    "sandbox",
+    "modal-alternative",
+    "project-management",
+    "tickets",
+    "tasks"
+  ],
+  "author": "Codmir <hello@codmir.com>",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/codmir-labs/sdk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/codmir-labs/sdk/issues"
+  },
+  "homepage": "https://codmir.com/docs/sdk",
+  "sideEffects": [
+    "dist/chunk-*.js",
+    "dist/chunk-*.cjs"
+  ],
+  "dependencies": {
+    "nanoid": "^5.0.9",
+    "zod": "^3.23.8"
+  },
+  "peerDependencies": {
+    "next": ">=14.0.0",
+    "react": ">=18.0.0",
+    "react-native": ">=0.72.0"
+  },
+  "peerDependenciesMeta": {
+    "next": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-native": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
