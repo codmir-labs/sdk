@@ -58,9 +58,12 @@ codmir.captureEvent({
 |----------|---------|---------|
 | **Node.js** | `@codmir/sdk` | `npm i @codmir/sdk` |
 | **Next.js** | `@codmir/sdk/nextjs` | `npm i @codmir/sdk` |
+| **Express** | `@codmir/sdk/express` | `npm i @codmir/sdk` |
+| **Remix** | `@codmir/sdk/remix` | `npm i @codmir/sdk` |
 | **React Native** | `@codmir/sdk/react-native` | `npm i @codmir/sdk` |
 | **Browser** | `@codmir/sdk/browser` | `npm i @codmir/sdk` |
 | **Serverless** | `@codmir/sdk/serverless` | `npm i @codmir/sdk` |
+| **AI Monitoring** | `@codmir/sdk/ai` | `npm i @codmir/sdk` |
 
 ### Next.js
 
@@ -101,6 +104,44 @@ CosmirBrowser.init({
 })
 ```
 
+### Express
+
+```typescript
+import express from 'express'
+import * as Codmir from '@codmir/sdk/express'
+
+Codmir.init({ dsn: process.env.CODMIR_DSN })
+
+const app = express()
+
+app.use(Codmir.requestHandler())   // track every request
+app.use(Codmir.tracingHandler())   // measure performance
+
+app.get('/api/users', (req, res) => {
+  res.json({ users: [] })
+})
+
+app.use(Codmir.errorHandler())     // catch + report errors
+```
+
+### Remix
+
+```typescript
+// entry.server.tsx
+import * as Codmir from '@codmir/sdk/remix'
+
+Codmir.init({ dsn: process.env.CODMIR_DSN })
+
+export const handleError = Codmir.handleError
+
+// In routes — wrap loaders and actions
+import { wrapLoader, wrapAction } from '@codmir/sdk/remix'
+
+export const loader = wrapLoader(async ({ request }) => {
+  return json({ data: await getData() })
+})
+```
+
 ### Serverless (AWS Lambda, Cloudflare Workers, etc.)
 
 ```typescript
@@ -111,6 +152,45 @@ export const handler = wrapHandler(async (event) => {
   return { statusCode: 200, body: 'OK' }
 })
 ```
+
+## AI Tracking — Track Your AI, Not Just Your Users
+
+This is what makes Codmir different. Every team using AI (OpenAI, Claude, custom agents) has zero visibility into what the AI is doing, how much it costs, and whether it's working correctly.
+
+```typescript
+import { init, wrapOpenAI, wrapAnthropic, getAIUsageSummary } from '@codmir/sdk/ai'
+import OpenAI from 'openai'
+import Anthropic from '@anthropic-ai/sdk'
+
+init({
+  dsn: process.env.CODMIR_DSN,
+  trackTokenUsage: true,
+  trackCosts: true,
+  trackLatency: true,
+})
+
+// Wrap your AI clients — zero code changes needed
+const openai = wrapOpenAI(new OpenAI())
+const anthropic = wrapAnthropic(new Anthropic())
+
+// Use them exactly as before — Codmir tracks everything
+const response = await openai.chat.completions.create({
+  model: 'gpt-4o',
+  messages: [{ role: 'user', content: 'Hello' }],
+})
+
+// See accumulated stats
+const stats = getAIUsageSummary()
+// { totalCalls: 42, totalCost: 1.23, avgLatency: 850, byModel: { ... } }
+```
+
+**What gets tracked:**
+- Token usage (input/output) per call
+- Cost estimation per model with built-in pricing tables
+- Latency per call
+- Errors with full context (model, params, failure reason)
+- Usage summaries broken down by provider and model
+- Optional prompt/response capture with automatic redaction
 
 ## Features
 
