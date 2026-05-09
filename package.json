@@ -91,6 +91,11 @@
       "types": "./dist/remix/index.d.ts",
       "require": "./dist/remix/index.cjs",
       "import": "./dist/remix/index.js"
+    },
+    "./verify": {
+      "types": "./dist/verify/index.d.ts",
+      "require": "./dist/verify/index.cjs",
+      "import": "./dist/verify/index.js"
     }
   },
   "files": [
@@ -99,8 +104,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup src/index.ts src/client.ts src/types.ts src/framework.ts src/overseer/index.ts src/nextjs/index.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/serverless/index.ts src/council/index.ts src/runtime/index.ts src/runtime/protocol/index.ts src/agent/index.ts src/mcp/index.ts src/express/index.ts src/ai/index.ts src/remix/index.ts --format cjs,esm --clean",
-    "dev": "tsup src/index.ts src/client.ts src/types.ts src/framework.ts src/overseer/index.ts src/nextjs/index.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/serverless/index.ts src/council/index.ts src/runtime/index.ts src/runtime/protocol/index.ts src/agent/index.ts src/mcp/index.ts src/express/index.ts src/ai/index.ts src/remix/index.ts --format cjs,esm --dts --watch",
+    "build": "tsup src/index.ts src/client.ts src/types.ts src/framework.ts src/overseer/index.ts src/nextjs/index.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/serverless/index.ts src/council/index.ts src/runtime/index.ts src/runtime/protocol/index.ts src/agent/index.ts src/mcp/index.ts src/express/index.ts src/ai/index.ts src/remix/index.ts src/verify/index.ts --format cjs,esm --clean",
+    "dev": "tsup src/index.ts src/client.ts src/types.ts src/framework.ts src/overseer/index.ts src/nextjs/index.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/serverless/index.ts src/council/index.ts src/runtime/index.ts src/runtime/protocol/index.ts src/agent/index.ts src/mcp/index.ts src/express/index.ts src/ai/index.ts src/remix/index.ts src/verify/index.ts --format cjs,esm --dts --watch",
     "prepublishOnly": "pnpm build",
     "test": "vitest run",
     "test:watch": "vitest",
