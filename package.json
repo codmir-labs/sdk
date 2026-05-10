@@ -106,7 +106,7 @@
   "scripts": {
     "build": "tsup src/index.ts src/client.ts src/types.ts src/framework.ts src/overseer/index.ts src/nextjs/index.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/serverless/index.ts src/council/index.ts src/runtime/index.ts src/runtime/protocol/index.ts src/agent/index.ts src/mcp/index.ts src/express/index.ts src/ai/index.ts src/remix/index.ts src/verify/index.ts --format cjs,esm --clean",
     "dev": "tsup src/index.ts src/client.ts src/types.ts src/framework.ts src/overseer/index.ts src/nextjs/index.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/serverless/index.ts src/council/index.ts src/runtime/index.ts src/runtime/protocol/index.ts src/agent/index.ts src/mcp/index.ts src/express/index.ts src/ai/index.ts src/remix/index.ts src/verify/index.ts --format cjs,esm --dts --watch",
-    "prepublishOnly": "pnpm build",
+    "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint src/"
@@ -163,11 +163,28 @@
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "semantic-release": "^24.2.0",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
     "tsup": "^8.3.0",
     "typescript": "^5.4.5",
     "vitest": "^1.6.0"
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "release": {
+    "branches": ["main"],
+    "plugins": [
+      "@semantic-release/commit-analyzer",
+      "@semantic-release/release-notes-generator",
+      ["@semantic-release/changelog", { "changelogFile": "CHANGELOG.md" }],
+      "@semantic-release/npm",
+      ["@semantic-release/git", {
+        "assets": ["package.json", "CHANGELOG.md"],
+        "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+      }],
+      "@semantic-release/github"
+    ]
   }
 }

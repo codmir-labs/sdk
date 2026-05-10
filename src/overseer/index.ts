@@ -22,14 +22,21 @@
  */
 
 import { nanoid } from "nanoid";
+import { PatchRuntime, type SelfHealingConfig } from "./patch-runtime";
 
 // =============================================================================
 // Types
 // =============================================================================
 
 export interface OverseerConfig {
-  /** Data Source Name - your Codmir project endpoint */
+  /** Data Source Name - your Codmir project endpoint (optional if clientKey is set) */
   dsn?: string;
+  /** Client key for authenticating with Codmir (preferred over dsn) */
+  clientKey?: string;
+  /** Secret key for server-side authentication */
+  secretKey?: string;
+  /** @deprecated Use clientKey instead */
+  overseerKey?: string;
   /** Environment (production, staging, development) */
   environment?: string;
   /** Release version */
@@ -52,6 +59,8 @@ export interface OverseerConfig {
   initialUser?: UserContext;
   /** Initial tags */
   initialTags?: Record<string, string>;
+  /** Self-healing patch runtime configuration */
+  selfHealing?: SelfHealingConfig;
 }
 
 export interface OverseerEvent {
@@ -122,8 +131,11 @@ export type SeverityLevel = "fatal" | "error" | "warning" | "info" | "debug";
 // Core Client
 // =============================================================================
 
-type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser'> & {
+type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'selfHealing'> & {
   initialUser?: UserContext;
+  selfHealing?: SelfHealingConfig;
+  clientKey: string;
+  secretKey: string;
 };
 
 class OverseerClient {
@@ -136,10 +148,19 @@ class OverseerClient {
   private isInitialized = false;
   private conversationId: string | null = null;
   private sessionId: string | null = null;
+  private patchRuntime: PatchRuntime | null = null;
 
   constructor(config: OverseerConfig = {}) {
+    const resolvedKey = config.clientKey || config.overseerKey || "";
+    const defaultIngestUrl = typeof window !== "undefined"
+      ? `${window.location.origin}/api/overseer`
+      : "https://codmir.com/api/overseer";
+
     this.config = {
-      dsn: config.dsn || "",
+      dsn: config.dsn || (resolvedKey ? defaultIngestUrl : ""),
+      clientKey: resolvedKey,
+      secretKey: config.secretKey || "",
+      overseerKey: resolvedKey,
       environment: config.environment || "development",
       release: config.release || "unknown",
       enabled: config.enabled ?? true,
@@ -151,6 +172,7 @@ class OverseerClient {
       beforeSend: config.beforeSend || ((e) => e),
       initialUser: config.initialUser,
       initialTags: config.initialTags || {},
+      selfHealing: config.selfHealing,
     };
 
     if (this.config.initialUser) {
@@ -170,6 +192,16 @@ class OverseerClient {
         dsn: this.config.dsn,
         environment: this.config.environment,
       });
+    }
+
+    if (this.config.selfHealing?.enabled && this.config.dsn) {
+      this.patchRuntime = new PatchRuntime({
+        dsn: this.config.dsn,
+        environment: this.config.environment,
+        overseerKey: this.config.overseerKey,
+        config: this.config.selfHealing,
+      });
+      this.patchRuntime.start();
     }
   }
 
@@ -269,6 +301,14 @@ class OverseerClient {
     return this.sessionId;
   }
 
+  getDsn(): string {
+    return this.config.dsn;
+  }
+
+  getEnvironment(): string {
+    return this.config.environment;
+  }
+
   addBreadcrumb(breadcrumb: Breadcrumb): void {
     this.breadcrumbs.push({
       ...breadcrumb,
@@ -301,6 +341,7 @@ class OverseerClient {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
     }
+    this.patchRuntime?.stop();
     this.flush();
   }
 
@@ -354,11 +395,27 @@ class OverseerClient {
       ? this.config.dsn
       : `${this.config.dsn}/ingest`;
 
+    const authKey = this.config.clientKey || this.config.overseerKey;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (authKey) {
+      headers["x-overseer-key"] = authKey;
+    }
+
     await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ events }),
     });
+  }
+
+  getClientKey(): string {
+    return this.config.clientKey;
+  }
+
+  getOverseerKey(): string {
+    return this.config.clientKey || this.config.overseerKey;
   }
 }
 
@@ -425,5 +482,23 @@ export function getSessionId(): string | null {
   return client?.getSessionId() || null;
 }
 
+export function getDsn(): string {
+  return client?.getDsn() || "";
+}
+
+export function getEnvironment(): string {
+  return client?.getEnvironment() || "development";
+}
+
+export function getClientKey(): string {
+  return client?.getClientKey() || "";
+}
+
+export function getOverseerKey(): string {
+  return client?.getOverseerKey() || "";
+}
+
 export { OverseerClient };
+export { PatchRuntime } from "./patch-runtime";
+export type { SelfHealingConfig, PatchManifest, PatchEntry, PatchOp } from "./patch-runtime";
 export { OverseerSystem } from '../agent/overseer/OverseerSystem';

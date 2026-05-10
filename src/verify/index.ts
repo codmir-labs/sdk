@@ -199,17 +199,19 @@ export async function verify(config: VerifyConfig): Promise<VerifyResult> {
 /**
  * Simplified one-liner to verify SDK connectivity.
  *
- * @param dsn - Your Codmir DSN string
+ * @param clientKeyOrDsn - Your Codmir client key or DSN string
  * @returns true if the connection was verified successfully
  *
  * @example
  * ```typescript
- * const ok = await quickVerify('https://your-project.codmir.com/api/overseer');
+ * const ok = await quickVerify(process.env.NEXT_PUBLIC_CODMIR_CLIENT_KEY);
  * console.log(ok ? 'Connected!' : 'Failed to connect');
  * ```
  */
-export async function quickVerify(dsn: string): Promise<boolean> {
-  const result = await verify({ dsn });
+export async function quickVerify(clientKeyOrDsn: string): Promise<boolean> {
+  const isKey = clientKeyOrDsn.startsWith("osk_") || clientKeyOrDsn.startsWith("csk_");
+  const config = isKey ? { clientKey: clientKeyOrDsn } : { dsn: clientKeyOrDsn };
+  const result = await verify(config);
   return result.success;
 }
 

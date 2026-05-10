@@ -42,11 +42,17 @@ import {
   flush as coreFlush,
   close as coreClose,
   getClient,
+  setSessionId as coreSetSessionId,
+  getDsn as coreGetDsn,
+  getEnvironment as coreGetEnvironment,
+  getOverseerKey as coreGetOverseerKey,
   type OverseerConfig,
   type UserContext,
   type Breadcrumb,
   type SeverityLevel,
 } from "../overseer/index";
+
+import { nanoid } from "nanoid";
 
 // =============================================================================
 // Types
@@ -457,7 +463,7 @@ export function wrapAnthropic<T extends AnthropicLikeClient>(client: T): T {
  * });
  * ```
  */
-export async function trackAICall<T extends Record<string, unknown>>(
+export async function trackAICall<T extends object>(
   provider: string,
   params: AICallParams,
   execute: () => Promise<T>
@@ -470,7 +476,7 @@ export async function trackAICall<T extends Record<string, unknown>>(
     const latencyMs = resolvedConfig.trackLatency ? Math.round(performance.now() - startTime) : 0;
 
     // Extract token usage from the response
-    const usage = extractUsage(provider, response);
+    const usage = extractUsage(provider, response as Record<string, unknown>);
     const inputTokens = usage.inputTokens;
     const outputTokens = usage.outputTokens;
     const cost = resolvedConfig.trackCosts ? estimateCost(model, inputTokens, outputTokens) : 0;
@@ -515,7 +521,7 @@ export async function trackAICall<T extends Record<string, unknown>>(
 
     // Capture response content if enabled
     if (resolvedConfig.captureResponses) {
-      const responseContent = extractResponseContent(provider, response);
+      const responseContent = extractResponseContent(provider, response as Record<string, unknown>);
       if (responseContent) {
         breadcrumbData.response = redactContent(responseContent);
       }
@@ -530,15 +536,17 @@ export async function trackAICall<T extends Record<string, unknown>>(
       level: "info",
     });
 
-    // Accumulate stats
-    recordStats({
+    const callResult: AICallResult = {
       inputTokens,
       outputTokens,
       cost,
       latencyMs,
       model,
       provider,
-    });
+    };
+
+    recordStats(callResult);
+    recordSessionCall(callResult);
 
     return response;
   } catch (error) {
@@ -569,8 +577,8 @@ export async function trackAICall<T extends Record<string, unknown>>(
       level: "error",
     });
 
-    // Record the error in stats
     recordError(provider, model);
+    recordSessionError(provider, model, error);
 
     throw error;
   }
@@ -715,6 +723,356 @@ export function resetAIUsageStats(): void {
   stats.totalLatencyMs = 0;
   stats.byProvider = {};
   stats.byModel = {};
+}
+
+// =============================================================================
+// Session Tracing
+// =============================================================================
+
+export interface SessionConfig {
+  agent: string;
+  metadata?: Record<string, unknown>;
+  tags?: Record<string, string>;
+}
+
+export interface SessionEvent {
+  id: string;
+  type: "llm_call" | "tool_call" | "decision" | "error" | "custom";
+  timestamp: string;
+  durationMs?: number;
+  data: Record<string, unknown>;
+}
+
+export interface SessionSpan {
+  name: string;
+  startTime: number;
+  endTime?: number;
+  events: SessionEvent[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface AgentSession {
+  id: string;
+  agent: string;
+  startedAt: string;
+  endedAt?: string;
+  metadata: Record<string, unknown>;
+  tags: Record<string, string>;
+  spans: SessionSpan[];
+  events: SessionEvent[];
+  usage: {
+    totalCalls: number;
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalCost: number;
+    totalLatencyMs: number;
+  };
+}
+
+const activeSessions = new Map<string, AgentSession>();
+let currentSessionId: string | null = null;
+
+function activeSession(): AgentSession | null {
+  if (!currentSessionId) return null;
+  return activeSessions.get(currentSessionId) ?? null;
+}
+
+/**
+ * Start a new agent session for correlating LLM calls.
+ *
+ * All `trackAICall`, `wrapOpenAI`, and `wrapAnthropic` calls made while
+ * a session is active are automatically attached to it. Sessions can be
+ * retrieved later for replay and analysis.
+ *
+ * @example
+ * ```typescript
+ * const session = Codmir.startSession({
+ *   agent: 'support-bot',
+ *   metadata: { userId: 'u_123', ticket: 'T-456' },
+ * });
+ *
+ * // All LLM calls are now correlated under this session
+ * await openai.chat.completions.create({ ... });
+ * await anthropic.messages.create({ ... });
+ *
+ * // Add custom events for decision tracing
+ * Codmir.addSessionEvent('decision', {
+ *   action: 'escalate_to_human',
+ *   reason: 'confidence_below_threshold',
+ *   confidence: 0.42,
+ * });
+ *
+ * const completed = Codmir.endSession();
+ * // completed.events contains the full replay timeline
+ * ```
+ */
+export function startSession(config: SessionConfig): AgentSession {
+  const id = nanoid(21);
+
+  const session: AgentSession = {
+    id,
+    agent: config.agent,
+    startedAt: new Date().toISOString(),
+    metadata: config.metadata ?? {},
+    tags: config.tags ?? {},
+    spans: [],
+    events: [],
+    usage: {
+      totalCalls: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCost: 0,
+      totalLatencyMs: 0,
+    },
+  };
+
+  activeSessions.set(id, session);
+  currentSessionId = id;
+
+  coreSetSessionId(id);
+  coreSetTag("agent.name", config.agent);
+  coreSetTag("session.id", id);
+
+  coreAddBreadcrumb({
+    type: "navigation",
+    category: "session",
+    message: `Session started: ${config.agent}`,
+    data: { sessionId: id, agent: config.agent, ...config.metadata },
+    level: "info",
+  });
+
+  return session;
+}
+
+/**
+ * End the current agent session.
+ * Returns the completed session with all correlated events and usage stats.
+ */
+export function endSession(sessionId?: string): AgentSession | null {
+  const id = sessionId ?? currentSessionId;
+  if (!id) return null;
+
+  const session = activeSessions.get(id);
+  if (!session) return null;
+
+  session.endedAt = new Date().toISOString();
+
+  for (const span of session.spans) {
+    if (!span.endTime) {
+      span.endTime = performance.now();
+    }
+  }
+
+  coreAddBreadcrumb({
+    type: "navigation",
+    category: "session",
+    message: `Session ended: ${session.agent} — ${session.usage.totalCalls} calls, $${session.usage.totalCost.toFixed(4)}`,
+    data: {
+      sessionId: id,
+      agent: session.agent,
+      durationMs: new Date(session.endedAt).getTime() - new Date(session.startedAt).getTime(),
+      usage: { ...session.usage },
+    },
+    level: "info",
+  });
+
+  if (currentSessionId === id) {
+    currentSessionId = null;
+  }
+
+  return session;
+}
+
+/**
+ * Flush a completed session to the configured DSN endpoint.
+ *
+ * Sends the full session payload (events, spans, usage) as an
+ * `agent_session` event to the overseer ingest endpoint. Call this
+ * after `endSession()` to persist the replay data.
+ *
+ * @returns true if the flush succeeded, false if it failed or no DSN is configured
+ */
+export async function flushSession(session: AgentSession): Promise<boolean> {
+  const dsn = coreGetDsn();
+  if (!dsn) return false;
+
+  const endpoint = dsn.endsWith("/ingest") ? dsn : `${dsn}/ingest`;
+
+  const payload = {
+    sessionId: session.id,
+    service: `agent:${session.agent}`,
+    environment: coreGetEnvironment(),
+    events: [
+      {
+        type: "agent_session" as const,
+        session: {
+          id: session.id,
+          agent: session.agent,
+          startedAt: session.startedAt,
+          endedAt: session.endedAt,
+          metadata: session.metadata,
+          tags: session.tags,
+          events: session.events,
+          spans: session.spans.map((s) => ({
+            name: s.name,
+            durationMs: s.endTime && s.startTime
+              ? Math.round(s.endTime - s.startTime)
+              : undefined,
+            eventCount: s.events.length,
+            metadata: s.metadata,
+          })),
+          usage: session.usage,
+          durationMs: session.endedAt && session.startedAt
+            ? new Date(session.endedAt).getTime() - new Date(session.startedAt).getTime()
+            : undefined,
+        },
+      },
+    ],
+  };
+
+  try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    const overseerKey = coreGetOverseerKey();
+    if (overseerKey) {
+      headers["x-overseer-key"] = overseerKey;
+    }
+
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) return false;
+
+    activeSessions.delete(session.id);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get a session by ID, or the current active session.
+ */
+export function getSession(sessionId?: string): AgentSession | null {
+  if (sessionId) return activeSessions.get(sessionId) ?? null;
+  return activeSession();
+}
+
+/**
+ * Add a custom event to the current session's timeline.
+ * Use this for decision tracing — record why the agent chose an action.
+ */
+export function addSessionEvent(
+  type: SessionEvent["type"],
+  data: Record<string, unknown>,
+  sessionId?: string,
+): SessionEvent | null {
+  const id = sessionId ?? currentSessionId;
+  if (!id) return null;
+
+  const session = activeSessions.get(id);
+  if (!session) return null;
+
+  const event: SessionEvent = {
+    id: nanoid(12),
+    type,
+    timestamp: new Date().toISOString(),
+    data,
+  };
+
+  session.events.push(event);
+
+  const currentSpan = session.spans[session.spans.length - 1];
+  if (currentSpan && !currentSpan.endTime) {
+    currentSpan.events.push(event);
+  }
+
+  return event;
+}
+
+/**
+ * Start a named span within the current session.
+ * Spans group related events (e.g., "handle_user_message", "run_tool_chain").
+ */
+export function startSessionSpan(
+  name: string,
+  metadata?: Record<string, unknown>,
+  sessionId?: string,
+): SessionSpan | null {
+  const id = sessionId ?? currentSessionId;
+  if (!id) return null;
+
+  const session = activeSessions.get(id);
+  if (!session) return null;
+
+  const span: SessionSpan = {
+    name,
+    startTime: performance.now(),
+    events: [],
+    metadata,
+  };
+
+  session.spans.push(span);
+  return span;
+}
+
+/**
+ * End the most recent open span in the current session.
+ */
+export function endSessionSpan(sessionId?: string): void {
+  const id = sessionId ?? currentSessionId;
+  if (!id) return;
+
+  const session = activeSessions.get(id);
+  if (!session) return;
+
+  for (let i = session.spans.length - 1; i >= 0; i--) {
+    if (!session.spans[i].endTime) {
+      session.spans[i].endTime = performance.now();
+      break;
+    }
+  }
+}
+
+/**
+ * Record an LLM call result in the active session.
+ * Called automatically by trackAICall — you don't need to call this directly.
+ */
+function recordSessionCall(result: AICallResult): void {
+  const session = activeSession();
+  if (!session) return;
+
+  session.usage.totalCalls++;
+  session.usage.totalInputTokens += result.inputTokens;
+  session.usage.totalOutputTokens += result.outputTokens;
+  session.usage.totalCost += result.cost;
+  session.usage.totalLatencyMs += result.latencyMs;
+
+  addSessionEvent("llm_call", {
+    provider: result.provider,
+    model: result.model,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    cost: result.cost,
+    latencyMs: result.latencyMs,
+  });
+}
+
+/**
+ * Record an LLM call error in the active session.
+ */
+function recordSessionError(provider: string, model: string, error: unknown): void {
+  const session = activeSession();
+  if (!session) return;
+
+  addSessionEvent("error", {
+    provider,
+    model,
+    error: error instanceof Error ? error.message : String(error),
+  });
 }
 
 // =============================================================================
