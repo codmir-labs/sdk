@@ -23,6 +23,7 @@ npm install @codmir/sdk
 | Browser (vanilla) | `@codmir/sdk/browser` |
 | Remix | `@codmir/sdk/remix` |
 | Serverless | `@codmir/sdk/serverless` |
+| Bug reporting | `@codmir/sdk/report` |
 | API client | `@codmir/sdk` |
 | Setup verification | `@codmir/sdk/verify` |
 
@@ -180,6 +181,45 @@ Or the one-liner:
 import { quickVerify } from '@codmir/sdk/verify';
 
 const ok = await quickVerify(process.env.CODMIR_DSN);
+```
+
+## Bug Reporting
+
+Report bugs against any software vendor programmatically. Auto-deduplicates, upvotes existing reports, and captures exceptions like Sentry. Also available as a standalone package: [`@codmir/report`](https://www.npmjs.com/package/@codmir/report).
+
+```typescript
+import { Codmir } from '@codmir/sdk/report';
+
+Codmir.init({ projectKey: 'your-project-key' });
+
+// File a structured bug report
+await Codmir.reportBug({
+  vendor: 'stripe',
+  title: 'Webhook retries on 202',
+  description: 'Duplicate events sent when endpoint returns 202 instead of 200.',
+  severity: 'HIGH',
+  reproSteps: '1. Set up webhook endpoint returning 202\n2. Send test event',
+});
+
+// Auto-capture exceptions
+try {
+  await thirdPartySDK.doSomething();
+} catch (error) {
+  await Codmir.captureException(error, {
+    vendor: 'some-sdk',
+    product: 'their-node-client',
+    severity: 'HIGH',
+  });
+}
+
+// Search existing reports
+const results = await Codmir.searchBugs({
+  vendor: 'stripe',
+  query: 'webhook retry',
+});
+
+// Upvote
+await Codmir.upvote('report-id');
 ```
 
 ## API Client
