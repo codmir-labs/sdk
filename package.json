@@ -1,6 +1,6 @@
 {
   "name": "@codmir/sdk",
-  "version": "1.0.4",
+  "version": "2.0.1",
   "description": "Official Codmir SDK - TypeScript/JavaScript library for the Codmir API",
   "type": "module",
   "main": "./dist/index.js",
