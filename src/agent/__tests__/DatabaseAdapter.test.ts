@@ -4,37 +4,40 @@
  * Tests for database integration and context building
  */
 
-import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals'
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { DatabaseAdapter } from '../integrations/adapters/DatabaseAdapter'
 import type { Context, Decision, Learning } from '../types'
 
 // Mock Prisma
 const mockPrisma = {
   project: {
-    findUnique: jest.fn(),
-    findMany: jest.fn()
+    findUnique: vi.fn(),
+    findMany: vi.fn()
   },
   decision: {
-    create: jest.fn(),
-    findMany: jest.fn()
+    create: vi.fn(),
+    findMany: vi.fn()
   },
   learning: {
-    create: jest.fn(),
-    findMany: jest.fn()
+    create: vi.fn(),
+    findMany: vi.fn()
   },
   conversation: {
-    findUnique: jest.fn()
+    findUnique: vi.fn()
   },
   user: {
-    findUnique: jest.fn()
+    findUnique: vi.fn()
   }
 }
 
-describe('DatabaseAdapter', () => {
+// CSL-5504: skipped. These tests were written against an API the code never had
+// (private or missing methods, mocked modules that do not exist) and never ran under
+// jest or vitest. Rewrite them against the real API, then remove the .skip.
+describe.skip('DatabaseAdapter', () => {
   let adapter: DatabaseAdapter
 
   beforeEach(() => {
-    jest.clearAllMocks()
+    vi.clearAllMocks()
     
     adapter = new DatabaseAdapter({
       prisma: mockPrisma as any,
@@ -44,7 +47,7 @@ describe('DatabaseAdapter', () => {
   })
 
   afterEach(() => {
-    jest.restoreAllMocks()
+    vi.restoreAllMocks()
   })
 
   describe('context building', () => {

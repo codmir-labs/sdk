@@ -232,6 +232,7 @@ function setupRequestTracking(): void {
 
   XMLHttpRequest.prototype.open = function (method: string, url: string | URL) {
     (this as any).__codmir = { method, url: url.toString(), startTime: 0 };
+    // eslint-disable-next-line prefer-rest-params -- forwards every XHR open() argument unchanged
     return originalXHROpen.apply(this, arguments as any);
   };
 
