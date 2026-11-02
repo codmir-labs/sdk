@@ -158,10 +158,10 @@ describe('ConversationIntelligence', () => {
       expect(withSecondary.analysis.intent.confidence).toBeCloseTo(0.78)
     })
 
-    // BUG (not fixed here, CSL-5522): calculateIntentConfidence looks the primary intent up in a table
+    // Fixed (CSL-5548), was: calculateIntentConfidence looks the primary intent up in a table
     // that has no 'general' entry, so `keywordMatches / keywords.length` is 0 / 0 and the intent
     // confidence of every unclassified conversation is NaN (ConversationIntelligence.ts:533).
-    it.fails('has a base confidence of 0.5 for an unclassified conversation (BUG: NaN)', async () => {
+    it('has a base confidence of 0.5 for an unclassified conversation (BUG: NaN)', async () => {
       expect((await analyse(ci, ctx([msg('good morning')]))).analysis.intent.confidence).toBe(0.5)
     })
 
