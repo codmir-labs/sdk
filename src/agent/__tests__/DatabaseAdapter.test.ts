@@ -1,524 +1,517 @@
 /**
  * DatabaseAdapter Test Suite
- * 
- * Tests for database integration and context building
+ *
+ * Exercises the public API of DatabaseAdapter against a fake Prisma client.
+ * The Prisma client is the only mocked boundary; the clock is faked for cache expiry.
  */
 
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { DatabaseAdapter } from '../integrations/adapters/DatabaseAdapter'
-import type { Context, Decision, Learning } from '../types'
+import type { Context } from '../types'
 
-// Mock Prisma
-const mockPrisma = {
-  project: {
-    findUnique: vi.fn(),
-    findMany: vi.fn()
-  },
-  decision: {
-    create: vi.fn(),
-    findMany: vi.fn()
-  },
-  learning: {
-    create: vi.fn(),
-    findMany: vi.fn()
-  },
-  conversation: {
-    findUnique: vi.fn()
-  },
-  user: {
-    findUnique: vi.fn()
+function makePrisma() {
+  return {
+    chatConversation: { findUnique: vi.fn() },
+    project: { findUnique: vi.fn() },
+    user: { findUnique: vi.fn() },
+    task: { findUnique: vi.fn() },
+    agentDecision: { create: vi.fn(), findMany: vi.fn() },
+    agentLearning: { create: vi.fn(), findMany: vi.fn() }
   }
 }
 
-// CSL-5504: skipped. These tests were written against an API the code never had
-// (private or missing methods, mocked modules that do not exist) and never ran under
-// jest or vitest. Rewrite them against the real API, then remove the .skip.
-describe.skip('DatabaseAdapter', () => {
-  let adapter: DatabaseAdapter
+type FakePrisma = ReturnType<typeof makePrisma>
+
+function makeAdapter(prisma: FakePrisma, opts: { enableCaching?: boolean; cacheTimeout?: number } = {}) {
+  return new DatabaseAdapter({ prisma: prisma as any, ...opts })
+}
+
+const conversationRow = {
+  id: 'conv-1',
+  messages: [
+    { id: 'm1', role: 'user', content: 'hello', createdAt: new Date('2025-01-01T00:00:00Z'), metadata: { a: 1 } },
+    { id: 'm2', role: 'assistant', content: 'hi', createdAt: new Date('2025-01-01T00:00:05Z'), metadata: null }
+  ]
+}
+
+describe('DatabaseAdapter', () => {
+  let prisma: FakePrisma
+  let errorSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
-    vi.clearAllMocks()
-    
-    adapter = new DatabaseAdapter({
-      prisma: mockPrisma as any,
-      enableCaching: true,
-      cacheTimeout: 300000
-    })
+    prisma = makePrisma()
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
-  describe('context building', () => {
-    it('should build context from database', async () => {
-      const mockProject = {
-        id: 'proj-123',
-        name: 'Test Project',
-        description: 'A test project',
-        settings: { language: 'typescript' }
-      }
+  describe('getConversationContext', () => {
+    it('maps messages into the conversation context and queries the last 50 oldest-first', async () => {
+      prisma.chatConversation.findUnique.mockResolvedValue(conversationRow)
+      const ctx = await makeAdapter(prisma).getConversationContext('conv-1')
 
-      const mockConversation = {
-        id: 'conv-123',
-        messages: [
-          { id: '1', role: 'user', content: 'Hello', timestamp: new Date() }
-        ]
-      }
-
-      mockPrisma.project.findUnique.mockResolvedValue(mockProject)
-      mockPrisma.conversation.findUnique.mockResolvedValue(mockConversation)
-
-      const context = await adapter.buildContextFromDatabase({
-        projectId: 'proj-123',
-        conversationId: 'conv-123'
-      })
-
-      expect(context.project).toEqual(mockProject)
-      expect(context.conversation).toEqual(mockConversation)
-      expect(mockPrisma.project.findUnique).toHaveBeenCalledWith({
-        where: { id: 'proj-123' },
-        include: expect.any(Object)
-      })
-    })
-
-    it('should handle missing project gracefully', async () => {
-      mockPrisma.project.findUnique.mockResolvedValue(null)
-
-      await expect(
-        adapter.buildContextFromDatabase({ projectId: 'non-existent' })
-      ).rejects.toThrow('Project not found: non-existent')
-    })
-
-    it('should cache context data', async () => {
-      const mockProject = {
-        id: 'proj-123',
-        name: 'Test Project'
-      }
-
-      mockPrisma.project.findUnique.mockResolvedValue(mockProject)
-
-      // First call
-      await adapter.buildContextFromDatabase({ projectId: 'proj-123' })
-      
-      // Second call should use cache
-      await adapter.buildContextFromDatabase({ projectId: 'proj-123' })
-
-      expect(mockPrisma.project.findUnique).toHaveBeenCalledTimes(1)
-    })
-
-    it('should include related data in context', async () => {
-      const mockProject = {
-        id: 'proj-123',
-        name: 'Test Project',
-        ProjectMember: [
-          { user: { id: 'user-1', name: 'John Doe', role: 'developer' } }
-        ],
-        Integration: [
-          { provider: 'github', config: { repo: 'test/repo' } }
-        ]
-      }
-
-      mockPrisma.project.findUnique.mockResolvedValue(mockProject)
-
-      const context = await adapter.buildContextFromDatabase({
-        projectId: 'proj-123',
-        includeMembers: true,
-        includeIntegrations: true
-      })
-
-      expect(context.project.ProjectMember).toBeDefined()
-      expect(context.project.Integration).toBeDefined()
-      expect(context.teamMembers).toHaveLength(1)
-      expect(context.integrations).toHaveLength(1)
-    })
-  })
-
-  describe('decision management', () => {
-    it('should save decisions to database', async () => {
-      const mockDecision: Decision = {
-        id: 'dec-123',
-        question: 'Should we proceed?',
-        selectedOption: 'yes',
-        confidence: 0.85,
-        reasoning: 'All conditions are met',
-        factors: ['readiness', 'resources'],
-        timestamp: new Date(),
-        metadata: { source: 'test' }
-      }
-
-      const mockContext: Context = {
-        project: { id: 'proj-123', name: 'Test Project' }
-      }
-
-      mockPrisma.decision.create.mockResolvedValue({
-        id: 'db-dec-123',
-        ...mockDecision
-      })
-
-      const result = await adapter.saveDecision(mockDecision, mockContext)
-
-      expect(result).toBe('db-dec-123')
-      expect(mockPrisma.decision.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          id: mockDecision.id,
-          question: mockDecision.question,
-          selectedOption: mockDecision.selectedOption,
-          confidence: mockDecision.confidence,
-          reasoning: mockDecision.reasoning,
-          projectId: 'proj-123'
+      expect(prisma.chatConversation.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'conv-1' },
+          include: expect.objectContaining({ messages: { orderBy: { createdAt: 'asc' }, take: 50 } })
         })
+      )
+      expect(ctx?.id).toBe('conv-1')
+      expect(ctx?.messages).toHaveLength(2)
+      expect(ctx?.messages[0]).toMatchObject({
+        id: 'm1',
+        role: 'user',
+        content: 'hello',
+        timestamp: '2025-01-01T00:00:00.000Z',
+        metadata: { a: 1 }
       })
+      expect(ctx?.sentiment).toBe('neutral')
     })
 
-    it('should retrieve recent decisions', async () => {
-      const mockDecisions = [
-        {
-          id: 'dec-1',
-          question: 'Test 1',
-          selectedOption: 'yes',
-          confidence: 0.8,
-          createdAt: new Date()
-        },
-        {
-          id: 'dec-2', 
-          question: 'Test 2',
-          selectedOption: 'no',
-          confidence: 0.7,
-          createdAt: new Date()
-        }
-      ]
-
-      mockPrisma.decision.findMany.mockResolvedValue(mockDecisions)
-
-      const decisions = await adapter.getRecentDecisions('proj-123', 10)
-
-      expect(decisions).toHaveLength(2)
-      expect(mockPrisma.decision.findMany).toHaveBeenCalledWith({
-        where: { projectId: 'proj-123' },
-        orderBy: { createdAt: 'desc' },
-        take: 10
-      })
+    it('returns undefined when the conversation does not exist', async () => {
+      prisma.chatConversation.findUnique.mockResolvedValue(null)
+      expect(await makeAdapter(prisma).getConversationContext('nope')).toBeUndefined()
     })
 
-    it('should filter decisions by confidence threshold', async () => {
-      const highConfidenceDecisions = [
-        { id: 'dec-1', confidence: 0.9 },
-        { id: 'dec-2', confidence: 0.85 }
-      ]
-
-      mockPrisma.decision.findMany.mockResolvedValue(highConfidenceDecisions)
-
-      const decisions = await adapter.getRecentDecisions('proj-123', 10, 0.8)
-
-      expect(mockPrisma.decision.findMany).toHaveBeenCalledWith({
-        where: { 
-          projectId: 'proj-123',
-          confidence: { gte: 0.8 }
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 10
-      })
+    it('swallows database errors, logs them and returns undefined', async () => {
+      prisma.chatConversation.findUnique.mockRejectedValue(new Error('db down'))
+      expect(await makeAdapter(prisma).getConversationContext('conv-1')).toBeUndefined()
+      expect(errorSpy).toHaveBeenCalledWith('Failed to get conversation context:', expect.any(Error))
     })
   })
 
-  describe('learning management', () => {
-    it('should save learning to database', async () => {
-      const mockLearning: Learning = {
-        id: 'learn-123',
-        type: 'performance_optimization',
-        description: 'Database queries can be optimized',
+  describe('getProjectContext', () => {
+    it('maps a full project row', async () => {
+      prisma.project.findUnique.mockResolvedValue({
+        id: 'p1',
+        name: 'Proj',
+        type: 'web',
+        description: 'desc',
+        techStack: ['ts'],
+        recentChanges: ['c1'],
+        tickets: ['t1'],
+        tasks: ['k1']
+      })
+      const ctx = await makeAdapter(prisma).getProjectContext('p1')
+
+      expect(prisma.project.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'p1' } }))
+      expect(ctx).toMatchObject({
+        id: 'p1',
+        name: 'Proj',
+        type: 'web',
+        description: 'desc',
+        techStack: ['ts'],
+        recentChanges: ['c1'],
+        activeTickets: ['t1'],
+        activeTasks: ['k1']
+      })
+    })
+
+    it('fills defaults for a sparse project row', async () => {
+      prisma.project.findUnique.mockResolvedValue({ id: 'p2', name: 'Bare' })
+      const ctx = await makeAdapter(prisma).getProjectContext('p2')
+
+      expect(ctx).toMatchObject({
+        type: 'general',
+        description: '',
+        techStack: [],
+        recentChanges: [],
+        activeTickets: [],
+        activeTasks: []
+      })
+      expect(ctx?.codebaseAnalysis.totalFiles).toBe(0)
+    })
+
+    it('returns undefined for a missing project and for a database error', async () => {
+      const adapter = makeAdapter(prisma)
+      prisma.project.findUnique.mockResolvedValueOnce(null)
+      expect(await adapter.getProjectContext('x')).toBeUndefined()
+
+      prisma.project.findUnique.mockRejectedValueOnce(new Error('boom'))
+      expect(await adapter.getProjectContext('x')).toBeUndefined()
+      expect(errorSpy).toHaveBeenCalledWith('Failed to get project context:', expect.any(Error))
+    })
+  })
+
+  describe('getUserContext', () => {
+    it('maps user fields and preferences', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'u1',
+        name: 'Ada',
+        role: 'lead',
+        expertise: ['ts'],
+        preferences: { communicationStyle: 'detailed', workingStyle: 'collaborative' },
+        currentFocus: ['auth']
+      })
+      const ctx = await makeAdapter(prisma).getUserContext('u1')
+
+      expect(ctx).toMatchObject({
+        id: 'u1',
+        name: 'Ada',
+        role: 'lead',
+        expertise: ['ts'],
+        currentFocus: ['auth']
+      })
+      expect(ctx?.preferences).toMatchObject({
+        communicationStyle: 'detailed',
+        workingStyle: 'collaborative',
+        notificationPrefs: [],
+        toolPreferences: []
+      })
+    })
+
+    it('defaults name, role and preferences', async () => {
+      prisma.user.findUnique.mockResolvedValue({ id: 'u2', name: null })
+      const ctx = await makeAdapter(prisma).getUserContext('u2')
+
+      expect(ctx).toMatchObject({ name: 'Unknown', role: 'developer', expertise: [] })
+      expect(ctx?.preferences).toMatchObject({ communicationStyle: 'concise', workingStyle: 'autonomous' })
+    })
+
+    it('returns undefined for a missing user and for a database error', async () => {
+      const adapter = makeAdapter(prisma)
+      prisma.user.findUnique.mockResolvedValueOnce(null)
+      expect(await adapter.getUserContext('x')).toBeUndefined()
+
+      prisma.user.findUnique.mockRejectedValueOnce(new Error('boom'))
+      expect(await adapter.getUserContext('x')).toBeUndefined()
+      expect(errorSpy).toHaveBeenCalledWith('Failed to get user context:', expect.any(Error))
+    })
+  })
+
+  describe('getTaskContext', () => {
+    it('maps task fields, assignee name, dependency ids and due date', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't1',
+        title: 'Do it',
+        description: 'details',
+        status: 'IN_PROGRESS',
+        progress: 40,
+        assignee: { id: 'u1', name: 'Ada' },
+        dependencies: [{ id: 'd1' }, { id: 'd2' }],
+        dueDate: new Date('2025-03-01T00:00:00Z')
+      })
+      const ctx = await makeAdapter(prisma).getTaskContext('t1')
+
+      expect(ctx).toEqual({
+        id: 't1',
+        title: 'Do it',
+        description: 'details',
+        status: 'IN_PROGRESS',
+        progress: 40,
+        assignee: 'Ada',
+        dependencies: ['d1', 'd2'],
+        estimatedCompletion: '2025-03-01T00:00:00.000Z'
+      })
+    })
+
+    it('falls back to the assignee id and to empty defaults', async () => {
+      prisma.task.findUnique.mockResolvedValueOnce({ id: 't2', title: 'x', status: 'TODO', assignee: { id: 'u9' } })
+      const ctx = await makeAdapter(prisma).getTaskContext('t2')
+      expect(ctx).toMatchObject({ assignee: 'u9', description: '', progress: 0, dependencies: [] })
+      expect(ctx?.estimatedCompletion).toBeUndefined()
+    })
+
+    it('returns undefined for a missing task and for a database error', async () => {
+      const adapter = makeAdapter(prisma)
+      prisma.task.findUnique.mockResolvedValueOnce(null)
+      expect(await adapter.getTaskContext('x')).toBeUndefined()
+
+      prisma.task.findUnique.mockRejectedValueOnce(new Error('boom'))
+      expect(await adapter.getTaskContext('x')).toBeUndefined()
+      expect(errorSpy).toHaveBeenCalledWith('Failed to get task context:', expect.any(Error))
+    })
+  })
+
+  describe('getCodebaseContext', () => {
+    it('uses the latest analysis and repository language', async () => {
+      prisma.project.findUnique.mockResolvedValue({
+        id: 'p1',
+        repository: { primaryLanguage: 'rust' },
+        codeAnalysis: [{ fileCount: 12, lineCount: 3400, createdAt: new Date('2025-02-02T00:00:00Z') }]
+      })
+      const ctx = await makeAdapter(prisma).getCodebaseContext('p1')
+
+      expect(ctx).toMatchObject({
+        totalFiles: 12,
+        totalLines: 3400,
+        languages: { rust: 100 },
+        lastAnalyzed: '2025-02-02T00:00:00.000Z'
+      })
+    })
+
+    it('defaults to typescript with zero counts when there is no analysis', async () => {
+      prisma.project.findUnique.mockResolvedValue({ id: 'p1' })
+      const ctx = await makeAdapter(prisma).getCodebaseContext('p1')
+      expect(ctx).toMatchObject({ totalFiles: 0, totalLines: 0, languages: { typescript: 100 }, lastAnalyzed: '' })
+    })
+
+    it('returns undefined for a missing project and for a database error', async () => {
+      const adapter = makeAdapter(prisma)
+      prisma.project.findUnique.mockResolvedValueOnce(null)
+      expect(await adapter.getCodebaseContext('x')).toBeUndefined()
+
+      prisma.project.findUnique.mockRejectedValueOnce(new Error('boom'))
+      expect(await adapter.getCodebaseContext('x')).toBeUndefined()
+      expect(errorSpy).toHaveBeenCalledWith('Failed to get codebase context:', expect.any(Error))
+    })
+  })
+
+  describe('buildContextFromDatabase', () => {
+    it('returns an empty context and queries nothing when given no ids', async () => {
+      const ctx = await makeAdapter(prisma).buildContextFromDatabase({})
+      expect(ctx).toEqual({})
+      expect(prisma.project.findUnique).not.toHaveBeenCalled()
+      expect(prisma.user.findUnique).not.toHaveBeenCalled()
+    })
+
+    it('assembles every section from the ids it is given', async () => {
+      prisma.chatConversation.findUnique.mockResolvedValue(conversationRow)
+      prisma.project.findUnique.mockResolvedValue({ id: 'p1', name: 'Proj' })
+      prisma.user.findUnique.mockResolvedValue({ id: 'u1', name: 'Ada' })
+      prisma.task.findUnique.mockResolvedValue({ id: 't1', title: 'T', status: 'TODO' })
+
+      const ctx = await makeAdapter(prisma).buildContextFromDatabase({
+        conversationId: 'conv-1',
+        projectId: 'p1',
+        userId: 'u1',
+        taskId: 't1'
+      })
+
+      expect(ctx.conversation?.id).toBe('conv-1')
+      expect(ctx.project?.name).toBe('Proj')
+      expect(ctx.user?.name).toBe('Ada')
+      expect(ctx.task?.id).toBe('t1')
+      expect(ctx.codebase).toBeDefined()
+    })
+
+    it('only builds the sections whose ids were supplied', async () => {
+      prisma.user.findUnique.mockResolvedValue({ id: 'u1', name: 'Ada' })
+      const ctx = await makeAdapter(prisma).buildContextFromDatabase({ userId: 'u1' })
+      expect(Object.keys(ctx)).toEqual(['user'])
+    })
+  })
+
+  describe('saveDecision', () => {
+    const context = { project: { id: 'p1' }, user: { id: 'u1' } } as unknown as Context
+
+    it('persists the decision with its project, user and metadata', async () => {
+      prisma.agentDecision.create.mockResolvedValue({})
+      await makeAdapter(prisma).saveDecision(
+        {
+          id: 'd1',
+          question: 'Q?',
+          choice: 'A',
+          confidence: 0.9,
+          factors: ['f'],
+          reasoning: 'because',
+          constraints: ['c'],
+          tradeoffs: ['t'],
+          expectedOutcome: 'ok'
+        },
+        context
+      )
+
+      expect(prisma.agentDecision.create).toHaveBeenCalledTimes(1)
+      const { data } = prisma.agentDecision.create.mock.calls[0][0]
+      expect(data).toMatchObject({
+        id: 'd1',
+        question: 'Q?',
+        choice: 'A',
         confidence: 0.9,
-        actionableInsights: [
-          'Add index on user_id column',
-          'Use connection pooling'
-        ],
-        evidence: [
-          'Query time reduced by 70%',
-          'CPU usage decreased'
-        ],
-        applicableContexts: ['database_operations'],
-        metadata: { source: 'performance_analysis' }
-      }
-
-      const mockContext: Context = {
-        project: { id: 'proj-123', name: 'Test Project' }
-      }
-
-      mockPrisma.learning.create.mockResolvedValue({
-        id: 'db-learn-123',
-        ...mockLearning
-      })
-
-      const result = await adapter.saveLearning(mockLearning, mockContext)
-
-      expect(result).toBe('db-learn-123')
-      expect(mockPrisma.learning.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          id: mockLearning.id,
-          type: mockLearning.type,
-          description: mockLearning.description,
-          confidence: mockLearning.confidence,
-          projectId: 'proj-123'
-        })
+        projectId: 'p1',
+        userId: 'u1',
+        metadata: { constraints: ['c'], tradeoffs: ['t'], expectedOutcome: 'ok' }
       })
     })
 
-    it('should retrieve learnings by context', async () => {
-      const mockLearnings = [
-        {
-          id: 'learn-1',
-          type: 'code_quality',
-          description: 'Use TypeScript for better type safety',
-          confidence: 0.95
-        }
-      ]
+    it('does not throw when the write fails, and logs it', async () => {
+      prisma.agentDecision.create.mockRejectedValue(new Error('write failed'))
+      await expect(makeAdapter(prisma).saveDecision({ id: 'd1' }, context)).resolves.toBeUndefined()
+      expect(errorSpy).toHaveBeenCalledWith('Failed to save decision:', expect.any(Error))
+    })
+  })
 
-      mockPrisma.learning.findMany.mockResolvedValue(mockLearnings)
+  describe('saveLearning', () => {
+    const context = { project: { id: 'p1' }, user: { id: 'u1' } } as unknown as Context
 
-      const learnings = await adapter.getLearnings({
-        projectId: 'proj-123',
-        type: 'code_quality',
-        minConfidence: 0.9,
+    it('persists the learning with its project and user', async () => {
+      prisma.agentLearning.create.mockResolvedValue({})
+      await makeAdapter(prisma).saveLearning(
+        { id: 'l1', type: 'success', description: 'd', confidence: 0.7, actionableInsights: ['i'] },
+        context
+      )
+
+      const { data } = prisma.agentLearning.create.mock.calls[0][0]
+      expect(data).toMatchObject({
+        id: 'l1',
+        type: 'success',
+        description: 'd',
+        confidence: 0.7,
+        actionableInsights: ['i'],
+        projectId: 'p1',
+        userId: 'u1'
+      })
+    })
+
+    it('leaves project and user ids undefined when the context has none', async () => {
+      prisma.agentLearning.create.mockResolvedValue({})
+      await makeAdapter(prisma).saveLearning({ id: 'l2' }, {} as Context)
+      const { data } = prisma.agentLearning.create.mock.calls[0][0]
+      expect(data.projectId).toBeUndefined()
+      expect(data.userId).toBeUndefined()
+    })
+
+    it('does not throw when the write fails, and logs it', async () => {
+      prisma.agentLearning.create.mockRejectedValue(new Error('write failed'))
+      await expect(makeAdapter(prisma).saveLearning({ id: 'l1' }, context)).resolves.toBeUndefined()
+      expect(errorSpy).toHaveBeenCalledWith('Failed to save learning:', expect.any(Error))
+    })
+  })
+
+  describe('getRecentDecisions', () => {
+    it('returns the rows, newest first, with a default limit of 10', async () => {
+      const rows = [{ id: 'd2' }, { id: 'd1' }]
+      prisma.agentDecision.findMany.mockResolvedValue(rows)
+      const result = await makeAdapter(prisma).getRecentDecisions('p1')
+
+      expect(result).toBe(rows)
+      expect(prisma.agentDecision.findMany).toHaveBeenCalledWith({
+        where: { projectId: 'p1' },
+        orderBy: { createdAt: 'desc' },
+        take: 10
+      })
+    })
+
+    it('honours an explicit limit', async () => {
+      prisma.agentDecision.findMany.mockResolvedValue([])
+      await makeAdapter(prisma).getRecentDecisions('p1', 3)
+      expect(prisma.agentDecision.findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 3 }))
+    })
+
+    it('returns an empty list on a database error', async () => {
+      prisma.agentDecision.findMany.mockRejectedValue(new Error('boom'))
+      expect(await makeAdapter(prisma).getRecentDecisions('p1')).toEqual([])
+      expect(errorSpy).toHaveBeenCalledWith('Failed to get recent decisions:', expect.any(Error))
+    })
+  })
+
+  describe('getLearnings', () => {
+    it('filters by project, type and minimum confidence, highest confidence first', async () => {
+      const rows = [{ id: 'l1' }]
+      prisma.agentLearning.findMany.mockResolvedValue(rows)
+      const result = await makeAdapter(prisma).getLearnings({
+        projectId: 'p1',
+        type: 'failure',
+        minConfidence: 0.6,
         limit: 5
       })
 
-      expect(learnings).toHaveLength(1)
-      expect(mockPrisma.learning.findMany).toHaveBeenCalledWith({
-        where: {
-          projectId: 'proj-123',
-          type: 'code_quality',
-          confidence: { gte: 0.9 }
-        },
+      expect(result).toBe(rows)
+      expect(prisma.agentLearning.findMany).toHaveBeenCalledWith({
+        where: { projectId: 'p1', type: 'failure', confidence: { gte: 0.6 } },
         orderBy: { confidence: 'desc' },
         take: 5
       })
     })
 
-    it('should apply learning filters correctly', async () => {
-      mockPrisma.learning.findMany.mockResolvedValue([])
+    it('defaults to a limit of 20 and no confidence filter', async () => {
+      prisma.agentLearning.findMany.mockResolvedValue([])
+      await makeAdapter(prisma).getLearnings({})
+      const arg = prisma.agentLearning.findMany.mock.calls[0][0]
+      expect(arg.take).toBe(20)
+      expect(arg.where.confidence).toBeUndefined()
+    })
 
-      await adapter.getLearnings({
-        projectId: 'proj-123',
-        applicableContexts: ['authentication', 'security'],
-        minConfidence: 0.8
-      })
-
-      expect(mockPrisma.learning.findMany).toHaveBeenCalledWith({
-        where: {
-          projectId: 'proj-123',
-          confidence: { gte: 0.8 },
-          applicableContexts: {
-            hasSome: ['authentication', 'security']
-          }
-        },
-        orderBy: { confidence: 'desc' },
-        take: 20
-      })
+    it('returns an empty list on a database error', async () => {
+      prisma.agentLearning.findMany.mockRejectedValue(new Error('boom'))
+      expect(await makeAdapter(prisma).getLearnings({ projectId: 'p1' })).toEqual([])
+      expect(errorSpy).toHaveBeenCalledWith('Failed to get learnings:', expect.any(Error))
     })
   })
 
-  describe('caching', () => {
-    it('should cache database queries', async () => {
-      const cacheAdapter = new DatabaseAdapter({
-        prisma: mockPrisma as any,
-        enableCaching: true,
-        cacheTimeout: 1000
-      })
+  describe('caching and clearCache', () => {
+    it('serves a repeat read from the cache when caching is enabled', async () => {
+      prisma.user.findUnique.mockResolvedValue({ id: 'u1', name: 'Ada' })
+      const adapter = makeAdapter(prisma, { enableCaching: true })
 
-      const mockProject = { id: 'proj-123', name: 'Test' }
-      mockPrisma.project.findUnique.mockResolvedValue(mockProject)
+      const first = await adapter.getUserContext('u1')
+      const second = await adapter.getUserContext('u1')
 
-      // First call
-      await cacheAdapter.buildContextFromDatabase({ projectId: 'proj-123' })
-      
-      // Second call within cache timeout
-      await cacheAdapter.buildContextFromDatabase({ projectId: 'proj-123' })
-
-      expect(mockPrisma.project.findUnique).toHaveBeenCalledTimes(1)
+      expect(second).toBe(first)
+      expect(prisma.user.findUnique).toHaveBeenCalledTimes(1)
     })
 
-    it('should invalidate cache after timeout', async () => {
-      const cacheAdapter = new DatabaseAdapter({
-        prisma: mockPrisma as any,
-        enableCaching: true,
-        cacheTimeout: 10 // Very short timeout
-      })
+    it('hits the database every time when caching is not enabled', async () => {
+      prisma.user.findUnique.mockResolvedValue({ id: 'u1', name: 'Ada' })
+      const adapter = makeAdapter(prisma)
 
-      const mockProject = { id: 'proj-123', name: 'Test' }
-      mockPrisma.project.findUnique.mockResolvedValue(mockProject)
-
-      // First call
-      await cacheAdapter.buildContextFromDatabase({ projectId: 'proj-123' })
-      
-      // Wait for cache to expire
-      await new Promise(resolve => setTimeout(resolve, 20))
-      
-      // Second call after timeout
-      await cacheAdapter.buildContextFromDatabase({ projectId: 'proj-123' })
-
-      expect(mockPrisma.project.findUnique).toHaveBeenCalledTimes(2)
+      await adapter.getUserContext('u1')
+      await adapter.getUserContext('u1')
+      expect(prisma.user.findUnique).toHaveBeenCalledTimes(2)
     })
 
-    it('should allow cache disabling', async () => {
-      const noCacheAdapter = new DatabaseAdapter({
-        prisma: mockPrisma as any,
-        enableCaching: false
-      })
+    it('does not cache a missing entity', async () => {
+      prisma.user.findUnique.mockResolvedValue(null)
+      const adapter = makeAdapter(prisma, { enableCaching: true })
 
-      const mockProject = { id: 'proj-123', name: 'Test' }
-      mockPrisma.project.findUnique.mockResolvedValue(mockProject)
-
-      // Multiple calls should not use cache
-      await noCacheAdapter.buildContextFromDatabase({ projectId: 'proj-123' })
-      await noCacheAdapter.buildContextFromDatabase({ projectId: 'proj-123' })
-
-      expect(mockPrisma.project.findUnique).toHaveBeenCalledTimes(2)
-    })
-  })
-
-  describe('error handling', () => {
-    it('should handle database connection errors', async () => {
-      mockPrisma.project.findUnique.mockRejectedValue(new Error('Connection failed'))
-
-      await expect(
-        adapter.buildContextFromDatabase({ projectId: 'proj-123' })
-      ).rejects.toThrow('Database query failed: Connection failed')
+      await adapter.getUserContext('u1')
+      await adapter.getUserContext('u1')
+      expect(prisma.user.findUnique).toHaveBeenCalledTimes(2)
     })
 
-    it('should handle malformed data gracefully', async () => {
-      // Return malformed project data
-      mockPrisma.project.findUnique.mockResolvedValue({
-        id: 'proj-123',
-        // Missing required fields
-      })
+    it('keeps separate cache entries per entity type and id', async () => {
+      prisma.user.findUnique.mockImplementation(async ({ where }: any) => ({ id: where.id, name: where.id }))
+      const adapter = makeAdapter(prisma, { enableCaching: true })
 
-      const context = await adapter.buildContextFromDatabase({ projectId: 'proj-123' })
-      
-      expect(context.project.id).toBe('proj-123')
-      expect(context.project.name).toBeUndefined()
+      expect((await adapter.getUserContext('a'))?.name).toBe('a')
+      expect((await adapter.getUserContext('b'))?.name).toBe('b')
+      expect(prisma.user.findUnique).toHaveBeenCalledTimes(2)
     })
 
-    it('should validate input parameters', async () => {
-      await expect(
-        adapter.buildContextFromDatabase({ projectId: '' })
-      ).rejects.toThrow('Invalid projectId')
+    it('expires entries after the cache timeout', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2025-01-01T00:00:00Z'))
+      prisma.user.findUnique.mockResolvedValue({ id: 'u1', name: 'Ada' })
+      const adapter = makeAdapter(prisma, { enableCaching: true, cacheTimeout: 1000 })
 
-      await expect(
-        adapter.buildContextFromDatabase({} as any)
-      ).rejects.toThrow('ProjectId is required')
-    })
-  })
+      await adapter.getUserContext('u1')
+      vi.setSystemTime(new Date('2025-01-01T00:00:00.500Z'))
+      await adapter.getUserContext('u1')
+      expect(prisma.user.findUnique).toHaveBeenCalledTimes(1)
 
-  describe('performance', () => {
-    it('should optimize query performance with includes', async () => {
-      mockPrisma.project.findUnique.mockResolvedValue({
-        id: 'proj-123',
-        name: 'Test Project'
-      })
-
-      await adapter.buildContextFromDatabase({
-        projectId: 'proj-123',
-        includeMembers: true,
-        includeIntegrations: true,
-        includeRecentActivity: true
-      })
-
-      // Should make single query with all includes
-      expect(mockPrisma.project.findUnique).toHaveBeenCalledTimes(1)
-      expect(mockPrisma.project.findUnique).toHaveBeenCalledWith({
-        where: { id: 'proj-123' },
-        include: expect.objectContaining({
-          ProjectMember: expect.any(Object),
-          Integration: expect.any(Object),
-          Task: expect.any(Object)
-        })
-      })
+      vi.setSystemTime(new Date('2025-01-01T00:00:01.500Z'))
+      await adapter.getUserContext('u1')
+      expect(prisma.user.findUnique).toHaveBeenCalledTimes(2)
     })
 
-    it('should handle large result sets efficiently', async () => {
-      const manyDecisions = Array(1000).fill(0).map((_, i) => ({
-        id: `dec-${i}`,
-        question: `Question ${i}`,
-        selectedOption: 'yes',
-        confidence: 0.8
-      }))
+    it('uses a five minute default timeout', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2025-01-01T00:00:00Z'))
+      prisma.user.findUnique.mockResolvedValue({ id: 'u1', name: 'Ada' })
+      const adapter = makeAdapter(prisma, { enableCaching: true })
 
-      mockPrisma.decision.findMany.mockResolvedValue(manyDecisions)
+      await adapter.getUserContext('u1')
+      vi.setSystemTime(new Date('2025-01-01T00:04:59Z'))
+      await adapter.getUserContext('u1')
+      expect(prisma.user.findUnique).toHaveBeenCalledTimes(1)
 
-      const decisions = await adapter.getRecentDecisions('proj-123', 1000)
-
-      expect(decisions).toHaveLength(1000)
-      expect(mockPrisma.decision.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ take: 1000 })
-      )
-    })
-  })
-
-  describe('data relationships', () => {
-    it('should preserve data relationships in context', async () => {
-      const mockProject = {
-        id: 'proj-123',
-        name: 'Test Project',
-        ProjectMember: [
-          {
-            id: 'member-1',
-            role: 'ADMIN',
-            user: {
-              id: 'user-1',
-              name: 'John Doe',
-              email: 'john@example.com'
-            }
-          }
-        ],
-        Task: [
-          {
-            id: 'task-1',
-            title: 'Test Task',
-            assigneeId: 'user-1'
-          }
-        ]
-      }
-
-      mockPrisma.project.findUnique.mockResolvedValue(mockProject)
-
-      const context = await adapter.buildContextFromDatabase({
-        projectId: 'proj-123',
-        includeMembers: true,
-        includeRecentActivity: true
-      })
-
-      expect(context.teamMembers).toHaveLength(1)
-      expect(context.teamMembers![0].user.name).toBe('John Doe')
-      expect(context.recentActivity).toHaveLength(1)
-      expect(context.recentActivity![0].title).toBe('Test Task')
+      vi.setSystemTime(new Date('2025-01-01T00:05:01Z'))
+      await adapter.getUserContext('u1')
+      expect(prisma.user.findUnique).toHaveBeenCalledTimes(2)
     })
 
-    it('should handle nested relationship queries', async () => {
-      const mockConversation = {
-        id: 'conv-123',
-        messages: [
-          {
-            id: 'msg-1',
-            content: 'Hello',
-            role: 'user',
-            user: { id: 'user-1', name: 'John' }
-          }
-        ],
-        project: {
-          id: 'proj-123',
-          name: 'Test Project'
-        }
-      }
+    it('clearCache forces the next read back to the database', async () => {
+      prisma.user.findUnique.mockResolvedValue({ id: 'u1', name: 'Ada' })
+      const adapter = makeAdapter(prisma, { enableCaching: true })
 
-      mockPrisma.conversation.findUnique.mockResolvedValue(mockConversation)
-
-      const context = await adapter.buildContextFromDatabase({
-        conversationId: 'conv-123'
-      })
-
-      expect(context.conversation.project).toBeDefined()
-      expect(context.conversation.messages[0].user).toBeDefined()
+      await adapter.getUserContext('u1')
+      adapter.clearCache()
+      await adapter.getUserContext('u1')
+      expect(prisma.user.findUnique).toHaveBeenCalledTimes(2)
     })
   })
 })
