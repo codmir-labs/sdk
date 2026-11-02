@@ -45,6 +45,11 @@ import {
   type Breadcrumb,
   type SeverityLevel,
 } from "../overseer/index";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { randomFillSync } from "node:crypto";
+import { instrumentFetch } from "../tracing/fetch";
+import { setRandomFill } from "../tracing/propagation";
+import { setContextStrategy, startTransaction, withActiveSpan, type Span } from "../tracing/index";
 
 // =============================================================================
 // Inline Express Types (no @types/express dependency)
@@ -57,6 +62,7 @@ interface ExpressRequest {
   path: string;
   baseUrl: string;
   params: Record<string, string>;
+  route?: { path?: unknown };
   query: Record<string, unknown>;
   headers: Record<string, string | string[] | undefined>;
   body?: unknown;
@@ -124,6 +130,8 @@ export interface ExpressConfig extends OverseerConfig {
 interface CodemirRequestContext {
   startTime: number;
   eventId?: string;
+  /** The `http.server` transaction opened by tracingHandler. */
+  span?: Span;
 }
 
 /** Headers stripped from error reports to avoid leaking secrets */
@@ -167,6 +175,9 @@ export function init(config: ExpressConfig = {}): void {
   // Initialize core
   coreInit(coreConfig);
   isInitialized = true;
+
+  // Tracing: outgoing fetches become child spans and carry traceparent (CSL-5575).
+  instrumentFetch({ breadcrumbs: false });
 }
 
 // =============================================================================
@@ -303,8 +314,10 @@ export function errorHandler(): ErrorMiddleware {
 /**
  * Tracing handler middleware for performance monitoring.
  *
- * Measures request duration and captures it as a breadcrumb with
- * timing data when the response finishes.
+ * Continues an incoming W3C `traceparent` (or starts a new trace), opens an `http.server` transaction named
+ * `METHOD /route`, runs the rest of the chain inside it so spans and outgoing fetches nest under it, and
+ * finishes it when the response ends. Whether it is sent is decided by `tracesSampleRate` (default 0) and
+ * the incoming sampled flag. Also records the response duration as a breadcrumb.
  *
  * @example
  * ```typescript
@@ -313,11 +326,34 @@ export function errorHandler(): ErrorMiddleware {
  * ```
  */
 export function tracingHandler(): RequestMiddleware {
+  // Node has async context; the browser-safe default stack would mix up concurrent requests.
+  setRandomFill((buf) => void randomFillSync(buf));
+  const als = new AsyncLocalStorage<Span>();
+  setContextStrategy({ get: () => als.getStore(), run: (span, fn) => als.run(span, fn) });
+
   return (req: ExpressRequest, res: ExpressResponse, next: NextFunction): void => {
     const startTime = req._codmir?.startTime ?? Date.now();
+    const header = req.headers["traceparent"];
+    const tx = startTransaction({
+      op: "http.server",
+      name: `${req.method} ${req.originalUrl || req.url}`,
+      traceparent: Array.isArray(header) ? header[0] : header,
+      data: { "http.request.method": req.method },
+    });
+    if (req._codmir) req._codmir.span = tx;
 
-    res.on("finish", () => {
+    let finished = false;
+    const finish = (): void => {
+      if (finished) return;
+      finished = true;
       const duration = Date.now() - startTime;
+
+      // The route pattern, never the raw URL: `/users/:id` groups, `/users/42` would be one transaction per id.
+      const routePath = typeof req.route?.path === "string" ? req.route.path : undefined;
+      tx.name = `${req.method} ${routePath ? `${req.baseUrl ?? ""}${routePath}` : req.path || req.url}`;
+      tx.setData("http.response.status_code", res.statusCode);
+      tx.setStatus(res.statusCode >= 500 ? "error" : "ok");
+      tx.end();
 
       coreAddBreadcrumb({
         type: "http",
@@ -331,9 +367,12 @@ export function tracingHandler(): RequestMiddleware {
         },
         level: res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warning" : "info",
       });
-    });
+    };
+    res.on("finish", finish);
+    // A client that hangs up never gets a "finish".
+    res.on("close", finish);
 
-    next();
+    withActiveSpan(tx, () => next());
   };
 }
 

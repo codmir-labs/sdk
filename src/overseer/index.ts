@@ -22,6 +22,7 @@
  */
 
 import { nanoid } from "nanoid";
+import type { TransactionEvent } from "../tracing/types";
 import { PatchRuntime, type SelfHealingConfig } from "./patch-runtime";
 import {
   DEFAULT_DSN,
@@ -59,8 +60,16 @@ export interface OverseerConfig {
   debug?: boolean;
   /** Sample rate for errors (0-1) */
   sampleRate?: number;
-  /** Sample rate for traces/performance (0-1) */
+  /**
+   * Sample rate for traces/performance (0-1). Default 0: no transactions are sent. The decision is made once
+   * per trace at its root and inherited downstream through the `traceparent` sampled flag.
+   */
   tracesSampleRate?: number;
+  /**
+   * Outgoing URLs that get a `traceparent` header, besides same-origin ones. A string matches when the full URL
+   * contains it, a RegExp when it tests true against the full URL. The Codmir ingest URL never gets one.
+   */
+  tracePropagationTargets?: Array<string | RegExp>;
   /** Sample rate for session replay (0-1) */
   replaysSessionSampleRate?: number;
   /** Sample rate for replay on error (0-1) */
@@ -139,6 +148,9 @@ export interface RequestData {
   data?: unknown;
 }
 
+/** What the transport queue holds: SDK events, and finished transactions already in their wire shape. */
+export type QueuedEvent = OverseerEvent | TransactionEvent;
+
 export type SeverityLevel = "fatal" | "error" | "warning" | "info" | "debug";
 
 // =============================================================================
@@ -148,6 +160,7 @@ export type SeverityLevel = "fatal" | "error" | "warning" | "info" | "debug";
 type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'selfHealing'> & {
   initialUser?: UserContext;
   selfHealing?: SelfHealingConfig;
+  tracePropagationTargets: Array<string | RegExp>;
   clientKey: string;
   secretKey: string;
 };
@@ -157,7 +170,7 @@ class OverseerClient {
   private user: UserContext | null = null;
   private tags: Record<string, string> = {};
   private breadcrumbs: Breadcrumb[] = [];
-  private eventQueue: OverseerEvent[] = [];
+  private eventQueue: QueuedEvent[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private isInitialized = false;
   private conversationId: string | null = null;
@@ -188,6 +201,7 @@ class OverseerClient {
       debug: config.debug ?? false,
       sampleRate: config.sampleRate ?? 1.0,
       tracesSampleRate: config.tracesSampleRate ?? 0,
+      tracePropagationTargets: config.tracePropagationTargets ?? [],
       replaysSessionSampleRate: config.replaysSessionSampleRate ?? 0,
       replaysOnErrorSampleRate: config.replaysOnErrorSampleRate ?? 1.0,
       beforeSend: config.beforeSend || ((e) => e),
@@ -333,6 +347,40 @@ class OverseerClient {
     return this.config.dsn;
   }
 
+  /** Full ingest URL events are POSTed to; empty when no DSN is configured. */
+  getIngestUrl(): string {
+    return this.config.dsn ? this.endpoint() : "";
+  }
+
+  isEnabled(): boolean {
+    return this.config.enabled;
+  }
+
+  getTracesSampleRate(): number {
+    return this.config.tracesSampleRate;
+  }
+
+  getTracePropagationTargets(): Array<string | RegExp> {
+    return this.config.tracePropagationTargets;
+  }
+
+  getRelease(): string {
+    return this.config.release;
+  }
+
+  getTags(): Record<string, string> {
+    return { ...this.tags };
+  }
+
+  /**
+   * Queues a finished transaction on the same transport as errors (batching, retry, pagehide flush).
+   * `beforeSend` is an error-event hook and does not see transactions.
+   */
+  captureTransaction(transaction: TransactionEvent): void {
+    if (!this.config.enabled) return;
+    this.enqueue(transaction);
+  }
+
   getEnvironment(): string {
     return this.config.environment;
   }
@@ -407,8 +455,11 @@ class OverseerClient {
   private sendEvent(event: OverseerEvent): void {
     const processed = this.config.beforeSend(event);
     if (!processed) return;
+    this.enqueue(processed);
+  }
 
-    this.eventQueue.push(processed);
+  private enqueue(event: QueuedEvent): void {
+    this.eventQueue.push(event);
     this.trimQueue();
 
     // A pending retry will pick this event up; flushing now would skip its backoff.
@@ -481,7 +532,7 @@ class OverseerClient {
     return headers;
   }
 
-  private body(events: OverseerEvent[]): string {
+  private body(events: QueuedEvent[]): string {
     return buildBody(events, {
       service: this.config.service,
       environment: this.config.environment,
@@ -491,7 +542,7 @@ class OverseerClient {
   }
 
   private async sendBatch(
-    events: OverseerEvent[],
+    events: QueuedEvent[],
   ): Promise<{ kind: "ok" } | { kind: "drop" } | { kind: "retry"; retryAfterMs?: number }> {
     if (!this.config.dsn) {
       this.log("No DSN configured, events:", events);
@@ -560,7 +611,7 @@ class OverseerClient {
     }
   }
 
-  private requeue(batch: OverseerEvent[]): void {
+  private requeue(batch: QueuedEvent[]): void {
     this.eventQueue.unshift(...batch);
     this.trimQueue();
   }

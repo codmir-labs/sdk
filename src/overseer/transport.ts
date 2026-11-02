@@ -68,8 +68,9 @@ export function sdkFingerprint(event: WireSourceEvent): string[] {
  * An `error` event becomes `{ type, event, group }`; any other type is returned untouched.
  * The event's own `fingerprint[]` (set in `beforeSend`) wins over the computed one.
  */
-export function toWireEvent<T extends WireSourceEvent>(source: T): unknown {
-  if (source.type !== "error") return source;
+export function toWireEvent<T extends { type: string }>(input: T): unknown {
+  if (input.type !== "error") return input;
+  const source = input as unknown as WireSourceEvent;
 
   const fingerprint = source.fingerprint?.length ? source.fingerprint : sdkFingerprint(source);
   const message = source.message ?? source.exception?.value;
@@ -96,7 +97,7 @@ export interface EnvelopeMeta {
 }
 
 /** The request body: the envelope fields the route reads, clipped to its limits, plus the converted events. */
-export function buildBody(events: WireSourceEvent[], meta: EnvelopeMeta): string {
+export function buildBody(events: Array<{ type: string }>, meta: EnvelopeMeta): string {
   const body: Record<string, unknown> = { events: events.map(toWireEvent) };
   if (meta.service) body.service = meta.service.slice(0, MAX_SERVICE);
   if (meta.environment) body.environment = meta.environment.slice(0, MAX_ENVIRONMENT);

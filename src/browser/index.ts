@@ -35,6 +35,7 @@ import {
   type Breadcrumb,
   type SeverityLevel,
 } from "../overseer/index";
+import { instrumentFetch } from "../tracing/fetch";
 
 // =============================================================================
 // Types
@@ -186,45 +187,8 @@ function getElementDescription(el: HTMLElement): string {
 }
 
 function setupRequestTracking(): void {
-  // Track fetch
-  const originalFetch = window.fetch;
-  window.fetch = async function (input: RequestInfo | URL, init?: RequestInit) {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    const method = init?.method || "GET";
-    const startTime = Date.now();
-
-    try {
-      const response = await originalFetch.call(window, input, init);
-
-      coreAddBreadcrumb({
-        category: "fetch",
-        message: `${method} ${url}`,
-        data: {
-          method,
-          url,
-          status: response.status,
-          duration: Date.now() - startTime,
-        },
-        level: response.ok ? "info" : "error",
-      });
-
-      return response;
-    } catch (error) {
-      coreAddBreadcrumb({
-        category: "fetch",
-        message: `${method} ${url}`,
-        data: {
-          method,
-          url,
-          error: error instanceof Error ? error.message : "Network error",
-          duration: Date.now() - startTime,
-        },
-        level: "error",
-      });
-
-      throw error;
-    }
-  };
+  // Fetch: breadcrumbs plus http.client spans and traceparent propagation (CSL-5575).
+  instrumentFetch({ breadcrumbs: true });
 
   // Track XHR
   const originalXHROpen = XMLHttpRequest.prototype.open;
