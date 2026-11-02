@@ -25,6 +25,9 @@ import { generateId } from "../id";
 import type { TransactionEvent } from "../tracing/types";
 import { SDK_INFO } from "../version";
 import { PatchRuntime, type SelfHealingConfig } from "./patch-runtime";
+import { browserRequest, envContexts } from "./runtime-context";
+import { addSourceContext } from "./source-context";
+import { parseStackTrace } from "./stack";
 import {
   DEFAULT_DSN,
   KEEPALIVE_MAX_BYTES,
@@ -87,6 +90,11 @@ export interface OverseerConfig {
   initialTags?: Record<string, string>;
   /** Self-healing patch runtime configuration */
   selfHealing?: SelfHealingConfig;
+  /**
+   * Node only: send the source lines around the first three in-app frames of an error (5 before, 5 after, each cut to
+   * 240 characters; files over 1 MB are skipped). Default true in Node; the browser never sends source lines.
+   */
+  includeSourceContext?: boolean;
 }
 
 export interface OverseerEvent {
@@ -160,9 +168,10 @@ export type SeverityLevel = "fatal" | "error" | "warning" | "info" | "debug";
 // Core Client
 // =============================================================================
 
-type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'selfHealing' | 'apiKey'> & {
+type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'selfHealing' | 'apiKey' | 'includeSourceContext'> & {
   initialUser?: UserContext;
   selfHealing?: SelfHealingConfig;
+  includeSourceContext: boolean;
   tracePropagationTargets: Array<string | RegExp>;
   clientKey: string;
   secretKey: string;
@@ -220,6 +229,7 @@ class OverseerClient {
       initialUser: config.initialUser,
       initialTags: config.initialTags || {},
       selfHealing: config.selfHealing,
+      includeSourceContext: config.includeSourceContext ?? true,
     };
 
     if (this.config.initialUser) {
@@ -275,7 +285,7 @@ class OverseerClient {
       exception: {
         type: err.name,
         value: err.message,
-        stacktrace: this.parseStackTrace(err.stack),
+        stacktrace: this.stackFor(err.stack),
         mechanism: { type: "generic", handled: true },
       },
       user: this.user || undefined,
@@ -289,7 +299,9 @@ class OverseerClient {
       environment: this.config.environment,
       release: this.config.release,
       sdk: { ...SDK_INFO },
+      ...this.requestOf(),
       contexts: {
+        ...envContexts(),
         conversation: this.conversationId ? { id: this.conversationId } : undefined,
         session: this.sessionId ? { id: this.sessionId } : undefined,
       },
@@ -468,26 +480,15 @@ class OverseerClient {
     return Math.random() < rate;
   }
 
-  private parseStackTrace(stack?: string): StackFrame[] {
-    if (!stack) return [];
+  /** `{ request }` in a browser (origin and path), nothing elsewhere: the key is absent, not undefined. */
+  private requestOf(): { request?: RequestData } {
+    const request = browserRequest();
+    return request ? { request } : {};
+  }
 
-    return stack
-      .split("\n")
-      .slice(1)
-      .map((line) => {
-        const match = line.match(/at\s+(.+?)\s+\((.+?):(\d+):(\d+)\)/);
-        if (match) {
-          return {
-            function: match[1],
-            filename: match[2],
-            lineno: parseInt(match[3], 10),
-            colno: parseInt(match[4], 10),
-            in_app: !match[2].includes("node_modules"),
-          };
-        }
-        return { function: line.trim() };
-      })
-      .filter((f) => f.function);
+  private stackFor(stack?: string): StackFrame[] {
+    const frames = parseStackTrace(stack);
+    return this.config.includeSourceContext ? addSourceContext(frames) : frames;
   }
 
   private sendEvent(event: OverseerEvent): void {

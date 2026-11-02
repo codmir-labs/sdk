@@ -109,6 +109,20 @@ describe("node smoke (CSL-5628)", () => {
     expect(error.event.tags).toMatchObject({ smoke: "t1" });
     expect(tx.spans).toHaveLength(1);
 
+    // CSL-5636: the error carries where it ran, and the source around its in-app frames (read from smoke.mjs itself).
+    expect(error.event.contexts).toMatchObject({ runtime: { name: "node", version: process.versions.node }, os: { name: process.platform } });
+    const inApp = (error.event.exception.stacktrace as any[]).filter((f) => f.in_app);
+    expect(inApp.length).toBeGreaterThan(0);
+    const withLines = inApp.filter((f) => typeof f.context_line === "string");
+    expect(withLines.length).toBeGreaterThan(0);
+    expect(withLines.length).toBeLessThanOrEqual(3);
+    for (const f of withLines) {
+      expect(f.pre_context.length).toBeLessThanOrEqual(5);
+      expect(f.post_context.length).toBeLessThanOrEqual(5);
+      expect([f.context_line, ...f.pre_context, ...f.post_context].every((l: string) => l.length <= 240)).toBe(true);
+    }
+    expect(error.event).not.toHaveProperty("request");
+
     const segment = received.find((r) => r.path.endsWith("/replay"))!.body as any;
     expect(segment.error_event_ids).toEqual([error.event.id]);
     expect(error.event.tags.replay_id).toBe(segment.replay_id);
