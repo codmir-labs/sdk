@@ -641,7 +641,7 @@ export class TaskAgent extends EventEmitter {
 
   private async fetchTaskDetails(taskId: string, context: Context): Promise<any> {
     // Mock fetch - in real implementation would call API
-    return context.project.activeTasks.find(t => t.id === taskId) || {
+    return (context.project?.activeTasks ?? []).find(t => t.id === taskId) || {
       id: taskId,
       title: 'Mock Task',
       description: 'Mock task for analysis'
@@ -1109,7 +1109,7 @@ class TaskAnalyzer {
 
   private identifyMainComponent(description: string, context: Context): string | undefined {
     // Try to identify the main component from description and context
-    const entities = context.conversation.entities.filter(e =>
+    const entities = (context.conversation?.entities ?? []).filter(e =>
       e.type === 'file' || e.type === 'technology' || (e.type as string) === 'component'
     )
 
@@ -1151,7 +1151,7 @@ class TaskAnalyzer {
     if (text.includes('test')) considerations.push('Comprehensive testing needed')
 
     // Add domain-specific considerations
-    const techStack = context.project.techStack
+    const techStack = context.project?.techStack ?? []
     if (techStack.includes('React') && text.includes('component')) {
       considerations.push('React component best practices')
     }
@@ -1187,8 +1187,8 @@ class TaskAnalyzer {
     confidence += clarity * 0.3
 
     // Increase confidence if context is rich
-    if (context.conversation.entities.length > 2) confidence += 0.1
-    if (context.project.techStack.length > 0) confidence += 0.05
+    if ((context.conversation?.entities ?? []).length > 2) confidence += 0.1
+    if ((context.project?.techStack ?? []).length > 0) confidence += 0.05
 
     return Math.min(1, confidence)
   }
@@ -1489,7 +1489,7 @@ class TaskEstimationEngine {
 
   private getDomainMultiplier(domain: string, context: Context): number {
     // If user has expertise in domain, reduce multiplier
-    const userExpertise = context.user.expertise || []
+    const userExpertise = context.user?.expertise || []
 
     if (userExpertise.includes(domain)) return 0.9
     if (userExpertise.includes('fullstack') || userExpertise.includes('senior')) return 0.95
@@ -1509,7 +1509,7 @@ class TaskEstimationEngine {
     if (params.breakdown.subtasks.length >= 3) confidence += 0.1
 
     // Higher confidence for familiar domains
-    const userExpertise = params.context.user.expertise || []
+    const userExpertise = params.context.user?.expertise || []
     if (userExpertise.includes(params.analysis.domain)) confidence += 0.15
 
     // Lower confidence for high-risk tasks
