@@ -36,6 +36,7 @@ import {
   type SeverityLevel,
 } from "../overseer/index";
 import { instrumentFetch } from "../tracing/fetch";
+import { startBrowserTracing, type BrowserTracingOptions } from "../tracing/browser";
 
 // =============================================================================
 // Types
@@ -54,6 +55,11 @@ export interface BrowserConfig extends OverseerConfig {
   trackInputs?: boolean;
   /** Track XHR/fetch requests as breadcrumbs */
   trackRequests?: boolean;
+  /**
+   * Pageload and navigation transactions (CSL-5584). Default: on when `tracesSampleRate` is above 0, otherwise
+   * off. `true` or an options object turns it on (sampling still follows `tracesSampleRate`); `false` turns it off.
+   */
+  browserTracing?: boolean | BrowserTracingOptions;
 }
 
 // =============================================================================
@@ -77,6 +83,7 @@ export function init(config: BrowserConfig = {}): void {
     trackClicks = true,
     trackInputs = false,
     trackRequests = true,
+    browserTracing,
     ...coreConfig
   } = config;
 
@@ -160,6 +167,12 @@ export function init(config: BrowserConfig = {}): void {
   if (trackRequests) {
     setupRequestTracking();
   }
+
+  // Pageload / navigation roots. Started after fetch is instrumented so early requests become child spans.
+  const tracingOn = browserTracing === undefined ? (getClient()?.getTracesSampleRate() ?? 0) > 0 : browserTracing !== false;
+  if (tracingOn) {
+    startBrowserTracing(typeof browserTracing === "object" ? browserTracing : {});
+  }
 }
 
 // =============================================================================
@@ -238,6 +251,9 @@ export {
   coreClose as close,
   getClient,
 };
+
+export { startBrowserTracing } from "../tracing/browser";
+export type { BrowserTracingOptions } from "../tracing/browser";
 
 export type {
   OverseerConfig,

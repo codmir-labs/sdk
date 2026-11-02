@@ -7,6 +7,8 @@ export interface SpanOptions {
   name: string;
   tags?: Record<string, string>;
   data?: Record<string, unknown>;
+  /** Start time in ms since the epoch; default now. The browser pageload transaction starts at `performance.timeOrigin`. */
+  startTime?: number;
 }
 
 /** Where a finished transaction goes. `tracing/index.ts` wires it to the Overseer client's transport. */
@@ -46,7 +48,7 @@ export class Span {
     this.spanId = generateSpanId();
     this.sampled = ids.sampled;
     this.recorder = recorder;
-    this.startMs = Date.now();
+    this.startMs = options.startTime ?? Date.now();
   }
 
   get isEnded(): boolean {
@@ -74,10 +76,10 @@ export class Span {
     return new Span(options, { traceId: this.traceId, parentSpanId: this.spanId, sampled: this.sampled }, this.recorder);
   }
 
-  /** Ends the span once; later calls do nothing. */
-  end(): void {
+  /** Ends the span once; later calls do nothing. `endTimeMs` (ms since the epoch) defaults to now. */
+  end(endTimeMs?: number): void {
     if (this.endMs !== undefined) return;
-    this.endMs = Math.max(Date.now(), this.startMs);
+    this.endMs = Math.max(endTimeMs ?? Date.now(), this.startMs);
     if (!this.sampled) return;
     if (this.recorder.spans.length >= MAX_SPANS_PER_TRANSACTION - 1) {
       this.recorder.dropped++;
@@ -121,9 +123,9 @@ export class Transaction extends Span {
     super(options, ids, { spans: [], dropped: 0 });
   }
 
-  override end(): void {
+  override end(endTimeMs?: number): void {
     if (this.endMs !== undefined) return;
-    this.endMs = Math.max(Date.now(), this.startMs);
+    this.endMs = Math.max(endTimeMs ?? Date.now(), this.startMs);
     if (!this.sampled) return;
     this.sink(this.toTransactionEvent());
   }

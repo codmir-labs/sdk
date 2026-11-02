@@ -47,8 +47,16 @@ export function setContextStrategy(next: ContextStrategy): void {
   strategy = next;
 }
 
+/** A root that stays active until cleared, for the browser's pageload and navigation transactions. */
+let standingRoot: Span | undefined;
+
+export function setStandingRoot(span: Span | undefined): void {
+  standingRoot = span;
+}
+
+/** The span in scope, else the standing root, so work started outside any `startSpan` still nests under the page. */
 export function getActiveSpan(): Span | undefined {
-  return strategy.get();
+  return strategy.get() ?? standingRoot;
 }
 
 /** Runs `fn` with `span` as the active span, without ending it. */
