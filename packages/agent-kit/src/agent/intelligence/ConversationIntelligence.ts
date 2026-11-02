@@ -507,7 +507,7 @@ export class ConversationIntelligence extends EventEmitter {
 
   private indicatesCodeAnalysisNeed(conversation: Context['conversation']): boolean {
     const allText = conversation.messages.map(m => m.content).join(' ').toLowerCase()
-    const codeKeywords = ['file', '', '.ts', '.py', 'function', 'method', 'class', 'performance', 'optimize']
+    const codeKeywords = ['file', '.ts', '.py', 'function', 'method', 'class', 'performance', 'optimize']
     return codeKeywords.some(keyword => allText.includes(keyword))
   }
 
@@ -543,7 +543,10 @@ export class ConversationIntelligence extends EventEmitter {
 
     const keywords = intentKeywords[primary as keyof typeof intentKeywords] || []
     const keywordMatches = keywords.filter(keyword => text.includes(keyword)).length
-    confidence += (keywordMatches / keywords.length) * 0.4
+    // Intents without a keyword table (e.g. 'general') have nothing to match: 0 / 0 would be NaN
+    if (keywords.length > 0) {
+      confidence += (keywordMatches / keywords.length) * 0.4
+    }
 
     // Secondary intents add confidence
     confidence += secondary.length * 0.1

@@ -261,13 +261,30 @@ export class TaskRunnerIntegration extends EventEmitter {
       })
       
       // Handle failures
-      const failures = results.filter(r => r.status === 'rejected')
-      if (failures.length > 0 && this.config.enableIntelligentRecovery) {
-        for (let i = 0; i < failures.length; i++) {
-          const failedSubtask = group[i]
-          await this.attemptSubtaskRecovery(task, failedSubtask, failures[i].reason)
+      // results[i] belongs to group[i]: pair them by position in the group, not by position
+      // in the filtered list of rejections.
+      if (this.config.enableIntelligentRecovery) {
+        for (let i = 0; i < results.length; i++) {
+          const result = results[i]
+          if (result.status !== 'rejected') continue
+          const recovered = await this.attemptSubtaskRecovery(task, group[i], result.reason)
+          if (recovered) {
+            task.progress!.subtasksCompleted += 1
+            task.progress!.overall = (task.progress!.subtasksCompleted / task.progress!.subtasksTotal) * 100
+          }
         }
       }
+    }
+    
+    // A subtask that still failed (after any retry) means the task did not complete
+    const failedSubtasks = task.subtasks.filter(s => s.status === 'failed')
+    if (failedSubtasks.length > 0) {
+      task.progress!.phase = 'failed'
+      this.emit('task:failed', {
+        task,
+        error: new Error(`${failedSubtasks.length} of ${task.subtasks.length} subtasks failed: ${failedSubtasks.map(s => s.title).join(', ')}`)
+      })
+      return
     }
     
     // Final completion
@@ -363,7 +380,9 @@ export class TaskRunnerIntegration extends EventEmitter {
       // Retry execution
       await this.processTaskAutonomously(task)
       
-      attempt.success = true
+      // processTaskAutonomously reports failure through the task's phase rather than by
+      // throwing, so the phase is the real outcome of this attempt.
+      attempt.success = task.progress!.phase !== 'failed'
       
     } catch (retryError) {
       attempt.error = retryError instanceof Error ? retryError.message : String(retryError)
@@ -442,12 +461,14 @@ export class TaskRunnerIntegration extends EventEmitter {
     const client = await this.getRunnerClient()
     const events = await client.streamTaskEvents(taskId)
     
+    let completed = false
     for await (const event of events) {
       if (event.type === 'state_change') {
         const state = event.payload.state as string
         
         if (state === 'completed') {
           subtask.result = event.payload.result
+          completed = true
           break
         } else if (state === 'failed') {
           throw new Error(event.payload.error as string || 'Task failed')
@@ -458,6 +479,10 @@ export class TaskRunnerIntegration extends EventEmitter {
       if (event.type === 'progress') {
         this.emit('subtask:progress', { subtask, event })
       }
+    }
+    
+    if (!completed) {
+      throw new Error(`Event stream for runner task ${taskId} ended without a terminal state`)
     }
   }
 
@@ -622,14 +647,16 @@ export class TaskRunnerIntegration extends EventEmitter {
     return this.taskClients.get(key)
   }
 
-  private async attemptSubtaskRecovery(task: EnhancedTask, subtask: SubTask, error: any): Promise<void> {
+  private async attemptSubtaskRecovery(task: EnhancedTask, subtask: SubTask, error: any): Promise<boolean> {
     console.log(`🔄 Attempting recovery for subtask: ${subtask.title}`)
     
     // Simple retry for now
     try {
       await this.executeSubtask(task, subtask, await this.buildTaskContext(task))
+      return true
     } catch (retryError) {
       console.error(`❌ Subtask recovery failed: ${subtask.title}`)
+      return false
     }
   }
 
@@ -699,9 +726,13 @@ export class TaskRunnerIntegration extends EventEmitter {
     })
     
     // Listen to event engine
-    eventEngine.on('task:*', (event) => {
-      this.emit('event', event)
-    })
+    // EventEmitter has no wildcard support, so 'task:*' would be a literal name nothing emits.
+    // Subscribe to each task event the engine really emits.
+    for (const subtype of ['started', 'progress', 'completed', 'failed', 'stopped']) {
+      eventEngine.on(`task:${subtype}`, (event) => {
+        this.emit('event', event)
+      })
+    }
   }
 
   /**
@@ -748,8 +779,9 @@ export class TaskRunnerIntegration extends EventEmitter {
       totalTasks: tasks.length,
       completedTasks: tasks.filter(t => t.progress?.phase === 'completed').length,
       failedTasks: tasks.filter(t => t.progress?.phase === 'failed').length,
-      averageSubtasks: tasks.reduce((sum, t) => sum + (t.subtasks?.length || 0), 0) / tasks.length,
-      averageRecoveryAttempts: tasks.reduce((sum, t) => sum + (t.recoveryAttempts?.length || 0), 0) / tasks.length,
+      // With no tasks the averages are 0, not 0 / 0
+      averageSubtasks: tasks.length === 0 ? 0 : tasks.reduce((sum, t) => sum + (t.subtasks?.length || 0), 0) / tasks.length,
+      averageRecoveryAttempts: tasks.length === 0 ? 0 : tasks.reduce((sum, t) => sum + (t.recoveryAttempts?.length || 0), 0) / tasks.length,
       commonFailureReasons: this.extractCommonFailures(tasks),
       performanceMetrics: this.calculatePerformanceMetrics(tasks)
     }

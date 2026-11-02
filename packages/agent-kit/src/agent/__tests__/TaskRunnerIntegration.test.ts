@@ -165,13 +165,18 @@ describe('TaskRunnerIntegration', () => {
       expect(emitted).toEqual([])
     })
 
-    // BUG (not fixed here, CSL-5522): setupEventHandlers subscribes to the literal event name
+    // Fixed (CSL-5539), was: setupEventHandlers subscribes to the literal event name
     // 'task:*', but EventEngine emits 'task:started', 'task:progress', ... and the literal '*'.
     // EventEmitter has no wildcard support, so the integration's 'event' is never emitted.
-    it.fails('re-emits EventEngine task events as "event" (BUG: listens on literal "task:*")', async () => {
+    it('re-emits EventEngine task events as "event" (BUG: listens on literal "task:*")', async () => {
       await integration.initialize()
-      eventEngine.emit('task:started', { type: 'task', subtype: 'started', taskId: 't1' })
-      expect(emitted.filter(e => e.event === 'event')).toHaveLength(1)
+      // Count this integration's own events: integrations from earlier tests stay subscribed to the
+      // shared eventEngine and push into the current `emitted`, so it cannot be asserted on directly.
+      const seen: unknown[] = []
+      integration.on('event', e => seen.push(e))
+      const event = { type: 'task', subtype: 'started', taskId: 't1' }
+      eventEngine.emit('task:started', event)
+      expect(seen).toEqual([event])
     })
   })
 
@@ -299,10 +304,10 @@ describe('TaskRunnerIntegration', () => {
       await expect(integration.submitTask({ goal: 'g' })).resolves.toBeDefined()
     })
 
-    // BUG (not fixed here, CSL-5522): monitorRunnerTask just leaves its for-await loop when the SSE
+    // Fixed (CSL-5544), was: monitorRunnerTask just leaves its for-await loop when the SSE
     // stream ends. A stream that closes before any terminal state_change is treated as success
     // instead of an error, so a dropped connection reads as a finished task.
-    it.fails('rejects when the event stream ends without a terminal state (BUG: treated as success)', async () => {
+    it('rejects when the event stream ends without a terminal state (BUG: treated as success)', async () => {
       runner.eventsFor = () => [{ type: 'state_change', payload: { state: 'running' } }]
       await expect(integration.submitTask({ goal: 'g' })).rejects.toThrow()
     })
@@ -441,9 +446,9 @@ describe('TaskRunnerIntegration', () => {
       )
     })
 
-    // BUG (not fixed here, CSL-5522): after the groups run, executeSubtasks unconditionally sets
+    // Fixed (CSL-5541), was: after the groups run, executeSubtasks unconditionally sets
     // phase = 'completed' and overall = 100, even when subtasks failed and no recovery is enabled.
-    it.fails('does not report a task completed while one of its subtasks failed (BUG: always completed)', async () => {
+    it('does not report a task completed while one of its subtasks failed (BUG: always completed)', async () => {
       stubBreakdown(auto, [{ title: 'Bad', description: 'boom' }])
       runner.eventsFor = () => [failed('nope')]
       const task = await auto.submitTask({ goal: 'g' })
@@ -604,10 +609,10 @@ describe('TaskRunnerIntegration', () => {
         expect(runner.created).toHaveLength(1)
       })
 
-      // BUG (not fixed here, CSL-5522): attemptRecovery sets `attempt.success = true` after awaiting
+      // Fixed (CSL-5543), was: attemptRecovery sets `attempt.success = true` after awaiting
       // processTaskAutonomously, which swallows its own errors. So every attempt is marked successful
       // even when the retry failed and the task ended up in the 'failed' phase.
-      it.fails('marks a recovery attempt unsuccessful when the retry failed (BUG: always success)', async () => {
+      it('marks a recovery attempt unsuccessful when the retry failed (BUG: always success)', async () => {
         runner.createFailure = () => ({ status: 500, text: 'down' })
         const task = await recovering.submitTask({ goal: 'g' })
         expect(task.progress!.phase).toBe('failed')
@@ -633,10 +638,10 @@ describe('TaskRunnerIntegration', () => {
         expect(task.subtasks![0]).toMatchObject({ status: 'failed', error: 'still broken' })
       })
 
-      // BUG (not fixed here, CSL-5522): executeSubtasks pairs `failures[i]` with `group[i]`, but
+      // Fixed (CSL-5542), was: executeSubtasks pairs `failures[i]` with `group[i]`, but
       // `failures` is the filtered list of rejected results, so index i is not the i-th subtask of the
       // group. When the second subtask is the one that failed, the first (healthy) one is retried.
-      it.fails('retries the subtask that failed, not the first of its group (BUG: index mismatch)', async () => {
+      it('retries the subtask that failed, not the first of its group (BUG: index mismatch)', async () => {
         stubBreakdown(recovering, [
           { title: 'Healthy', description: 'ok' },
           { title: 'Broken', description: 'bad' }
@@ -762,9 +767,9 @@ describe('TaskRunnerIntegration', () => {
       expect(auto.getInsights().performanceMetrics.averageCompletionTime).toBe(4000)
     })
 
-    // BUG (not fixed here, CSL-5522): with no tasks, averageSubtasks and averageRecoveryAttempts are
+    // Fixed (CSL-5545), was: with no tasks, averageSubtasks and averageRecoveryAttempts are
     // 0 / 0 = NaN instead of 0.
-    it.fails('reports 0 for the averages when there are no tasks (BUG: NaN)', () => {
+    it('reports 0 for the averages when there are no tasks (BUG: NaN)', () => {
       const insights = integration.getInsights()
       expect(insights.totalTasks).toBe(0)
       expect(insights.averageSubtasks).toBe(0)

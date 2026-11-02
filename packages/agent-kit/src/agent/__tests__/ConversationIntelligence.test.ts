@@ -158,10 +158,10 @@ describe('ConversationIntelligence', () => {
       expect(withSecondary.analysis.intent.confidence).toBeCloseTo(0.78)
     })
 
-    // BUG (not fixed here, CSL-5522): calculateIntentConfidence looks the primary intent up in a table
+    // Fixed (CSL-5548), was: calculateIntentConfidence looks the primary intent up in a table
     // that has no 'general' entry, so `keywordMatches / keywords.length` is 0 / 0 and the intent
     // confidence of every unclassified conversation is NaN (ConversationIntelligence.ts:533).
-    it.fails('has a base confidence of 0.5 for an unclassified conversation (BUG: NaN)', async () => {
+    it('has a base confidence of 0.5 for an unclassified conversation (BUG: NaN)', async () => {
       expect((await analyse(ci, ctx([msg('good morning')]))).analysis.intent.confidence).toBe(0.5)
     })
 
@@ -360,10 +360,10 @@ describe('ConversationIntelligence', () => {
       expect(types).not.toContain('gather_information')
     })
 
-    // BUG (not fixed here, CSL-5522): indicatesCodeAnalysisNeed's keyword list contains an empty
+    // Fixed (CSL-5547), was: indicatesCodeAnalysisNeed's keyword list contains an empty
     // string (ConversationIntelligence.ts:510), and `text.includes('')` is always true, so an
     // 'analyze_code' need is predicted for every conversation, including small talk.
-    it.fails('does not predict a code-analysis need for small talk (BUG: empty keyword matches everything)', async () => {
+    it('does not predict a code-analysis need for small talk (BUG: empty keyword matches everything)', async () => {
       expect((await needs(['good morning'])).map(n => n.type)).not.toContain('analyze_code')
     })
 
