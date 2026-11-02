@@ -609,10 +609,10 @@ describe('TaskRunnerIntegration', () => {
         expect(runner.created).toHaveLength(1)
       })
 
-      // BUG (not fixed here, CSL-5522): attemptRecovery sets `attempt.success = true` after awaiting
+      // Fixed (CSL-5543), was: attemptRecovery sets `attempt.success = true` after awaiting
       // processTaskAutonomously, which swallows its own errors. So every attempt is marked successful
       // even when the retry failed and the task ended up in the 'failed' phase.
-      it.fails('marks a recovery attempt unsuccessful when the retry failed (BUG: always success)', async () => {
+      it('marks a recovery attempt unsuccessful when the retry failed (BUG: always success)', async () => {
         runner.createFailure = () => ({ status: 500, text: 'down' })
         const task = await recovering.submitTask({ goal: 'g' })
         expect(task.progress!.phase).toBe('failed')

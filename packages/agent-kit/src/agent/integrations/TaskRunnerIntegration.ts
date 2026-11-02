@@ -380,7 +380,9 @@ export class TaskRunnerIntegration extends EventEmitter {
       // Retry execution
       await this.processTaskAutonomously(task)
       
-      attempt.success = true
+      // processTaskAutonomously reports failure through the task's phase rather than by
+      // throwing, so the phase is the real outcome of this attempt.
+      attempt.success = task.progress!.phase !== 'failed'
       
     } catch (retryError) {
       attempt.error = retryError instanceof Error ? retryError.message : String(retryError)
