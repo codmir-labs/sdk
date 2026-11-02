@@ -170,3 +170,119 @@ describe("web vitals on the pageload transaction", () => {
     expect(TransactionEventSchema.safeParse({ ...tx, measurements: { lcp: 700, tbt: 1 } }).success).toBe(false);
   });
 });
+
+/** CSL-5599: TTFB and FCP on the pageload transaction, final INP and CLS on page hide. */
+function stubTiming(entries: { navigation?: any[]; paint?: any[] }): void {
+  vi.spyOn(performance, "getEntriesByType").mockImplementation(((type: string) =>
+    (type === "navigation" ? entries.navigation : type === "paint" ? entries.paint : []) ?? []) as any);
+}
+function hide(): void {
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
+describe("final web vitals", () => {
+  afterEach(() => {
+    delete (document as any).visibilityState;
+    vi.restoreAllMocks();
+  });
+
+  it("records TTFB and FCP in milliseconds on the pageload transaction", async () => {
+    stubObserver(ALL);
+    stubTiming({
+      navigation: [{ responseStart: 180.5 }],
+      paint: [
+        { name: "first-paint", startTime: 300 },
+        { name: "first-contentful-paint", startTime: 412.25 },
+      ],
+    });
+    start();
+    await vi.advanceTimersByTimeAsync(1000);
+    const [tx] = await sent();
+    expect(tx.measurements).toEqual({ ttfb: 180.5, fcp: 412.25 });
+    expect(TransactionEventSchema.safeParse(tx).success).toBe(true);
+  });
+
+  it("omits TTFB and FCP the browser has no entry for", async () => {
+    stubObserver(ALL);
+    stubTiming({ navigation: [], paint: [{ name: "first-paint", startTime: 300 }] });
+    start();
+    await vi.advanceTimersByTimeAsync(1000);
+    const [tx] = await sent();
+    expect("measurements" in tx).toBe(false);
+  });
+
+  it("sends a late interaction and a late shift as a web-vitals transaction in the pageload trace on hide", async () => {
+    stubObserver(ALL);
+    start();
+    feed("event", [{ interactionId: 1, duration: 64 }]);
+    feed("layout-shift", [{ startTime: 100, value: 0.05 }]);
+    await vi.advanceTimersByTimeAsync(1000); // pageload ends with inp 64, cls 0.05
+    feed("event", [{ interactionId: 2, duration: 250 }]);
+    feed("layout-shift", [{ startTime: 9000, value: 0.2 }]);
+    hide();
+    const txs = await sent();
+    expect(txs).toHaveLength(2);
+    const pageload = txs.find((t) => t.op === "pageload");
+    const final = txs.find((t) => t.op === "web-vitals");
+    expect(pageload.measurements).toEqual({ inp: 64, cls: 0.05 });
+    expect(final.measurements).toEqual({ inp: 250, cls: 0.2 });
+    expect(final.trace_id).toBe(pageload.trace_id);
+    expect(final.parent_span_id).toBe(pageload.span_id);
+    expect(final.name).toBe(pageload.name);
+    expect(TransactionEventSchema.safeParse(final).success).toBe(true);
+  });
+
+  it("sends once per page: a second hide adds nothing", async () => {
+    stubObserver(ALL);
+    start();
+    await vi.advanceTimersByTimeAsync(1000);
+    feed("event", [{ interactionId: 1, duration: 100 }]);
+    hide();
+    feed("event", [{ interactionId: 2, duration: 300 }]);
+    hide();
+    const txs = await sent();
+    expect(txs.filter((t) => t.op === "web-vitals")).toHaveLength(1);
+    expect(txs.find((t) => t.op === "web-vitals").measurements).toEqual({ inp: 100 });
+  });
+
+  it("sends nothing extra when INP and CLS did not move after the pageload ended", async () => {
+    stubObserver(ALL);
+    start();
+    feed("event", [{ interactionId: 1, duration: 64 }]);
+    await vi.advanceTimersByTimeAsync(1000);
+    hide();
+    const txs = await sent();
+    expect(txs.map((t) => t.op)).toEqual(["pageload"]);
+  });
+
+  it("a hide while the pageload is still open ends it with the final values, no second transaction", async () => {
+    stubObserver(ALL);
+    start();
+    feed("event", [{ interactionId: 1, duration: 90 }]);
+    hide();
+    const txs = await sent();
+    expect(txs.map((t) => t.op)).toEqual(["pageload"]);
+    expect(txs[0].measurements).toEqual({ inp: 90 });
+  });
+
+  it("the hide send is queued before the client's own flush, so the page does not take it to the grave", async () => {
+    stubObserver(ALL);
+    start();
+    await vi.advanceTimersByTimeAsync(1000);
+    await flush();
+    calls.length = 0;
+    feed("event", [{ interactionId: 1, duration: 100 }]);
+    hide(); // no flush() here: only the client's hide handler may have sent it
+    expect(sentTransactions(calls).map((t) => t.op)).toEqual(["web-vitals"]);
+  });
+
+  it("does not throw and sends nothing without PerformanceObserver", async () => {
+    vi.stubGlobal("PerformanceObserver", undefined);
+    start();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(() => hide()).not.toThrow();
+    const txs = await sent();
+    expect(txs.map((t) => t.op)).toEqual(["pageload"]);
+  });
+});

@@ -1,16 +1,18 @@
 /**
- * Web vitals for the pageload transaction (CSL-5587): LCP, CLS and INP from `PerformanceObserver`, no dependency.
+ * Web vitals for the pageload transaction (CSL-5587, CSL-5599): LCP, CLS and INP from `PerformanceObserver`,
+ * TTFB and FCP from the navigation and paint timing entries, no dependency.
  *
- * Values are a snapshot. The pageload transaction ends when the page goes idle, usually before the browser
- * finalizes INP and CLS (both settle when the page is hidden), so `read()` returns what is known at that moment.
- * A later worst interaction or layout shift is not reported; a better design (a follow-up) is a separate
- * `web-vitals` transaction sent on hide. Units follow the server schema: milliseconds, `cls` unitless.
+ * `read()` is a snapshot of what is known at that moment. The pageload transaction ends when the page goes idle,
+ * usually before the browser finalizes INP and CLS (both settle when the page is hidden), so browser.ts reads
+ * again on hide and sends the final INP and CLS. Units follow the server schema: milliseconds, `cls` unitless.
  */
 
 export interface WebVitals {
   lcp?: number;
   inp?: number;
   cls?: number;
+  ttfb?: number;
+  fcp?: number;
 }
 
 export interface WebVitalsObserver {
@@ -32,6 +34,33 @@ interface VitalsEntry {
 const CLS_GAP_MS = 1000;
 const CLS_WINDOW_MS = 5000;
 const INP_DURATION_THRESHOLD = 40;
+
+/** Ms from navigation start to the first response byte, or undefined when the browser has no navigation timing. */
+function readTtfb(): number | undefined {
+  try {
+    const [nav] = performance.getEntriesByType("navigation") as Array<{ responseStart?: number }>;
+    if (nav && typeof nav.responseStart === "number" && nav.responseStart > 0) return nav.responseStart;
+    const timing = (performance as { timing?: { responseStart?: number; navigationStart?: number } }).timing;
+    if (timing?.responseStart && timing.navigationStart && timing.responseStart >= timing.navigationStart) {
+      return timing.responseStart - timing.navigationStart;
+    }
+  } catch {
+    // no Performance API surface to read
+  }
+  return undefined;
+}
+
+/** Ms from navigation start to the first contentful paint, or undefined while it has not happened. */
+function readFcp(): number | undefined {
+  try {
+    const entry = (performance.getEntriesByType("paint") as Array<{ name: string; startTime: number }>).find(
+      (e) => e.name === "first-contentful-paint",
+    );
+    return entry?.startTime;
+  } catch {
+    return undefined;
+  }
+}
 
 export function observeWebVitals(): WebVitalsObserver {
   const none: WebVitalsObserver = { read: () => ({}), stop: () => {} };
@@ -122,6 +151,10 @@ export function observeWebVitals(): WebVitalsObserver {
         }
       }
       const out: WebVitals = {};
+      const ttfb = readTtfb();
+      if (ttfb !== undefined) out.ttfb = ttfb;
+      const fcp = readFcp();
+      if (fcp !== undefined) out.fcp = fcp;
       if (lcp !== undefined) out.lcp = lcp;
       if (cls !== undefined) out.cls = cls;
       if (interactions.size > 0) {
