@@ -461,12 +461,14 @@ export class TaskRunnerIntegration extends EventEmitter {
     const client = await this.getRunnerClient()
     const events = await client.streamTaskEvents(taskId)
     
+    let completed = false
     for await (const event of events) {
       if (event.type === 'state_change') {
         const state = event.payload.state as string
         
         if (state === 'completed') {
           subtask.result = event.payload.result
+          completed = true
           break
         } else if (state === 'failed') {
           throw new Error(event.payload.error as string || 'Task failed')
@@ -477,6 +479,10 @@ export class TaskRunnerIntegration extends EventEmitter {
       if (event.type === 'progress') {
         this.emit('subtask:progress', { subtask, event })
       }
+    }
+    
+    if (!completed) {
+      throw new Error(`Event stream for runner task ${taskId} ended without a terminal state`)
     }
   }
 

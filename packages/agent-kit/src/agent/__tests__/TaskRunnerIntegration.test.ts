@@ -304,10 +304,10 @@ describe('TaskRunnerIntegration', () => {
       await expect(integration.submitTask({ goal: 'g' })).resolves.toBeDefined()
     })
 
-    // BUG (not fixed here, CSL-5522): monitorRunnerTask just leaves its for-await loop when the SSE
+    // Fixed (CSL-5544), was: monitorRunnerTask just leaves its for-await loop when the SSE
     // stream ends. A stream that closes before any terminal state_change is treated as success
     // instead of an error, so a dropped connection reads as a finished task.
-    it.fails('rejects when the event stream ends without a terminal state (BUG: treated as success)', async () => {
+    it('rejects when the event stream ends without a terminal state (BUG: treated as success)', async () => {
       runner.eventsFor = () => [{ type: 'state_change', payload: { state: 'running' } }]
       await expect(integration.submitTask({ goal: 'g' })).rejects.toThrow()
     })
