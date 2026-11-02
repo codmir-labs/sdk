@@ -511,7 +511,11 @@ export class ReplayRecorder {
           }),
           hiding,
         ).then((outcome) => {
-          if (outcome === "refused") this.uploadsRefused = true;
+          if (outcome === "refused") {
+            this.uploadsRefused = true;
+            // Nothing more can be stored this session: stop recording too (deferred, we may be inside stop()).
+            setTimeout(() => this.stop(), 0);
+          }
         });
       }
     });
