@@ -18,7 +18,7 @@ From the repo root, build the SDK first. The example installs it from the repo (
 ```bash
 npm ci && npm run build
 cd examples/fullstack-basic
-npm install
+npm install            # no lockfile is committed: `file:` links do not round-trip through `npm ci`
 ```
 
 **Smoke (one command, headed Chrome under Xvfb, exit 0 or 1):**

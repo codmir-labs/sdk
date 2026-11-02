@@ -1,3 +1,4 @@
 node_modules/
 captures/
 public/build/
+package-lock.json

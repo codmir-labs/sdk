@@ -40,7 +40,8 @@ jobs:
         timeout-minutes: 5
         working-directory: examples/fullstack-basic
         run: |
-          npm ci --no-audit --no-fund
+          # No lockfile: a `file:../..` dependency does not round-trip through `npm ci` on a clean checkout.
+          npm install --no-audit --no-fund
           npm run smoke
 
   release:
