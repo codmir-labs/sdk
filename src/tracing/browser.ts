@@ -9,6 +9,7 @@
  */
 
 import { releaseTrace, setStandingRoot } from "./context";
+import { scrubUrl } from "../overseer/url-scrub";
 import { startTransaction } from "./index";
 import type { Span, Transaction } from "./span";
 import { observeWebVitals, type WebVitals, type WebVitalsObserver } from "./web-vitals";
@@ -74,7 +75,7 @@ export function startBrowserTracing(options: BrowserTracingOptions = {}): () => 
       op: kind,
       name: options.routeName?.(pathname, kind) || pathname,
       startTime: kind === "pageload" ? pageloadStart() : undefined,
-      data: { url: window.location.href },
+      data: { url: scrubUrl(window.location.href) },
     });
     const open = new Set<Span>();
     let lastActivity = Date.now();

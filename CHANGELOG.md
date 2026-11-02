@@ -7,6 +7,7 @@
 
 ### Bug Fixes
 
+* **security:** breadcrumbs and the pageload transaction no longer carry a URL's query string or fragment (CSL-5640). `fetch` and `XHR` breadcrumbs (message and `data.url`), the Next.js and Remix navigation breadcrumbs (`from`, `to`, the referrer and the `pushState`/`replaceState` target) and the pageload/navigation transaction's `data.url` keep origin and path only, so an `?access_token=` or an OAuth `#access_token=` no longer reaches Codmir with every error.
 * **security:** an error report no longer carries the request's headers, cookies, authorization, query string, route params or body (CSL-5639). Next.js `captureRequestError` sent every header; Express and Remix sent headers (minus a short list), the query and params; all of it went into `extra` and some into breadcrumbs. The integrations now send only the event's `request` (origin, path, method) and a `route` pattern. The core also cleans `extra` and breadcrumb `data` at `captureException`/`addBreadcrumb`: a `Request`/`Headers` value, a request-like object, and any key named like a request part or matching cookie, authorization, token, secret or password are dropped, so a future integration cannot bring the leak back. Express's `captureRequestBody` option is deprecated and ignored.
 * **overseer:** stack traces parse V8 frames without a function, `async` and `new` frames, eval and native frames, and Firefox and Safari `fn@file:line:col` frames; `in_app` is false for `node_modules`, Node internals and the SDK's own files (CSL-5636).
 

@@ -1,4 +1,5 @@
 import { addBreadcrumb, getClient } from "../overseer/index";
+import { scrubUrl } from "../overseer/url-scrub";
 import { getActiveSpan } from "./context";
 
 export interface InstrumentFetchOptions {
@@ -46,9 +47,11 @@ export function instrumentFetch(options: InstrumentFetchOptions = {}): () => voi
   if (original[INSTALLED]) return () => {};
 
   const wrapped: PatchedFetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-    const rawUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const fullUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    // The breadcrumb names origin and path only: a query or fragment can hold a token (CSL-5640).
+    const rawUrl = scrubUrl(fullUrl);
     const method = (init?.method || (typeof input === "object" && "method" in input ? input.method : "") || "GET").toUpperCase();
-    const url = resolveUrl(rawUrl);
+    const url = resolveUrl(fullUrl);
     if (!url || isIngestUrl(url)) return original.call(globalThis, input, init);
 
     const parent = getActiveSpan();
