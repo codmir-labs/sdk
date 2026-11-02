@@ -23,6 +23,18 @@
 
 import { nanoid } from "nanoid";
 import { PatchRuntime, type SelfHealingConfig } from "./patch-runtime";
+import {
+  DEFAULT_DSN,
+  KEEPALIVE_MAX_BYTES,
+  MAX_BATCH_EVENTS,
+  MAX_QUEUE_SIZE,
+  buildBody,
+  isRetryableStatus,
+  readDroppedEvents,
+  retryDelayMs,
+  toWireEvent,
+  RETRY_MAX_MS,
+} from "./transport";
 
 // =============================================================================
 // Types
@@ -53,6 +65,8 @@ export interface OverseerConfig {
   replaysSessionSampleRate?: number;
   /** Sample rate for replay on error (0-1) */
   replaysOnErrorSampleRate?: number;
+  /** Service name sent in the ingest envelope (max 64 chars). */
+  service?: string;
   /** Hook to modify/filter events before sending */
   beforeSend?: (event: OverseerEvent) => OverseerEvent | null;
   /** Initial user context */
@@ -149,14 +163,21 @@ class OverseerClient {
   private conversationId: string | null = null;
   private sessionId: string | null = null;
   private patchRuntime: PatchRuntime | null = null;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private retryAttempt = 0;
+  private flushing: Promise<boolean> | null = null;
+  private onPageHide = (): void => this.flushOnHide();
+  private onVisibilityChange = (): void => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") this.flushOnHide();
+  };
 
   constructor(config: OverseerConfig = {}) {
     const resolvedKey = config.clientKey || config.overseerKey || "";
-    const defaultIngestUrl = typeof window !== "undefined"
-      ? `${window.location.origin}/api/overseer`
-      : "https://codmir.com/api/overseer";
+    // Always Codmir's own endpoint; an explicit `dsn` wins. Never the page's origin (CSL-5492).
+    const defaultIngestUrl = DEFAULT_DSN;
 
     this.config = {
+      service: config.service || "",
       dsn: config.dsn || (resolvedKey ? defaultIngestUrl : ""),
       clientKey: resolvedKey,
       secretKey: config.secretKey || "",
@@ -192,6 +213,13 @@ class OverseerClient {
         dsn: this.config.dsn,
         environment: this.config.environment,
       });
+    }
+
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener("pagehide", this.onPageHide);
+    }
+    if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+      document.addEventListener("visibilitychange", this.onVisibilityChange);
     }
 
     if (this.config.selfHealing?.enabled && this.config.dsn) {
@@ -321,28 +349,32 @@ class OverseerClient {
     }
   }
 
-  async flush(timeout?: number): Promise<boolean> {
-    if (this.eventQueue.length === 0) return true;
-
-    const events = [...this.eventQueue];
-    this.eventQueue = [];
-
-    try {
-      await this.sendBatch(events);
-      return true;
-    } catch {
-      // Re-queue failed events
-      this.eventQueue.unshift(...events);
-      return false;
-    }
+  /** Sends everything queued. Resolves false when a batch failed and was re-queued for a retry. */
+  flush(_timeout?: number): Promise<boolean> {
+    if (this.flushing) return this.flushing;
+    this.flushing = this.drain().finally(() => {
+      this.flushing = null;
+    });
+    return this.flushing;
   }
 
   close(): void {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+      window.removeEventListener("pagehide", this.onPageHide);
+    }
+    if (typeof document !== "undefined" && typeof document.removeEventListener === "function") {
+      document.removeEventListener("visibilitychange", this.onVisibilityChange);
     }
     this.patchRuntime?.stop();
-    this.flush();
+    void this.flush();
   }
 
   // Private methods
@@ -377,37 +409,160 @@ class OverseerClient {
     if (!processed) return;
 
     this.eventQueue.push(processed);
+    this.trimQueue();
+
+    // A pending retry will pick this event up; flushing now would skip its backoff.
+    if (this.retryTimer) return;
 
     // Debounced flush
     if (this.flushTimer) clearTimeout(this.flushTimer);
-    this.flushTimer = setTimeout(() => this.flush(), 1000);
+    this.flushTimer = setTimeout(() => void this.flush(), 1000);
   }
 
-  private async sendBatch(events: OverseerEvent[]): Promise<void> {
-    if (!this.config.dsn) {
-      if (this.config.debug) {
-        console.log("[Overseer] No DSN configured, events:", events);
+  private log(...args: unknown[]): void {
+    if (this.config.debug) console.log("[Overseer]", ...args);
+  }
+
+  /** Keeps the queue at MAX_QUEUE_SIZE by dropping the oldest events. */
+  private trimQueue(): void {
+    const excess = this.eventQueue.length - MAX_QUEUE_SIZE;
+    if (excess > 0) {
+      this.eventQueue.splice(0, excess);
+      this.log(`Queue full (${MAX_QUEUE_SIZE}); dropped ${excess} oldest event(s)`);
+    }
+  }
+
+  private async drain(): Promise<boolean> {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    while (this.eventQueue.length > 0) {
+      const batch = this.eventQueue.splice(0, MAX_BATCH_EVENTS);
+      const outcome = await this.sendBatch(batch);
+      if (outcome.kind === "ok") {
+        this.retryAttempt = 0;
+        continue;
       }
-      return;
+      if (outcome.kind === "drop") continue;
+
+      this.eventQueue.unshift(...batch);
+      this.trimQueue();
+      this.scheduleRetry(outcome.retryAfterMs);
+      return false;
     }
+    return true;
+  }
 
-    const endpoint = this.config.dsn.endsWith("/ingest")
-      ? this.config.dsn
-      : `${this.config.dsn}/ingest`;
+  private scheduleRetry(retryAfterMs?: number): void {
+    const delay = Math.min(RETRY_MAX_MS, Math.max(retryDelayMs(this.retryAttempt), retryAfterMs ?? 0));
+    this.retryAttempt++;
+    this.log(`Send failed; retrying in ${delay}ms (attempt ${this.retryAttempt})`);
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      void this.flush();
+    }, delay);
+    // Do not keep a Node process alive just to retry telemetry.
+    (this.retryTimer as { unref?: () => void }).unref?.();
+  }
 
+  private endpoint(): string {
+    return this.config.dsn.endsWith("/ingest") ? this.config.dsn : `${this.config.dsn}/ingest`;
+  }
+
+  private requestHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
     const authKey = this.config.clientKey || this.config.overseerKey;
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
-    if (authKey) {
-      headers["x-overseer-key"] = authKey;
+    if (authKey) headers["x-overseer-key"] = authKey;
+    return headers;
+  }
+
+  private body(events: OverseerEvent[]): string {
+    return buildBody(events, {
+      service: this.config.service,
+      environment: this.config.environment,
+      release: this.config.release,
+      sessionId: this.sessionId,
+    });
+  }
+
+  private async sendBatch(
+    events: OverseerEvent[],
+  ): Promise<{ kind: "ok" } | { kind: "drop" } | { kind: "retry"; retryAfterMs?: number }> {
+    if (!this.config.dsn) {
+      this.log("No DSN configured, events:", events);
+      return { kind: "ok" };
     }
 
-    await fetch(endpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ events }),
-    });
+    let res: Response;
+    try {
+      res = await fetch(this.endpoint(), {
+        method: "POST",
+        headers: this.requestHeaders(),
+        body: this.body(events),
+      });
+    } catch (err) {
+      this.log("Network error:", err);
+      return { kind: "retry" };
+    }
+
+    if (res.ok) {
+      if (this.config.debug) {
+        const dropped = await readDroppedEvents(res);
+        if (dropped.length > 0) this.log("Server dropped events:", dropped);
+      }
+      return { kind: "ok" };
+    }
+
+    if (!isRetryableStatus(res.status)) {
+      this.log(`Server rejected a batch of ${events.length} event(s) with ${res.status}; not retrying`);
+      return { kind: "drop" };
+    }
+    const retryAfter = Number(res.headers?.get?.("retry-after"));
+    return { kind: "retry", retryAfterMs: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : undefined };
+  }
+
+  /**
+   * Page is going away or hidden: send what is queued with `keepalive` so the request outlives the page.
+   * `sendBeacon` is not used: it cannot set the `x-overseer-key` header, and the ingest route reads the
+   * telemetry key only from that header or `Authorization`, so a beacon would arrive unkeyed and have its errors dropped.
+   */
+  private flushOnHide(): void {
+    if (!this.config.dsn || this.eventQueue.length === 0 || typeof fetch !== "function") return;
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+
+    while (this.eventQueue.length > 0) {
+      let size = 300;
+      let n = 0;
+      while (n < this.eventQueue.length && n < MAX_BATCH_EVENTS) {
+        size += JSON.stringify(toWireEvent(this.eventQueue[n])).length + 1;
+        if (n > 0 && size > KEEPALIVE_MAX_BYTES) break;
+        n++;
+      }
+      const batch = this.eventQueue.splice(0, n);
+      fetch(this.endpoint(), {
+        method: "POST",
+        headers: this.requestHeaders(),
+        body: this.body(batch),
+        keepalive: true,
+      })
+        .then((res) => {
+          if (!res.ok && isRetryableStatus(res.status)) this.requeue(batch);
+        })
+        .catch(() => this.requeue(batch));
+    }
+  }
+
+  private requeue(batch: OverseerEvent[]): void {
+    this.eventQueue.unshift(...batch);
+    this.trimQueue();
   }
 
   getClientKey(): string {
