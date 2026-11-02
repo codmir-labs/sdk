@@ -86,7 +86,8 @@ describe.skipIf(!hasDist)("root entry (built dist)", () => {
   });
 
   // nanoid 5 is ESM-only: a bare require("nanoid") throws ERR_REQUIRE_ESM on Node 18 and 20 before 20.19.
-  it("bundles nanoid into the CJS output instead of requiring it", () => {
+  // The SDK has no nanoid dependency any more (CSL-5616), so no output may name it.
+  it("does not require nanoid from the CJS output", () => {
     const dir = fileURLToPath(dist);
     const files = readdirSync(dir, { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".cjs"));
     expect(files.length).toBeGreaterThan(0);

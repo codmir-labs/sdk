@@ -7,7 +7,7 @@ const nodeAndWeb = {
 };
 
 export default [
-  { ignores: ["node_modules/**", "captures/**", "public/build/**"] },
+  { ignores: ["**/node_modules/**", "**/captures/**", "**/public/build/**"] },
   js.configs.recommended,
   { rules: { "no-unused-vars": ["error", { argsIgnorePattern: "^_" }] } },
   { languageOptions: { ecmaVersion: 2023, sourceType: "module", globals: nodeAndWeb } },
