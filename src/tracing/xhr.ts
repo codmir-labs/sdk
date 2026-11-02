@@ -1,4 +1,5 @@
 import { addBreadcrumb, getClient } from "../overseer/index";
+import { scrubUrl } from "../overseer/url-scrub";
 import { getActiveSpan } from "./context";
 import { isIngestUrl, resolveUrl, shouldPropagate } from "./fetch";
 import type { Span } from "./span";
@@ -40,8 +41,9 @@ export function instrumentXhr(options: InstrumentXhrOptions = {}): () => void {
   const states = new WeakMap<XMLHttpRequest, XhrState>();
 
   const open: PatchedOpen = function (this: XMLHttpRequest, method: string, url: string | URL) {
-    const rawUrl = String(url);
-    states.set(this, { rawMethod: String(method), method: String(method).toUpperCase(), rawUrl, url: resolveUrl(rawUrl), startTime: 0, hasTraceparent: false });
+    const fullUrl = String(url);
+    // The breadcrumb names origin and path only: a query or fragment can hold a token (CSL-5640).
+    states.set(this, { rawMethod: String(method), method: String(method).toUpperCase(), rawUrl: scrubUrl(fullUrl), url: resolveUrl(fullUrl), startTime: 0, hasTraceparent: false });
     // eslint-disable-next-line prefer-rest-params -- forwards every XHR open() argument unchanged
     return (originalOpen as (...args: unknown[]) => void).apply(this, arguments as unknown as unknown[]);
   } as PatchedOpen;

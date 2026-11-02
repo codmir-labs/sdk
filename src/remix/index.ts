@@ -49,6 +49,7 @@ import {
   type Breadcrumb,
   type SeverityLevel,
 } from "../overseer/index";
+import { scrubUrl } from "../overseer/url-scrub";
 
 // =============================================================================
 // Types
@@ -377,8 +378,8 @@ function setupRouteTracking(): void {
     category: "navigation",
     message: window.location.pathname,
     data: {
-      from: document.referrer || undefined,
-      to: window.location.href,
+      from: document.referrer ? scrubUrl(document.referrer) : undefined,
+      to: scrubUrl(window.location.href),
     },
   });
 
@@ -391,7 +392,7 @@ function setupRouteTracking(): void {
     coreAddBreadcrumb({
       category: "navigation",
       message: "pushState",
-      data: { to: args[2] as string },
+      data: { to: scrubUrl(args[2], window.location.href) },
     });
     return result;
   };
@@ -401,7 +402,7 @@ function setupRouteTracking(): void {
     coreAddBreadcrumb({
       category: "navigation",
       message: "replaceState",
-      data: { to: args[2] as string },
+      data: { to: scrubUrl(args[2], window.location.href) },
     });
     return result;
   };
@@ -410,7 +411,7 @@ function setupRouteTracking(): void {
     coreAddBreadcrumb({
       category: "navigation",
       message: "popstate",
-      data: { to: window.location.href },
+      data: { to: scrubUrl(window.location.href) },
     });
   });
 }
