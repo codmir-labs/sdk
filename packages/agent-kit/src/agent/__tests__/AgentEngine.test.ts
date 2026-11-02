@@ -343,11 +343,7 @@ describe('AgentEngine', () => {
         expect(result.actions[0].result!.output.error).toContain('Missing required capabilities: ticket_creation')
       })
 
-      // BUG (not fixed here, CSL-5522): the actions AgentEngine builds require 'ticket_creation' /
-      // 'task_creation', but ContextManager.buildSystemContext only advertises entity_extraction,
-      // intent_analysis and codebase_analysis. With the real ContextManager every action the engine
-      // creates is rejected by ActionExecutor's pre-execution validation (ActionExecutor.ts:88).
-      it.fails('completes the ticket action it creates from a bug report (BUG: capability never advertised)', async () => {
+      it('completes the ticket action it creates from a bug report (CSL-5546)', async () => {
         const engine = make()
         await engine.initialize()
         const result = await run(engine, conversation(BUG_REPORT))
