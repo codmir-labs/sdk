@@ -699,9 +699,13 @@ export class TaskRunnerIntegration extends EventEmitter {
     })
     
     // Listen to event engine
-    eventEngine.on('task:*', (event) => {
-      this.emit('event', event)
-    })
+    // EventEmitter has no wildcard support, so 'task:*' would be a literal name nothing emits.
+    // Subscribe to each task event the engine really emits.
+    for (const subtype of ['started', 'progress', 'completed', 'failed', 'stopped']) {
+      eventEngine.on(`task:${subtype}`, (event) => {
+        this.emit('event', event)
+      })
+    }
   }
 
   /**

@@ -165,13 +165,18 @@ describe('TaskRunnerIntegration', () => {
       expect(emitted).toEqual([])
     })
 
-    // BUG (not fixed here, CSL-5522): setupEventHandlers subscribes to the literal event name
+    // Fixed (CSL-5539), was: setupEventHandlers subscribes to the literal event name
     // 'task:*', but EventEngine emits 'task:started', 'task:progress', ... and the literal '*'.
     // EventEmitter has no wildcard support, so the integration's 'event' is never emitted.
-    it.fails('re-emits EventEngine task events as "event" (BUG: listens on literal "task:*")', async () => {
+    it('re-emits EventEngine task events as "event" (BUG: listens on literal "task:*")', async () => {
       await integration.initialize()
-      eventEngine.emit('task:started', { type: 'task', subtype: 'started', taskId: 't1' })
-      expect(emitted.filter(e => e.event === 'event')).toHaveLength(1)
+      // Count this integration's own events: integrations from earlier tests stay subscribed to the
+      // shared eventEngine and push into the current `emitted`, so it cannot be asserted on directly.
+      const seen: unknown[] = []
+      integration.on('event', e => seen.push(e))
+      const event = { type: 'task', subtype: 'started', taskId: 't1' }
+      eventEngine.emit('task:started', event)
+      expect(seen).toEqual([event])
     })
   })
 
