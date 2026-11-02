@@ -47,6 +47,8 @@ export interface OverseerConfig {
   dsn?: string;
   /** Client key for authenticating with Codmir (preferred over dsn) */
   clientKey?: string;
+  /** Alias of `clientKey`, the name `@codmir/overseer` used; the Settings > Codmir SDK snippet uses it. `clientKey` wins if both are set. */
+  apiKey?: string;
   /** Secret key for server-side authentication */
   secretKey?: string;
   /** @deprecated Use clientKey instead */
@@ -158,7 +160,7 @@ export type SeverityLevel = "fatal" | "error" | "warning" | "info" | "debug";
 // Core Client
 // =============================================================================
 
-type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'selfHealing'> & {
+type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'selfHealing' | 'apiKey'> & {
   initialUser?: UserContext;
   selfHealing?: SelfHealingConfig;
   tracePropagationTargets: Array<string | RegExp>;
@@ -186,7 +188,7 @@ class OverseerClient {
   };
 
   constructor(config: OverseerConfig = {}) {
-    const resolvedKey = config.clientKey || config.overseerKey || "";
+    const resolvedKey = config.clientKey || config.apiKey || config.overseerKey || "";
     // Always Codmir's own endpoint; an explicit `dsn` wins. Never the page's origin (CSL-5492).
     const defaultIngestUrl = DEFAULT_DSN;
 

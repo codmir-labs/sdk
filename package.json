@@ -1,7 +1,7 @@
 {
   "name": "@codmir/sdk",
-  "version": "2.0.1",
-  "description": "Official Codmir SDK - TypeScript/JavaScript library for the Codmir API",
+  "version": "2.1.0",
+  "description": "Codmir SDK: error tracking, tracing and session replay, plus the Codmir API client",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
