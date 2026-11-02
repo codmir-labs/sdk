@@ -30,6 +30,7 @@ export function codmirTracing(): MiddlewareHandler {
         method: request.method,
         route: pathOf(request.url),
         traceparent: request.headers.get("traceparent"),
+        url: request.url,
       },
       async (tx) => {
         await next();

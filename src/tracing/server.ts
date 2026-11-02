@@ -9,6 +9,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomFillSync } from "node:crypto";
 import { setRandomFill } from "./propagation";
 import { setContextStrategy, withActiveSpan } from "./context";
+import { requestScopeFrom, setRequestScopeStrategy, withRequestScope, type RequestScope } from "../overseer/request-scope";
 import { startTransaction } from "./index";
 import type { Span, Transaction } from "./span";
 
@@ -25,6 +26,9 @@ export function installNodeTracingContext(): void {
   const store = new AsyncLocalStorage<Span>();
   als = store;
   setContextStrategy({ get: () => store.getStore(), run: (span, fn) => store.run(span, fn) });
+  // CSL-5637: the request an error is captured under rides the same install, so it is per async flow too.
+  const requests = new AsyncLocalStorage<RequestScope>();
+  setRequestScopeStrategy({ get: () => requests.getStore(), run: (scope, fn) => requests.run(scope, fn) });
 }
 
 export interface ServerRequestInfo {
@@ -33,6 +37,8 @@ export interface ServerRequestInfo {
   route: string;
   /** The incoming `traceparent` header value, if any. */
   traceparent?: string | null;
+  /** The request URL (CSL-5637): errors captured while `fn` runs carry its origin and path, never its query. */
+  url?: string | null;
 }
 
 /** Anything with a numeric `status`: a fetch `Response`, a Hono/Next response. */
@@ -85,7 +91,8 @@ export async function traceServerRequest<T>(
 
   let result: T;
   try {
-    result = await withActiveSpan(tx, () => fn(tx));
+    const run = () => withActiveSpan(tx, () => fn(tx));
+    result = await (info.url ? withRequestScope(requestScopeFrom({ url: info.url, method }), run) : run());
   } catch (err) {
     rename();
     const thrownStatus = statusOf(err);

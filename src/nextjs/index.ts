@@ -32,6 +32,7 @@ import {
   type Breadcrumb,
   type SeverityLevel,
 } from "../overseer/index";
+import { requestScopeFrom, withRequestScope } from "../overseer/request-scope";
 
 // =============================================================================
 // Types
@@ -175,19 +176,20 @@ export function captureRequestError(
   errorContext: Partial<ErrorContext>,
   request?: Request
 ): string {
-  const eventId = coreCaptureException(error, {
-    mechanism: "server",
-    ...errorContext,
-    request: request
-      ? {
-          url: request.url,
-          method: request.method,
-          headers: Object.fromEntries(request.headers),
-        }
-      : undefined,
-  });
-
-  return eventId;
+  const capture = (): string =>
+    coreCaptureException(error, {
+      mechanism: "server",
+      ...errorContext,
+      request: request
+        ? {
+            url: request.url,
+            method: request.method,
+            headers: Object.fromEntries(request.headers),
+          }
+        : undefined,
+    });
+  // CSL-5637: the event's own `request` is origin and path plus method only; the `request` above in the extra context is unchanged.
+  return request ? withRequestScope(requestScopeFrom({ url: request.url, method: request.method }), capture) : capture();
 }
 
 /**
@@ -199,13 +201,21 @@ export async function captureRouterError(
   request: { path: string; method: string; headers: Record<string, string> },
   context: ErrorContext
 ): Promise<void> {
-  coreCaptureException(error, {
-    mechanism: "nextjs-router",
-    routerKind: context.routerKind,
-    routePath: context.routePath,
-    routeType: context.routeType,
-    request,
-  });
+  const header = (name: string): string | undefined => {
+    const key = Object.keys(request.headers ?? {}).find((k) => k.toLowerCase() === name);
+    return key ? request.headers[key] : undefined;
+  };
+  // CSL-5637: origin from Host and X-Forwarded-Proto, path without its query; no header is sent in the event's `request`.
+  const scope = requestScopeFrom({ url: request.path, method: request.method, host: header("host"), protocol: header("x-forwarded-proto") });
+  withRequestScope(scope, () =>
+    coreCaptureException(error, {
+      mechanism: "nextjs-router",
+      routerKind: context.routerKind,
+      routePath: context.routePath,
+      routeType: context.routeType,
+      request,
+    }),
+  );
 }
 
 /**

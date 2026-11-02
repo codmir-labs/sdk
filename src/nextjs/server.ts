@@ -30,6 +30,7 @@ function describe(request: Request, options?: WithCodmirTracingOptions) {
     method: request.method,
     route: options?.route ?? pathOf(request.url),
     traceparent: request.headers.get("traceparent"),
+    url: request.url,
   };
 }
 

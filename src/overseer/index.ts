@@ -25,6 +25,7 @@ import { generateId } from "../id";
 import type { TransactionEvent } from "../tracing/types";
 import { SDK_INFO } from "../version";
 import { PatchRuntime, type SelfHealingConfig } from "./patch-runtime";
+import { getRequestScope } from "./request-scope";
 import { browserRequest, envContexts } from "./runtime-context";
 import { addSourceContext } from "./source-context";
 import { parseStackTrace } from "./stack";
@@ -480,9 +481,13 @@ class OverseerClient {
     return Math.random() < rate;
   }
 
-  /** `{ request }` in a browser (origin and path), nothing elsewhere: the key is absent, not undefined. */
+  /**
+   * `{ request }` from the server request in scope (CSL-5637), else the page in a browser (origin and path), else
+   * nothing: the key is absent, not undefined. Never a query string, headers or cookies.
+   */
   private requestOf(): { request?: RequestData } {
-    const request = browserRequest();
+    const scope = getRequestScope();
+    const request = scope ? { url: scope.url, method: scope.method } : browserRequest();
     return request ? { request } : {};
   }
 

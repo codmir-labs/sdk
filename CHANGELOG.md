@@ -2,6 +2,7 @@
 
 ### Features
 
+* **express, nextjs, hono:** an error captured while a handler serves a request carries `request.url` (origin and path, never the query) and `request.method` (CSL-5637). The request rides AsyncLocalStorage next to the tracing context, so concurrent requests never see each other's; an error outside any request has none. Express: `requestHandler`, `errorHandler`, `tracingHandler`; Next.js: `withCodmirTracing`, `withCodmirMiddleware`, `captureRequestError`, `captureRouterError`; Hono: `codmirTracing`. Headers, cookies and body are never put in `event.request`.
 * **overseer:** `captureException` sends where the error happened (CSL-5636): `contexts.browser`/`os`/`device` in a browser (from `navigator.userAgentData`, else a userAgent parse), `contexts.runtime`/`os` in Node, and in a browser `request.url` as origin and path only (never the query, hash, headers, cookies or body). In Node the first three in-app frames carry `pre_context`/`context_line`/`post_context` (5 lines each side, 240 characters per line, files over 1 MB skipped; turn off with `includeSourceContext: false`). Needs Node 20.16 or 22.3+ for ES modules (`process.getBuiltinModule`) to read the OS release and source files; CommonJS works on any supported Node.
 
 ### Bug Fixes
