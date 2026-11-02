@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
 import { generateSpanId, formatTraceparent } from "./propagation";
-import { MAX_SPANS_PER_TRANSACTION, type SpanEvent, type SpanStatus, type TransactionEvent } from "./types";
+import { MAX_SPANS_PER_TRANSACTION, type SpanEvent, type SpanStatus, type TransactionEvent, type TransactionMeasurements } from "./types";
 
 export interface SpanOptions {
   op: string;
@@ -123,6 +123,14 @@ export class Transaction extends Span {
     super(options, ids, { spans: [], dropped: 0 });
   }
 
+  private readonly measurements: TransactionMeasurements = {};
+
+  /** Records a web-vitals style measurement. Negative or non-finite values are ignored. */
+  setMeasurement(name: keyof TransactionMeasurements, value: number): void {
+    if (this.endMs !== undefined || !Number.isFinite(value) || value < 0) return;
+    this.measurements[name] = value;
+  }
+
   override end(endTimeMs?: number): void {
     if (this.endMs !== undefined) return;
     this.endMs = Math.max(endTimeMs ?? Date.now(), this.startMs);
@@ -145,6 +153,7 @@ export class Transaction extends Span {
       end_timestamp: new Date(this.endMs ?? this.startMs).toISOString(),
       spans: [...this.recorder.spans],
     };
+    if (Object.keys(this.measurements).length > 0) tx.measurements = { ...this.measurements };
     if (this.parentSpanId) tx.parent_span_id = this.parentSpanId;
     const tags = clipTags({ ...ctx.tags, ...this.tags });
     if (tags) tx.tags = tags;

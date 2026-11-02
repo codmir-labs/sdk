@@ -11,6 +11,7 @@
 import { releaseTrace, setStandingRoot } from "./context";
 import { startTransaction } from "./index";
 import type { Span, Transaction } from "./span";
+import { observeWebVitals, type WebVitalsObserver } from "./web-vitals";
 
 export type RootKind = "pageload" | "navigation";
 
@@ -22,8 +23,9 @@ export interface BrowserTracingOptions {
   /** Names a root from its pathname, e.g. `/orders/42` to `/orders/:id`. Return nothing to keep the pathname. */
   routeName?: (pathname: string, kind: RootKind) => string | undefined;
   /**
-   * Called with a pageload transaction just before it ends, while it can still be changed. Hook point for web
-   * vitals (CSL-5587); nothing calls it with measurements yet.
+   * Called with a pageload transaction just before it ends, while it can still be changed, after LCP, INP and
+   * CLS have been recorded on it. Those are a snapshot taken at this moment, not final values: INP and CLS settle
+   * when the page is hidden, which is usually after the pageload ends.
    */
   onPageloadEnd?: (transaction: Transaction) => void;
 }
@@ -58,6 +60,7 @@ export function startBrowserTracing(options: BrowserTracingOptions = {}): () => 
 
   let current: { tx: Transaction; finish: (endTimeMs?: number) => void } | undefined;
   let lastPath = window.location.pathname;
+  const vitals: WebVitalsObserver = observeWebVitals();
 
   function begin(kind: RootKind, ready: boolean): void {
     const pathname = window.location.pathname;
@@ -90,7 +93,10 @@ export function startBrowserTracing(options: BrowserTracingOptions = {}): () => 
         span.setStatus("cancelled");
         span.end(endTimeMs);
       }
-      if (kind === "pageload") options.onPageloadEnd?.(tx);
+      if (kind === "pageload") {
+        for (const [name, value] of Object.entries(vitals.read())) tx.setMeasurement(name as "lcp" | "inp" | "cls", value);
+        options.onPageloadEnd?.(tx);
+      }
       tx.end(endTimeMs);
       if (current?.tx === tx) {
         current = undefined;
@@ -169,6 +175,7 @@ export function startBrowserTracing(options: BrowserTracingOptions = {}): () => 
     if (teardownActive !== teardown) return;
     teardownActive = undefined;
     current?.finish();
+    vitals.stop();
     window.removeEventListener("popstate", onRouteChange);
     for (const undo of restore) undo();
   };

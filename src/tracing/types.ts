@@ -17,6 +17,15 @@ export interface SpanEvent {
   data?: Record<string, unknown>;
 }
 
+/** Web vitals, mirroring `TransactionMeasurementsSchema`: milliseconds, except `cls` (unitless). */
+export interface TransactionMeasurements {
+  lcp?: number;
+  inp?: number;
+  cls?: number;
+  ttfb?: number;
+  fcp?: number;
+}
+
 export interface TransactionEvent {
   type: "transaction";
   event_id: string;
@@ -29,6 +38,7 @@ export interface TransactionEvent {
   start_timestamp: string;
   end_timestamp: string;
   spans: SpanEvent[];
+  measurements?: TransactionMeasurements;
   tags?: Record<string, string>;
   release?: string;
   environment?: string;
