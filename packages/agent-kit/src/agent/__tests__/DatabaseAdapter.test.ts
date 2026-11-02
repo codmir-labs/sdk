@@ -424,6 +424,11 @@ describe('DatabaseAdapter', () => {
       expect(prisma.agentLearning.findMany.mock.calls[0][0].where.confidence).toEqual({ gte: 0 })
     })
 
+    it('returns no rows for a limit of 0 without querying (CSL-5621)', async () => {
+      expect(await makeAdapter(prisma).getLearnings({ projectId: 'p1', limit: 0 })).toEqual([])
+      expect(prisma.agentLearning.findMany).not.toHaveBeenCalled()
+    })
+
     it('defaults to a limit of 20 and no confidence filter', async () => {
       prisma.agentLearning.findMany.mockResolvedValue([])
       await makeAdapter(prisma).getLearnings({})

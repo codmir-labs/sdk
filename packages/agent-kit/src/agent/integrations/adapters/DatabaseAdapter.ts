@@ -385,6 +385,9 @@ export class DatabaseAdapter {
     minConfidence?: number
     limit?: number
   }): Promise<any[]> {
+    // A limit of 0 means no rows; `|| 20` would have turned it into 20
+    if (params.limit === 0) return []
+
     try {
       const learnings = await (this.prisma as any).agentLearning.findMany({
         where: {
@@ -393,7 +396,7 @@ export class DatabaseAdapter {
           confidence: params.minConfidence !== undefined ? { gte: params.minConfidence } : undefined
         },
         orderBy: { confidence: 'desc' },
-        take: params.limit || 20
+        take: params.limit ?? 20
       })
       return learnings
     } catch (error) {

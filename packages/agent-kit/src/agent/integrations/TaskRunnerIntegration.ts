@@ -109,13 +109,21 @@ export class TaskRunnerIntegration extends EventEmitter {
   /** Every listener this instance put on an emitter it does not own, so dispose() can take exactly those off. */
   private subscriptions: Array<{ emitter: EventEmitter; event: string; handler: (...args: any[]) => void }> = []
 
-  /** Idempotent: a second call (or a concurrent one) shares the first, and adds no listeners. */
+  /** Bumped by dispose(), so an initialize() that is still awaiting can tell it was disposed under it. */
+  private generation = 0
+
+  /**
+   * Idempotent: a second call (or a concurrent one) shares the first, and adds no listeners.
+   * If dispose() is called before it finishes, it still resolves, but attaches nothing.
+   */
   initialize(): Promise<void> {
     if (!this.initPromise) {
-      this.initPromise = this.doInitialize().catch(error => {
-        this.initPromise = undefined
+      const promise: Promise<void> = this.doInitialize().catch(error => {
+        // Only forget our own attempt: a dispose() plus a newer initialize() may have replaced it
+        if (this.initPromise === promise) this.initPromise = undefined
         throw error
       })
+      this.initPromise = promise
     }
     return this.initPromise
   }
@@ -126,10 +134,12 @@ export class TaskRunnerIntegration extends EventEmitter {
    */
   dispose(): void {
     for (const { emitter, event, handler } of this.subscriptions) {
-      emitter.removeListener(event, handler)
+      // off(), not removeListener(): EventEngine keeps a second registry of handlers that only off() clears
+      emitter.off(event, handler)
     }
     this.subscriptions = []
     this.initPromise = undefined
+    this.generation++
   }
 
   private subscribe(emitter: EventEmitter, event: string, handler: (...args: any[]) => void): void {
@@ -138,6 +148,7 @@ export class TaskRunnerIntegration extends EventEmitter {
   }
 
   private async doInitialize(): Promise<void> {
+    const generation = this.generation
     await Promise.all([
       this.engine.initialize(),
       this.taskAgent.initialize(),
@@ -146,6 +157,9 @@ export class TaskRunnerIntegration extends EventEmitter {
       this.taskIntelligence.initialize()
     ])
     
+    // dispose() ran while the collaborators were starting: do not subscribe after it
+    if (generation !== this.generation) return
+
     this.setupEventHandlers()
   }
 

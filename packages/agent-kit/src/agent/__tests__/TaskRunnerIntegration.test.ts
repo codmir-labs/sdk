@@ -183,7 +183,10 @@ describe('TaskRunnerIntegration', () => {
     // CSL-5551: initialize() used to add a fresh set of listeners to the global eventEngine on every call.
     describe('listener teardown', () => {
       const taskEvents = ['started', 'progress', 'completed', 'failed', 'stopped'].map(s => `task:${s}`)
-      const counts = () => taskEvents.map(e => eventEngine.listenerCount(e))
+      // EventEngine registers every handler twice: as an EventEmitter listener and in its own handler registry
+      const counts = () => [...taskEvents.map(e => eventEngine.listenerCount(e)), eventEngine.getStats().handlerCount]
+      // one initialised integration adds one listener per task event and five registry entries
+      const oneSet = (before: number[]) => [...before.slice(0, 5).map(n => n + 1), before[5] + 5]
       const engineCounts = (i: TaskRunnerIntegration) => {
         const engine = (i as any).engine
         return ['decision_made', 'learning_generated'].map(e => engine.listenerCount(e))
@@ -193,7 +196,7 @@ describe('TaskRunnerIntegration', () => {
         const before = counts()
         await integration.initialize()
         await integration.initialize()
-        expect(counts()).toEqual(before.map(n => n + 1))
+        expect(counts()).toEqual(oneSet(before))
 
         integration.dispose()
         expect(counts()).toEqual(before)
@@ -203,7 +206,7 @@ describe('TaskRunnerIntegration', () => {
       it('concurrent initialize() calls share one initialisation', async () => {
         const before = counts()
         await Promise.all([integration.initialize(), integration.initialize()])
-        expect(counts()).toEqual(before.map(n => n + 1))
+        expect(counts()).toEqual(oneSet(before))
       })
 
       it('only removes its own listeners, and stops re-emitting after dispose', async () => {
@@ -221,12 +224,32 @@ describe('TaskRunnerIntegration', () => {
         expect(seenByOther).toHaveLength(1)
       })
 
+      it('dispose() while initialize() is still running leaves no listener attached (CSL-5622)', async () => {
+        const before = counts()
+        const pending = integration.initialize()
+        integration.dispose()
+        // the initialisation resolves (it does not reject), it just attaches nothing
+        await expect(pending).resolves.toBeUndefined()
+
+        expect(counts()).toEqual(before)
+        expect(engineCounts(integration)).toEqual([0, 0])
+      })
+
+      it('initialize() after a dispose-during-initialize attaches exactly one set', async () => {
+        const before = counts()
+        const first = integration.initialize()
+        integration.dispose()
+        await integration.initialize()
+        await first
+        expect(counts()).toEqual(oneSet(before))
+      })
+
       it('can be initialised again after dispose', async () => {
         const before = counts()
         await integration.initialize()
         integration.dispose()
         await integration.initialize()
-        expect(counts()).toEqual(before.map(n => n + 1))
+        expect(counts()).toEqual(oneSet(before))
       })
     })
   })
