@@ -59,7 +59,6 @@ export interface LearningEvent extends AgentEvent {
   applicableContexts?: string[]
 }
 
-type EventHandler<T = AgentEvent> = (event: T) => void | Promise<void>
 type EventFilter = (event: AgentEvent) => boolean
 
 interface QueuedEvent {
@@ -72,7 +71,6 @@ export class EventEngine extends EventEmitter {
   
   private eventQueue: QueuedEvent[] = []
   private eventHistory: AgentEvent[] = []
-  private handlers = new Map<string, Set<EventHandler>>()
   private filters = new Map<string, EventFilter>()
   
   private config = {
@@ -152,46 +150,9 @@ export class EventEngine extends EventEmitter {
     }
   }
 
-  /**
-   * Register a handler for specific event types
-   */
-  on(eventType: string, handler: EventHandler): this {
-    if (!this.handlers.has(eventType)) {
-      this.handlers.set(eventType, new Set())
-    }
-    this.handlers.get(eventType)!.add(handler)
-    
-    // Also register with EventEmitter for compatibility
-    super.on(eventType, handler)
-    
-    return this
-  }
-
-  /**
-   * Register a one-time handler
-   */
-  once(eventType: string, handler: EventHandler): this {
-    const wrappedHandler: EventHandler = (event) => {
-      this.off(eventType, wrappedHandler)
-      handler(event)
-    }
-    return this.on(eventType, wrappedHandler)
-  }
-
-  /**
-   * Remove a handler
-   */
-  off(eventType: string, handler: EventHandler): this {
-    const handlers = this.handlers.get(eventType)
-    if (handlers) {
-      handlers.delete(handler)
-    }
-    
-    // Also remove from EventEmitter
-    super.off(eventType, handler)
-    
-    return this
-  }
+  // Handlers are plain EventEmitter listeners: on(), once(), off() and removeAllListeners() are the
+  // inherited ones, and processEvent() reaches them through emit() alone. (They used to be kept in a
+  // second registry as well, which ran every type and type:subtype handler twice per event.)
 
   /**
    * Add an event filter
@@ -307,9 +268,9 @@ export class EventEngine extends EventEmitter {
     sessionId: string
   } {
     let handlerCount = 0
-    this.handlers.forEach(handlers => {
-      handlerCount += handlers.size
-    })
+    for (const name of this.eventNames()) {
+      handlerCount += this.listenerCount(name)
+    }
     
     return {
       queueSize: this.eventQueue.length,
@@ -362,26 +323,12 @@ export class EventEngine extends EventEmitter {
   }
 
   private async processEvent(event: AgentEvent): Promise<void> {
-    // Emit to specific handlers
-    const handlers = this.handlers.get(event.type)
-    if (handlers) {
-      for (const handler of handlers) {
-        await handler(event)
-      }
-    }
-    
-    // Emit to EventEmitter
+    // Emit by type
     this.emit(event.type, event)
     
     // Emit with subtype if available
     if (event.subtype) {
       const subtypeEvent = `${event.type}:${event.subtype}`
-      const subtypeHandlers = this.handlers.get(subtypeEvent)
-      if (subtypeHandlers) {
-        for (const handler of subtypeHandlers) {
-          await handler(event)
-        }
-      }
       this.emit(subtypeEvent, event)
     }
     

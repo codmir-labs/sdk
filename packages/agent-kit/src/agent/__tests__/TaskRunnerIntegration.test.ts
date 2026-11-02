@@ -183,9 +183,9 @@ describe('TaskRunnerIntegration', () => {
     // CSL-5551: initialize() used to add a fresh set of listeners to the global eventEngine on every call.
     describe('listener teardown', () => {
       const taskEvents = ['started', 'progress', 'completed', 'failed', 'stopped'].map(s => `task:${s}`)
-      // EventEngine registers every handler twice: as an EventEmitter listener and in its own handler registry
+      // per-event listener counts, plus the engine's total handler count
       const counts = () => [...taskEvents.map(e => eventEngine.listenerCount(e)), eventEngine.getStats().handlerCount]
-      // one initialised integration adds one listener per task event and five registry entries
+      // one initialised integration adds one listener per task event, five in total
       const oneSet = (before: number[]) => [...before.slice(0, 5).map(n => n + 1), before[5] + 5]
       const engineCounts = (i: TaskRunnerIntegration) => {
         const engine = (i as any).engine
