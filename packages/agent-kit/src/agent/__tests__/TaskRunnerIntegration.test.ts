@@ -103,6 +103,13 @@ function stubBreakdown(integration: TaskRunnerIntegration, subtasks: any[]) {
     .mockResolvedValue({ success: true, breakdown: { subtasks }, confidence: 0.9 })
 }
 
+/** Make the breakdown decline, so the task is submitted whole (the real TaskAgent now breaks everything down). */
+function stubBreakdownDeclined(integration: TaskRunnerIntegration) {
+  return vi
+    .spyOn((integration as any).taskAgent, 'breakdownTask')
+    .mockResolvedValue({ success: false, reason: 'declined', confidence: 0 })
+}
+
 describe('TaskRunnerIntegration', () => {
   let runner: FakeRunner
   let integration: TaskRunnerIntegration
@@ -313,21 +320,17 @@ describe('TaskRunnerIntegration', () => {
       await auto.initialize()
     })
 
-    it('with the real TaskAgent the breakdown fails and the task is submitted whole', async () => {
-      const task = await auto.submitTask({ goal: 'Build the thing', projectId: 'proj-1' })
-
-      expect(task.subtasks).toEqual([])
-      expect(runner.created.map(c => c.goal)).toEqual(['Build the thing'])
-      expect(task.progress!.phase).toBe('initializing')
-    })
-
-    // BUG (not fixed here, CSL-5522): the context built by buildTaskContext has no project.activeTasks
-    // (project is `{ id }` or undefined), and TaskAgent.fetchTaskDetails (TaskAgent.ts:644) reads
-    // `context.project.activeTasks.find(...)`. breakdownTask therefore always answers
-    // `{ success: false }` when called from the integration and no subtasks are ever produced.
-    it.fails('produces subtasks from the real TaskAgent (BUG: breakdown always fails on this context)', async () => {
+    it('produces subtasks from the real TaskAgent (CSL-5540)', async () => {
       const task = await auto.submitTask({ goal: 'Build the thing', projectId: 'proj-1' })
       expect(task.subtasks!.length).toBeGreaterThan(0)
+    })
+
+    it('TaskAgent breaks a task down when the context has no project at all', async () => {
+      const agent = (auto as any).taskAgent
+      const context = { conversation: { entities: [] }, system: { capabilities: [] } }
+      const result = await agent.breakdownTask({ taskId: 't1', context })
+      expect(result.success).toBe(true)
+      expect(result.breakdown.subtasks.length).toBeGreaterThan(0)
     })
 
     it('stores the strategic plan produced by the PlannerAgent on the task', async () => {
@@ -499,6 +502,9 @@ describe('TaskRunnerIntegration', () => {
         recovering = makeIntegration({ enableAutonomousBreakdown: true, enableIntelligentRecovery: true, maxRetries: 3 })
         record(recovering)
         await recovering.initialize()
+        // these cases exercise whole-task submission, so the breakdown must decline
+        stubBreakdownDeclined(auto)
+        stubBreakdownDeclined(recovering)
       })
 
       it('without recovery, a runner failure on a whole-task submission emits task:failed', async () => {
@@ -528,6 +534,7 @@ describe('TaskRunnerIntegration', () => {
       it('defaults to three retries when maxRetries is not configured', async () => {
         const dflt = makeIntegration({ enableAutonomousBreakdown: true, enableIntelligentRecovery: true })
         await dflt.initialize()
+        stubBreakdownDeclined(dflt)
         runner.createFailure = () => ({ status: 500, text: 'down' })
         const task = await dflt.submitTask({ goal: 'g' })
         expect(task.recoveryAttempts).toHaveLength(3)
@@ -536,6 +543,7 @@ describe('TaskRunnerIntegration', () => {
       it('uses the configured maxRetries', async () => {
         const once = makeIntegration({ enableAutonomousBreakdown: true, enableIntelligentRecovery: true, maxRetries: 1 })
         await once.initialize()
+        stubBreakdownDeclined(once)
         runner.createFailure = () => ({ status: 500, text: 'down' })
         const task = await once.submitTask({ goal: 'g' })
         expect(task.recoveryAttempts).toHaveLength(1)

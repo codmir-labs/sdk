@@ -72,6 +72,17 @@ describe('AgentEngine', () => {
     })
   }
 
+  /** Drop capabilities from the real ContextManager's system context, so the executor refuses on them. */
+  function withholdCapabilities(engine: AgentEngine, ...names: string[]) {
+    const contextManager = (engine as any).contextManager
+    const real = contextManager.buildContext.bind(contextManager)
+    vi.spyOn(contextManager, 'buildContext').mockImplementation(async (params: any) => {
+      const ctx = await real(params)
+      ctx.system.capabilities = ctx.system.capabilities.filter((c: any) => !names.includes(c.name))
+      return ctx
+    })
+  }
+
   /** Make the real ContextManager's project context carry code issues. */
   function withProjectIssues(engine: AgentEngine, issues: any[]) {
     const contextManager = (engine as any).contextManager
@@ -329,6 +340,7 @@ describe('AgentEngine', () => {
     describe('autonomy and approval', () => {
       it('executes autonomously only when the required capability is present', async () => {
         const engine = make()
+        withholdCapabilities(engine, 'ticket_creation')
         await engine.initialize()
         const executed: any[] = []
         const failed: any[] = []
@@ -343,11 +355,7 @@ describe('AgentEngine', () => {
         expect(result.actions[0].result!.output.error).toContain('Missing required capabilities: ticket_creation')
       })
 
-      // BUG (not fixed here, CSL-5522): the actions AgentEngine builds require 'ticket_creation' /
-      // 'task_creation', but ContextManager.buildSystemContext only advertises entity_extraction,
-      // intent_analysis and codebase_analysis. With the real ContextManager every action the engine
-      // creates is rejected by ActionExecutor's pre-execution validation (ActionExecutor.ts:88).
-      it.fails('completes the ticket action it creates from a bug report (BUG: capability never advertised)', async () => {
+      it('completes the ticket action it creates from a bug report (CSL-5546)', async () => {
         const engine = make()
         await engine.initialize()
         const result = await run(engine, conversation(BUG_REPORT))
@@ -583,6 +591,7 @@ describe('AgentEngine', () => {
 
     it('reports a zero success rate when the only action failed', async () => {
       const engine = make()
+      withholdCapabilities(engine, 'ticket_creation')
       await engine.initialize()
       await run(engine, conversation(BUG_REPORT))
       expect(engine.getMetrics()).toMatchObject({ actionsExecuted: 1, successRate: 0 })
