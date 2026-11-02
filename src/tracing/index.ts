@@ -28,6 +28,8 @@ export type { SpanOptions } from "./span";
 export type { SpanEvent, SpanStatus, TransactionEvent } from "./types";
 export { instrumentFetch } from "./fetch";
 export type { InstrumentFetchOptions } from "./fetch";
+export { instrumentXhr } from "./xhr";
+export type { InstrumentXhrOptions } from "./xhr";
 
 // =============================================================================
 // Transactions and spans

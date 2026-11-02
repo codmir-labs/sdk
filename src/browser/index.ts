@@ -36,6 +36,7 @@ import {
   type SeverityLevel,
 } from "../overseer/index";
 import { instrumentFetch } from "../tracing/fetch";
+import { instrumentXhr } from "../tracing/xhr";
 import { startBrowserTracing, type BrowserTracingOptions } from "../tracing/browser";
 
 // =============================================================================
@@ -203,38 +204,8 @@ function setupRequestTracking(): void {
   // Fetch: breadcrumbs plus http.client spans and traceparent propagation (CSL-5575).
   instrumentFetch({ breadcrumbs: true });
 
-  // Track XHR
-  const originalXHROpen = XMLHttpRequest.prototype.open;
-  const originalXHRSend = XMLHttpRequest.prototype.send;
-
-  XMLHttpRequest.prototype.open = function (method: string, url: string | URL) {
-    (this as any).__codmir = { method, url: url.toString(), startTime: 0 };
-    // eslint-disable-next-line prefer-rest-params -- forwards every XHR open() argument unchanged
-    return originalXHROpen.apply(this, arguments as any);
-  };
-
-  XMLHttpRequest.prototype.send = function (body?: Document | XMLHttpRequestBodyInit | null) {
-    const data = (this as any).__codmir;
-    if (data) {
-      data.startTime = Date.now();
-
-      this.addEventListener("loadend", () => {
-        coreAddBreadcrumb({
-          category: "xhr",
-          message: `${data.method} ${data.url}`,
-          data: {
-            method: data.method,
-            url: data.url,
-            status: this.status,
-            duration: Date.now() - data.startTime,
-          },
-          level: this.status >= 400 ? "error" : "info",
-        });
-      });
-    }
-
-    return originalXHRSend.call(this, body);
-  };
+  // XHR: breadcrumbs plus http.client spans and traceparent propagation (CSL-5585).
+  instrumentXhr({ breadcrumbs: true });
 }
 
 // =============================================================================
