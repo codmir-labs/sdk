@@ -9,9 +9,41 @@ export interface TraceparentData {
 
 const TRACEPARENT = /^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/;
 
+type RandomFill = (buf: Uint8Array) => void;
+let nodeFill: RandomFill | undefined;
+
+/**
+ * Registers a random source for runtimes without `globalThis.crypto` (Node 18). `@codmir/sdk/express` passes
+ * `crypto.randomFillSync`; a static `node:crypto` import here would break browser bundles.
+ */
+export function setRandomFill(fill: RandomFill | undefined): void {
+  nodeFill = fill;
+}
+
+function fillRandom(buf: Uint8Array): void {
+  const web = (globalThis as { crypto?: { getRandomValues?: (b: Uint8Array) => unknown } }).crypto;
+  if (web?.getRandomValues) {
+    web.getRandomValues(buf);
+    return;
+  }
+  if (nodeFill) {
+    nodeFill(buf);
+    return;
+  }
+  // Node 20.16+/22.3+ without a global crypto still exposes its builtins this way.
+  const getBuiltin = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } }).process?.getBuiltinModule;
+  const nodeCrypto = getBuiltin?.("node:crypto") as { randomFillSync?: RandomFill } | undefined;
+  if (nodeCrypto?.randomFillSync) {
+    nodeCrypto.randomFillSync(buf);
+    return;
+  }
+  // Last resort: ids stay well-formed and unique enough to correlate, but are not cryptographically random.
+  for (let i = 0; i < buf.length; i++) buf[i] = Math.floor(Math.random() * 256);
+}
+
 function randomHex(bytes: number): string {
   const buf = new Uint8Array(bytes);
-  globalThis.crypto.getRandomValues(buf);
+  fillRandom(buf);
   let out = "";
   for (const b of buf) out += b.toString(16).padStart(2, "0");
   return out;

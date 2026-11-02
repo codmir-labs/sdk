@@ -1,6 +1,7 @@
 /** CSL-5575: spans, sampling, traceparent propagation and fetch instrumentation. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { close, flush, init } from "../../overseer/index";
+import { setRandomFill } from "../propagation";
 import { formatTraceparent, generateSpanId, generateTraceId, instrumentFetch, parseTraceparent, startSpan, startTransaction } from "../index";
 import { TransactionEventSchema, sentTransactions, type FetchCall } from "./helpers";
 
@@ -42,13 +43,39 @@ describe("traceparent", () => {
     expect(parseTraceparent(undefined)).toBeNull();
   });
 
-  it("generates ids of the right shape from random bytes, never all zero", () => {
-    const spy = vi.spyOn(globalThis.crypto, "getRandomValues").mockImplementationOnce((a) => a as never);
-    // First draw is all zeros (the mock leaves the buffer untouched); the generator must draw again.
-    expect(generateSpanId()).toMatch(/^[0-9a-f]{16}$/);
-    expect(generateSpanId()).not.toBe("0".repeat(16));
-    spy.mockRestore();
-    expect(generateTraceId()).toMatch(/^[0-9a-f]{32}$/);
+  it("generates ids of the right shape, never all zero", () => {
+    for (let i = 0; i < 50; i++) {
+      expect(generateTraceId()).toMatch(/^(?!0+$)[0-9a-f]{32}$/);
+      expect(generateSpanId()).toMatch(/^(?!0+$)[0-9a-f]{16}$/);
+    }
+  });
+
+  it("still makes valid ids when globalThis.crypto does not exist (Node 18)", () => {
+    vi.stubGlobal("crypto", undefined);
+    // Also hide Node's builtin lookup so the Math.random last resort is what runs.
+    const proc = process as unknown as { getBuiltinModule?: unknown };
+    const saved = proc.getBuiltinModule;
+    proc.getBuiltinModule = undefined;
+    try {
+      for (let i = 0; i < 50; i++) {
+        expect(generateTraceId()).toMatch(/^(?!0+$)[0-9a-f]{32}$/);
+        expect(generateSpanId()).toMatch(/^(?!0+$)[0-9a-f]{16}$/);
+      }
+    } finally {
+      proc.getBuiltinModule = saved;
+    }
+  });
+
+  it("uses a registered Node random source when there is no globalThis.crypto", () => {
+    vi.stubGlobal("crypto", undefined);
+    const fill = vi.fn((b: Uint8Array) => b.fill(0xab));
+    setRandomFill(fill);
+    try {
+      expect(generateSpanId()).toBe("abababababababab");
+      expect(fill).toHaveBeenCalled();
+    } finally {
+      setRandomFill(undefined);
+    }
   });
 });
 

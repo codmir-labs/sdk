@@ -46,7 +46,9 @@ import {
   type SeverityLevel,
 } from "../overseer/index";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomFillSync } from "node:crypto";
 import { instrumentFetch } from "../tracing/fetch";
+import { setRandomFill } from "../tracing/propagation";
 import { setContextStrategy, startTransaction, withActiveSpan, type Span } from "../tracing/index";
 
 // =============================================================================
@@ -325,6 +327,7 @@ export function errorHandler(): ErrorMiddleware {
  */
 export function tracingHandler(): RequestMiddleware {
   // Node has async context; the browser-safe default stack would mix up concurrent requests.
+  setRandomFill((buf) => void randomFillSync(buf));
   const als = new AsyncLocalStorage<Span>();
   setContextStrategy({ get: () => als.getStore(), run: (span, fn) => als.run(span, fn) });
 
