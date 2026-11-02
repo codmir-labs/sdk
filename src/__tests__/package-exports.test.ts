@@ -4,7 +4,13 @@ import { describe, expect, it } from "vitest";
 const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as {
   exports: Record<string, unknown>;
   files: string[];
+  scripts: Record<string, string>;
 };
+
+function leafFiles(node: unknown): string[] {
+  if (typeof node === "string") return [node];
+  return Object.values(node as Record<string, unknown>).flatMap(leafFiles);
+}
 
 // CSL-5590: @codmir/sdk is the error, tracing and replay SDK. Agent, council, serverless and runtime
 // code lives in the private @codmir/agent-kit workspace and must not leak back into the published exports.
@@ -38,9 +44,22 @@ describe("@codmir/sdk package exports", () => {
 
   it("points every export at dist output", () => {
     for (const [subpath, target] of Object.entries(pkg.exports)) {
-      for (const file of Object.values(target as Record<string, string>)) {
+      for (const file of leafFiles(target)) {
         expect(file, subpath).toMatch(/^\.\/dist\//);
       }
+    }
+  });
+
+  // CSL-5601: the published 2.0.1 shipped 0 declarations because `build` had no --dts.
+  it("builds with --dts so the declarations exist", () => {
+    expect(pkg.scripts.build).toContain("--dts");
+  });
+
+  it("declares types for both the import and require condition, each next to its code", () => {
+    for (const [subpath, target] of Object.entries(pkg.exports)) {
+      const cond = target as Record<string, { types: string; default: string }>;
+      expect(cond.import.types, subpath).toBe(cond.import.default.replace(/\.js$/, ".d.ts"));
+      expect(cond.require.types, subpath).toBe(cond.require.default.replace(/\.cjs$/, ".d.cts"));
     }
   });
 });
