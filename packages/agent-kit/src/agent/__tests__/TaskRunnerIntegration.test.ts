@@ -221,6 +221,26 @@ describe('TaskRunnerIntegration', () => {
         expect(seenByOther).toHaveLength(1)
       })
 
+      it('dispose() while initialize() is still running leaves no listener attached (CSL-5622)', async () => {
+        const before = counts()
+        const pending = integration.initialize()
+        integration.dispose()
+        // the initialisation resolves (it does not reject), it just attaches nothing
+        await expect(pending).resolves.toBeUndefined()
+
+        expect(counts()).toEqual(before)
+        expect(engineCounts(integration)).toEqual([0, 0])
+      })
+
+      it('initialize() after a dispose-during-initialize attaches exactly one set', async () => {
+        const before = counts()
+        const first = integration.initialize()
+        integration.dispose()
+        await integration.initialize()
+        await first
+        expect(counts()).toEqual(before.map(n => n + 1))
+      })
+
       it('can be initialised again after dispose', async () => {
         const before = counts()
         await integration.initialize()
