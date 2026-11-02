@@ -287,6 +287,9 @@
       "@semantic-release/github"
     ]
   },
+  "overrides": {
+    "@semantic-release/github": "$@semantic-release/github"
+  },
   "workspaces": [
     "packages/*"
   ]
