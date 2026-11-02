@@ -3,7 +3,7 @@
  * wired to the same core as `@codmir/sdk/overseer`. The dist tests need `npm run build` first (CI builds before test).
  */
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -83,6 +83,14 @@ describe.skipIf(!hasDist)("root entry (built dist)", () => {
     const mod = createRequire(import.meta.url)(fileURLToPath(new URL("index.cjs", dist)));
     for (const name of ROOT_NAMES) expect(typeof mod[name], name).toBe("function");
     expect(typeof mod.CodmirClient).toBe("function");
+  });
+
+  // nanoid 5 is ESM-only: a bare require("nanoid") throws ERR_REQUIRE_ESM on Node 18 and 20 before 20.19.
+  it("bundles nanoid into the CJS output instead of requiring it", () => {
+    const dir = fileURLToPath(dist);
+    const files = readdirSync(dir, { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".cjs"));
+    expect(files.length).toBeGreaterThan(0);
+    for (const f of files) expect(readFileSync(`${dir}${f}`, "utf8"), f).not.toMatch(/require\(["']nanoid["']\)/);
   });
 
   it("resolves the package name through exports, ESM and CJS", () => {
