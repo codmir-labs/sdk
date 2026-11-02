@@ -84,9 +84,13 @@ export class EventEngine extends EventEmitter {
   private flushTimer: NodeJS.Timeout | null = null
   private isProcessing = false
   private sessionId = randomUUID()
+  private handlerErrors = 0
 
   private constructor() {
-    super()
+    // captureRejections: a handler that returns a rejected promise is routed to the
+    // [Symbol.for('nodejs.rejection')] method below instead of becoming an unhandledRejection,
+    // which kills the process of whatever app embeds the SDK.
+    super({ captureRejections: true })
     this.startFlushTimer()
   }
 
@@ -265,6 +269,7 @@ export class EventEngine extends EventEmitter {
     historySize: number
     handlerCount: number
     filterCount: number
+    handlerErrors: number
     sessionId: string
   } {
     let handlerCount = 0
@@ -277,6 +282,7 @@ export class EventEngine extends EventEmitter {
       historySize: this.eventHistory.length,
       handlerCount,
       filterCount: this.filters.size,
+      handlerErrors: this.handlerErrors,
       sessionId: this.sessionId
     }
   }
@@ -287,6 +293,7 @@ export class EventEngine extends EventEmitter {
   reset(): void {
     this.eventQueue = []
     this.eventHistory = []
+    this.handlerErrors = 0
     this.sessionId = randomUUID()
     this.stopFlushTimer()
     this.startFlushTimer()
@@ -324,16 +331,41 @@ export class EventEngine extends EventEmitter {
 
   private async processEvent(event: AgentEvent): Promise<void> {
     // Emit by type
-    this.emit(event.type, event)
+    this.emitGuarded(event.type, event)
     
     // Emit with subtype if available
     if (event.subtype) {
       const subtypeEvent = `${event.type}:${event.subtype}`
-      this.emit(subtypeEvent, event)
+      this.emitGuarded(subtypeEvent, event)
     }
     
     // Emit wildcard event
-    this.emit('*', event)
+    this.emitGuarded('*', event)
+  }
+
+  /**
+   * emit() where a handler that throws synchronously is logged and counted instead of rejecting
+   * processEvent, so one bad handler cannot stop the other emits of this event or the queue.
+   */
+  private emitGuarded(eventName: string, event: AgentEvent): void {
+    try {
+      this.emit(eventName, event)
+    } catch (error) {
+      this.reportHandlerError(error, eventName)
+    }
+  }
+
+  /**
+   * Node calls this for a handler that returned a rejected promise (captureRejections).
+   * Deliberately not routed to an 'error' event: with no listener that would throw.
+   */
+  [Symbol.for('nodejs.rejection')](error: unknown, eventName: string | symbol): void {
+    this.reportHandlerError(error, String(eventName))
+  }
+
+  private reportHandlerError(error: unknown, eventName: string): void {
+    this.handlerErrors++
+    console.error(`Error in handler for event '${eventName}':`, error)
   }
 
   private startFlushTimer(): void {
