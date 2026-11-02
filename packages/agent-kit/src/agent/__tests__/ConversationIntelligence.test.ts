@@ -610,12 +610,23 @@ describe('ConversationIntelligence', () => {
       expect(result.confidence).toBe(ci.getInsights().confidence)
     })
 
-    // BUG (not fixed here, CSL-5522): extractTaskDescription (and extractCodeRequirements) read
+    // Fixed (CSL-5550), was: extractTaskDescription (and extractCodeRequirements) read
     // `analysis.summary`, which ConversationAnalysis never sets, so the description is always the
     // fixed placeholder and never reflects the conversation.
-    it.fails('extractTaskDescription reflects the conversation (BUG: always the placeholder)', async () => {
+    it('extractTaskDescription reflects the conversation (BUG: always the placeholder)', async () => {
       const result = await ci.extractTaskDescription({ messages: [], context: context() })
-      expect(result.description).not.toBe('Task described in conversation')
+      expect(result.description).toBe('there is a bug in auth.ts')
+    })
+
+    it('extractCodeRequirements describes the conversation too, and a long first message is capped', async () => {
+      const long = 'x'.repeat(300)
+      const result = await ci.extractCodeRequirements({ messages: [], context: ctx([msg(long)], { id: 'long' }) })
+      expect(result.description).toBe(`${'x'.repeat(197)}...`)
+    })
+
+    it('falls back to the placeholder when nobody asked for anything', async () => {
+      const result = await ci.extractTaskDescription({ messages: [], context: ctx([msg('ok', 'assistant')], { id: 'none' }) })
+      expect(result.description).toBe('Task described in conversation')
     })
 
     it('extractCodeRequirements returns the TypeScript defaults with the analysis confidence', async () => {

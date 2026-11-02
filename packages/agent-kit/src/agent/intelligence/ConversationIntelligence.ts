@@ -83,6 +83,9 @@ export class ConversationIntelligence extends EventEmitter {
         completeness: this.assessCompleteness(context.conversation),
         confidence: 0,
 
+        // What the conversation is about, for the extract* wrappers
+        summary: this.summarizeConversation(context.conversation),
+
         // Metadata
         analyzedAt: new Date().toISOString(),
         analysisVersion: '1.0.0',
@@ -489,6 +492,14 @@ export class ConversationIntelligence extends EventEmitter {
     if (userMessages.length === 0) return 0.3
 
     return Math.max(0, Math.min(1, completenessScore / userMessages.length + 0.3))
+  }
+
+  /** The first user message, trimmed and capped: the closest thing to a statement of what is wanted. */
+  private summarizeConversation(conversation: Context['conversation']): string {
+    const first = conversation.messages.find(m => m.role === 'user' && m.content.trim().length > 0)
+    if (!first) return ''
+    const text = first.content.trim().replace(/\s+/g, ' ')
+    return text.length > 200 ? `${text.slice(0, 197)}...` : text
   }
 
   private indicatesTicketNeed(conversation: Context['conversation']): boolean {
@@ -926,6 +937,7 @@ interface ConversationAnalysis {
   clarity: number
   completeness: number
   confidence: number
+  summary: string
   analyzedAt: string
   analysisVersion: string
   processingTime: number
