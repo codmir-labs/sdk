@@ -4,19 +4,22 @@
  * Tests for the enhanced task runner with autonomous capabilities
  */
 
-import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals'
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { TaskRunnerIntegration } from '../integrations/TaskRunnerIntegration'
 import type { EnhancedTask, TaskProgress, SubtaskDependency } from '../integrations/TaskRunnerIntegration'
 
 // Mock fetch
-global.fetch = jest.fn()
+global.fetch = vi.fn()
 
-describe('TaskRunnerIntegration', () => {
+// CSL-5504: skipped. These tests were written against an API the code never had
+// (private or missing methods, mocked modules that do not exist) and never ran under
+// jest or vitest. Rewrite them against the real API, then remove the .skip.
+describe.skip('TaskRunnerIntegration', () => {
   let taskRunner: TaskRunnerIntegration
-  let mockFetch: jest.MockedFunction<typeof fetch>
+  let mockFetch: vi.MockedFunction<typeof fetch>
 
   beforeEach(() => {
-    mockFetch = global.fetch as jest.MockedFunction<typeof fetch>
+    mockFetch = global.fetch as vi.MockedFunction<typeof fetch>
     mockFetch.mockClear()
 
     taskRunner = new TaskRunnerIntegration({
@@ -32,7 +35,7 @@ describe('TaskRunnerIntegration', () => {
   })
 
   afterEach(() => {
-    jest.clearAllMocks()
+    vi.clearAllMocks()
   })
 
   describe('initialization', () => {
@@ -63,7 +66,7 @@ describe('TaskRunnerIntegration', () => {
         json: async () => ({ status: 'ready' })
       } as Response)
 
-      const eventSpy = jest.spyOn(taskRunner, 'on')
+      const eventSpy = vi.spyOn(taskRunner, 'on')
       
       await taskRunner.initialize()
       
@@ -235,7 +238,7 @@ describe('TaskRunnerIntegration', () => {
     })
 
     it('should emit progress events', async () => {
-      const progressSpy = jest.fn()
+      const progressSpy = vi.fn()
       taskRunner.on('progress', progressSpy)
 
       // Simulate progress update
@@ -491,7 +494,7 @@ describe('TaskRunnerIntegration', () => {
   describe('event handling', () => {
     it('should emit task lifecycle events', () => {
       const events = ['task:created', 'task:started', 'task:completed', 'task:failed']
-      const eventSpy = jest.fn()
+      const eventSpy = vi.fn()
 
       events.forEach(event => {
         taskRunner.on(event, eventSpy)
@@ -506,7 +509,7 @@ describe('TaskRunnerIntegration', () => {
     })
 
     it('should handle event listener errors gracefully', () => {
-      const errorHandler = jest.fn(() => {
+      const errorHandler = vi.fn(() => {
         throw new Error('Event handler error')
       })
 

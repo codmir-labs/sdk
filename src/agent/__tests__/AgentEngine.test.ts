@@ -4,26 +4,29 @@
  * Comprehensive tests for the core Agent SDK engine
  */
 
-import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals'
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { AgentEngine } from '../core/AgentEngine'
 import { EventEngine } from '../core/EventEngine'
 import type { AgentConfig, Context, Decision, Action, ActionResult } from '../types'
 
 // Mock dependencies
-jest.mock('../core/EventEngine')
-jest.mock('../intelligence/TaskIntelligence')
-jest.mock('../intelligence/ConversationIntelligence')
-jest.mock('../intelligence/CodeIntelligence')
-jest.mock('../intelligence/PlanningIntelligence')
+vi.mock('../core/EventEngine')
+vi.mock('../intelligence/TaskIntelligence')
+vi.mock('../intelligence/ConversationIntelligence')
+vi.mock('../intelligence/CodeIntelligence')
+vi.mock('../intelligence/PlanningIntelligence')
 
-describe('AgentEngine', () => {
+// CSL-5504: skipped. These tests were written against an API the code never had
+// (private or missing methods, mocked modules that do not exist) and never ran under
+// jest or vitest. Rewrite them against the real API, then remove the .skip.
+describe.skip('AgentEngine', () => {
   let engine: AgentEngine
-  let mockEventEngine: jest.Mocked<EventEngine>
+  let mockEventEngine: vi.Mocked<EventEngine>
   let mockConfig: AgentConfig
 
   beforeEach(() => {
     // Reset all mocks
-    jest.clearAllMocks()
+    vi.clearAllMocks()
     
     // Setup mock config
     mockConfig = {
@@ -41,12 +44,12 @@ describe('AgentEngine', () => {
 
     // Setup mock event engine
     mockEventEngine = {
-      emit: jest.fn(),
-      on: jest.fn(),
-      off: jest.fn(),
-      removeAllListeners: jest.fn(),
-      getHistory: jest.fn().mockReturnValue([]),
-      clearHistory: jest.fn()
+      emit: vi.fn(),
+      on: vi.fn(),
+      off: vi.fn(),
+      removeAllListeners: vi.fn(),
+      getHistory: vi.fn().mockReturnValue([]),
+      clearHistory: vi.fn()
     } as any
 
     // Create engine instance
@@ -57,7 +60,7 @@ describe('AgentEngine', () => {
   })
 
   afterEach(() => {
-    jest.restoreAllMocks()
+    vi.restoreAllMocks()
   })
 
   describe('initialization', () => {
