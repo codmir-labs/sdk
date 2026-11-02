@@ -253,6 +253,8 @@ export class ReplayRecorder {
   private prevBuffer: RrwebEvent[] = [];
   private curBuffer: RrwebEvent[] = [];
   private pendingErrorIds: string[] = [];
+  /** Set when the server refused a segment (no card or credits); nothing more uploads this session. */
+  private uploadsRefused = false;
   private record: RrwebRecord | null = null;
   private stopRrweb: (() => void) | undefined;
   /** Bumped by start and stop so a late `import()` knows it was cancelled. */
@@ -498,7 +500,7 @@ export class ReplayRecorder {
         // a consumer's handler must not break recording
       }
       const upload = this.config.upload;
-      if (upload) {
+      if (upload && !this.uploadsRefused) {
         void postSegment(
           upload,
           buildSegmentBody(upload, {
@@ -508,7 +510,9 @@ export class ReplayRecorder {
             errorIds: segment.errorIds ?? [],
           }),
           hiding,
-        );
+        ).then((outcome) => {
+          if (outcome === "refused") this.uploadsRefused = true;
+        });
       }
     });
   }

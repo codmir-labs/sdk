@@ -1,26 +1,25 @@
 import { z } from "zod";
 
-// Mirrors `ReplaySegmentUploadSchema` from the CSL-5611 wire contract (CONTRACT.md, "Body" and "Field rules"),
-// which CSL-5611 adds to platform-v2 `@codmir/types`. Replace this with a copy of the merged schema, with its
-// commit, once that PR lands, and keep in sync by hand like `TransactionEventSchema` in tracing/__tests__.
+// Copied from platform-v2 packages/types/src/api/overseer-replay.ts (CSL-5611, PR 850, commit 7d06e7c40):
+// `ReplaySegmentUploadSchema`, `ReplayUploadResponseSchema`. Keep in sync by hand.
 const ReplayEventSchema = z.object({ type: z.number(), timestamp: z.number() }).passthrough();
 
-export const ReplaySegmentUploadSchema = z
-  .object({
-    replay_id: z.string().uuid(),
-    segment: z.number().int().nonnegative(),
-    started_at: z.string().datetime({ offset: true }),
-    ended_at: z.string().datetime({ offset: true }),
-    environment: z.string().max(32).optional(),
-    release: z.string().max(64).optional(),
-    error_event_ids: z.array(z.string().min(1).max(64)).default([]),
-    sdk: z.object({ name: z.string().min(1).max(64), version: z.string().max(32) }),
-    events: z.array(ReplayEventSchema).max(10_000),
-  })
-  .refine((s) => Date.parse(s.ended_at) >= Date.parse(s.started_at), {
-    message: "ended_at must not be before started_at",
-    path: ["ended_at"],
-  });
+export const ReplaySegmentUploadSchema = z.object({
+  replay_id: z.string().uuid(),
+  segment: z.number().int().min(0).max(1_000_000),
+  started_at: z.string().datetime(),
+  ended_at: z.string().datetime(),
+  environment: z.string().max(200).optional(),
+  release: z.string().max(200).optional(),
+  error_event_ids: z.array(z.string().min(1).max(64)).max(500).default([]),
+  sdk: z.object({ name: z.string().min(1).max(100), version: z.string().min(1).max(50) }),
+  events: z.array(ReplayEventSchema).max(10_000),
+});
+
+export const ReplayUploadResponseSchema = z.object({
+  stored: z.boolean(),
+  reason: z.enum(["payment_required", "insufficient_credits"]).optional(),
+});
 
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 

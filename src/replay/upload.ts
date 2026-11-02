@@ -13,6 +13,10 @@ export const MAX_EVENTS_PER_SEGMENT = 10_000;
 /** `fetch(..., { keepalive: true })` bodies are limited to 64 KB by browsers. */
 export const KEEPALIVE_MAX_BYTES = 60_000;
 export const RETRY_DELAY_MS = 1000;
+export const MAX_ERROR_EVENT_IDS = 500;
+
+/** `stored`: accepted. `refused`: 202 `{stored:false}` (no card, or no credits): stop uploading this session. `failed`: dropped. */
+export type UploadOutcome = "stored" | "refused" | "failed";
 
 export interface RrwebEvent {
   type: number;
@@ -59,7 +63,7 @@ export function buildSegmentBody(
     segment: segment.sequenceNumber,
     started_at: new Date(first).toISOString(),
     ended_at: new Date(Math.max(first, last)).toISOString(),
-    error_event_ids: segment.errorIds,
+    error_event_ids: segment.errorIds.slice(0, MAX_ERROR_EVENT_IDS),
     sdk: { ...SDK_INFO },
     events: segment.events,
   };
@@ -111,20 +115,20 @@ const isRetryable = (status: number) => status >= 500 || status === 408 || statu
 
 /**
  * POSTs one segment. A network error or a retryable status is retried once; everything else, and the second
- * failure, drops the segment. Resolves true when the server accepted it. Never rejects.
+ * failure, drops the segment. Resolves the {@link UploadOutcome}. Never rejects.
  *
  * `hiding` is the pagehide path: the request goes out with `keepalive` when the body fits 64 KB, no retry.
  * `sendBeacon` is deliberately not used: it cannot set `x-overseer-key`, so the server would see an unkeyed
  * request (the same reason the error transport does not use it).
  */
-export async function postSegment(target: UploadTarget, body: SegmentUploadBody, hiding = false): Promise<boolean> {
-  if (typeof fetch !== "function") return false;
+export async function postSegment(target: UploadTarget, body: SegmentUploadBody, hiding = false): Promise<UploadOutcome> {
+  if (typeof fetch !== "function") return "failed";
   const payload = JSON.stringify(body);
   const log = (...args: unknown[]) => {
     if (target.debug) console.log("[Overseer replay]", ...args);
   };
 
-  const attempt = async (): Promise<"ok" | "retry" | "drop"> => {
+  const attempt = async (): Promise<"ok" | "refused" | "retry" | "drop"> => {
     try {
       const res = await fetch(target.url, {
         method: "POST",
@@ -132,7 +136,11 @@ export async function postSegment(target: UploadTarget, body: SegmentUploadBody,
         body: payload,
         ...(hiding && payload.length <= KEEPALIVE_MAX_BYTES ? { keepalive: true } : {}),
       });
-      if (res.ok) return "ok";
+      if (res.ok) {
+        // 202 `{ stored: false, reason }` is the pay-as-you-go refusal: nothing was stored, do not keep sending.
+        const answer = (await res.json().catch(() => null)) as { stored?: unknown } | null;
+        return answer?.stored === false ? "refused" : "ok";
+      }
       log(`segment ${body.segment} answered ${res.status}`);
       return isRetryable(res.status) ? "retry" : "drop";
     } catch (err) {
@@ -147,8 +155,8 @@ export async function postSegment(target: UploadTarget, body: SegmentUploadBody,
       await sleep(RETRY_DELAY_MS);
       outcome = await attempt();
     }
-    return outcome === "ok";
+    return outcome === "ok" ? "stored" : outcome === "refused" ? "refused" : "failed";
   } catch {
-    return false;
+    return "failed";
   }
 }

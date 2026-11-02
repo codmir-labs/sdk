@@ -334,7 +334,7 @@ describe("upload helpers", () => {
     const body = buildSegmentBody(target, { replayId: CONTRACT_EXAMPLE.replay_id, sequenceNumber: 0, events: [{ type: 2, timestamp: 1 }], errorIds: [] });
     const result = postSegment(target, body);
     await vi.advanceTimersByTimeAsync(5000);
-    expect(await result).toBe(false);
+    expect(await result).toBe("failed");
     expect(calls).toHaveLength(2);
   });
 
@@ -343,14 +343,29 @@ describe("upload helpers", () => {
     const target = { url: REPLAY_URL, key: "osk_test" };
     const body = buildSegmentBody(target, { replayId: CONTRACT_EXAMPLE.replay_id, sequenceNumber: 0, events: [{ type: 2, timestamp: 1 }], errorIds: [] });
     respond = () => new Response("{}", { status: 400 });
-    expect(await postSegment(target, body)).toBe(false);
+    expect(await postSegment(target, body)).toBe("failed");
     expect(calls).toHaveLength(1);
 
     vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("offline"); }));
     useFakeClock();
     const result = postSegment(target, body, true); // hiding: no retry wait
     await vi.advanceTimersByTimeAsync(0);
-    expect(await result).toBe(false);
+    expect(await result).toBe("failed");
+  });
+
+  it("treats 202 {stored:false} as a refusal: no retry, and no more uploads this session", async () => {
+    useFakeClock();
+    respond = () => new Response(JSON.stringify({ stored: false, reason: "payment_required" }), { status: 202 });
+    const { replay } = await load({ replaysSessionSampleRate: 1 });
+    replay.startReplay();
+    await settle();
+    const { record } = await import("@rrweb/record");
+    record.addCustomEvent("a", 1);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(replayCalls()).toHaveLength(1);
+    record.addCustomEvent("b", 1);
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(replayCalls()).toHaveLength(1);
   });
 
   it("flushes the current segment on pagehide with keepalive when the body fits 64 KB", async () => {
