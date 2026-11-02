@@ -4,88 +4,168 @@
   "description": "Official Codmir SDK - TypeScript/JavaScript library for the Codmir API",
   "type": "module",
   "main": "./dist/index.js",
-  "module": "./dist/index.mjs",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "require": "./dist/index.cjs",
-      "import": "./dist/index.js"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./client": {
-      "types": "./dist/client.d.ts",
-      "require": "./dist/client.cjs",
-      "import": "./dist/client.js"
+      "import": {
+        "types": "./dist/client.d.ts",
+        "default": "./dist/client.js"
+      },
+      "require": {
+        "types": "./dist/client.d.cts",
+        "default": "./dist/client.cjs"
+      }
     },
     "./types": {
-      "types": "./dist/types.d.ts",
-      "require": "./dist/types.cjs",
-      "import": "./dist/types.js"
+      "import": {
+        "types": "./dist/types.d.ts",
+        "default": "./dist/types.js"
+      },
+      "require": {
+        "types": "./dist/types.d.cts",
+        "default": "./dist/types.cjs"
+      }
     },
     "./overseer": {
-      "types": "./dist/overseer/index.d.ts",
-      "require": "./dist/overseer/index.cjs",
-      "import": "./dist/overseer/index.js"
+      "import": {
+        "types": "./dist/overseer/index.d.ts",
+        "default": "./dist/overseer/index.js"
+      },
+      "require": {
+        "types": "./dist/overseer/index.d.cts",
+        "default": "./dist/overseer/index.cjs"
+      }
     },
     "./tracing": {
-      "types": "./dist/tracing/index.d.ts",
-      "require": "./dist/tracing/index.cjs",
-      "import": "./dist/tracing/index.js"
+      "import": {
+        "types": "./dist/tracing/index.d.ts",
+        "default": "./dist/tracing/index.js"
+      },
+      "require": {
+        "types": "./dist/tracing/index.d.cts",
+        "default": "./dist/tracing/index.cjs"
+      }
     },
     "./nextjs": {
-      "types": "./dist/nextjs/index.d.ts",
-      "require": "./dist/nextjs/index.cjs",
-      "import": "./dist/nextjs/index.js"
+      "import": {
+        "types": "./dist/nextjs/index.d.ts",
+        "default": "./dist/nextjs/index.js"
+      },
+      "require": {
+        "types": "./dist/nextjs/index.d.cts",
+        "default": "./dist/nextjs/index.cjs"
+      }
     },
     "./nextjs/server": {
-      "types": "./dist/nextjs/server.d.ts",
-      "require": "./dist/nextjs/server.cjs",
-      "import": "./dist/nextjs/server.js"
+      "import": {
+        "types": "./dist/nextjs/server.d.ts",
+        "default": "./dist/nextjs/server.js"
+      },
+      "require": {
+        "types": "./dist/nextjs/server.d.cts",
+        "default": "./dist/nextjs/server.cjs"
+      }
     },
     "./react-native": {
-      "types": "./dist/react-native/index.d.ts",
-      "require": "./dist/react-native/index.cjs",
-      "import": "./dist/react-native/index.js"
+      "import": {
+        "types": "./dist/react-native/index.d.ts",
+        "default": "./dist/react-native/index.js"
+      },
+      "require": {
+        "types": "./dist/react-native/index.d.cts",
+        "default": "./dist/react-native/index.cjs"
+      }
     },
     "./browser": {
-      "types": "./dist/browser/index.d.ts",
-      "require": "./dist/browser/index.cjs",
-      "import": "./dist/browser/index.js"
+      "import": {
+        "types": "./dist/browser/index.d.ts",
+        "default": "./dist/browser/index.js"
+      },
+      "require": {
+        "types": "./dist/browser/index.d.cts",
+        "default": "./dist/browser/index.cjs"
+      }
     },
     "./replay": {
-      "types": "./dist/replay/index.d.ts",
-      "require": "./dist/replay/index.cjs",
-      "import": "./dist/replay/index.js"
+      "import": {
+        "types": "./dist/replay/index.d.ts",
+        "default": "./dist/replay/index.js"
+      },
+      "require": {
+        "types": "./dist/replay/index.d.cts",
+        "default": "./dist/replay/index.cjs"
+      }
     },
     "./express": {
-      "types": "./dist/express/index.d.ts",
-      "require": "./dist/express/index.cjs",
-      "import": "./dist/express/index.js"
+      "import": {
+        "types": "./dist/express/index.d.ts",
+        "default": "./dist/express/index.js"
+      },
+      "require": {
+        "types": "./dist/express/index.d.cts",
+        "default": "./dist/express/index.cjs"
+      }
     },
     "./hono": {
-      "types": "./dist/hono/index.d.ts",
-      "require": "./dist/hono/index.cjs",
-      "import": "./dist/hono/index.js"
+      "import": {
+        "types": "./dist/hono/index.d.ts",
+        "default": "./dist/hono/index.js"
+      },
+      "require": {
+        "types": "./dist/hono/index.d.cts",
+        "default": "./dist/hono/index.cjs"
+      }
     },
     "./remix": {
-      "types": "./dist/remix/index.d.ts",
-      "require": "./dist/remix/index.cjs",
-      "import": "./dist/remix/index.js"
+      "import": {
+        "types": "./dist/remix/index.d.ts",
+        "default": "./dist/remix/index.js"
+      },
+      "require": {
+        "types": "./dist/remix/index.d.cts",
+        "default": "./dist/remix/index.cjs"
+      }
     },
     "./remix/server": {
-      "types": "./dist/remix/server.d.ts",
-      "require": "./dist/remix/server.cjs",
-      "import": "./dist/remix/server.js"
+      "import": {
+        "types": "./dist/remix/server.d.ts",
+        "default": "./dist/remix/server.js"
+      },
+      "require": {
+        "types": "./dist/remix/server.d.cts",
+        "default": "./dist/remix/server.cjs"
+      }
     },
     "./verify": {
-      "types": "./dist/verify/index.d.ts",
-      "require": "./dist/verify/index.cjs",
-      "import": "./dist/verify/index.js"
+      "import": {
+        "types": "./dist/verify/index.d.ts",
+        "default": "./dist/verify/index.js"
+      },
+      "require": {
+        "types": "./dist/verify/index.d.cts",
+        "default": "./dist/verify/index.cjs"
+      }
     },
     "./report": {
-      "types": "./dist/report/index.d.ts",
-      "require": "./dist/report/index.cjs",
-      "import": "./dist/report/index.js"
+      "import": {
+        "types": "./dist/report/index.d.ts",
+        "default": "./dist/report/index.js"
+      },
+      "require": {
+        "types": "./dist/report/index.d.cts",
+        "default": "./dist/report/index.cjs"
+      }
     }
   },
   "files": [
@@ -94,14 +174,15 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup src/index.ts src/client.ts src/types.ts src/overseer/index.ts src/tracing/index.ts src/nextjs/index.ts src/nextjs/server.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/express/index.ts src/hono/index.ts src/remix/index.ts src/remix/server.ts src/verify/index.ts src/report/index.ts --format cjs,esm --clean",
+    "build": "tsup src/index.ts src/client.ts src/types.ts src/overseer/index.ts src/tracing/index.ts src/nextjs/index.ts src/nextjs/server.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/express/index.ts src/hono/index.ts src/remix/index.ts src/remix/server.ts src/verify/index.ts src/report/index.ts --format cjs,esm --clean --dts",
     "dev": "tsup src/index.ts src/client.ts src/types.ts src/overseer/index.ts src/tracing/index.ts src/nextjs/index.ts src/nextjs/server.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/express/index.ts src/hono/index.ts src/remix/index.ts src/remix/server.ts src/verify/index.ts src/report/index.ts --format cjs,esm --dts --watch",
     "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
-    "test:agent-kit": "npm test --workspace @codmir/agent-kit"
+    "test:agent-kit": "npm test --workspace @codmir/agent-kit",
+    "check:dist": "node scripts/check-dist-types.mjs"
   },
   "keywords": [
     "codmir",

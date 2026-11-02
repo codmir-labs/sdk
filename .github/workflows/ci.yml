@@ -28,6 +28,7 @@ jobs:
       - run: npm test
       - run: npm run test:agent-kit
       - run: npm run build
+      - run: npm run check:dist
 
   release:
     needs: [build]
