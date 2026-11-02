@@ -2,7 +2,7 @@
 
 import type { Span } from "./span";
 
-/** How the "active span" is stored. Node entry points swap in AsyncLocalStorage; see `setContextStrategy`. */
+/** How the "active span" is stored. The one Node strategy is AsyncLocalStorage, installed once by `installNodeTracingContext` in server.ts. */
 export interface ContextStrategy {
   get(): Span | undefined;
   run<T>(span: Span, fn: () => T): T;
@@ -13,7 +13,7 @@ export interface ContextStrategy {
 /**
  * Default for browsers, which have no async context: a stack. A span stays on it until `fn` returns, or, when
  * `fn` returns a promise, until that settles, so code after an `await` still nests. Two flows running at once
- * can therefore see each other's span; on Node, `@codmir/sdk/express` installs AsyncLocalStorage instead.
+ * can therefore see each other's span; on Node, the first request through any server wrapper installs AsyncLocalStorage instead (`installNodeTracingContext`).
  */
 function stackStrategy(): ContextStrategy {
   const stack: Span[] = [];
