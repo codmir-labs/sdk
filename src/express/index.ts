@@ -45,11 +45,9 @@ import {
   type Breadcrumb,
   type SeverityLevel,
 } from "../overseer/index";
-import { AsyncLocalStorage } from "node:async_hooks";
-import { randomFillSync } from "node:crypto";
 import { instrumentFetch } from "../tracing/fetch";
-import { setRandomFill } from "../tracing/propagation";
-import { setContextStrategy, startTransaction, withActiveSpan, type Span } from "../tracing/index";
+import { startTransaction, withActiveSpan, type Span } from "../tracing/index";
+import { installNodeTracingContext } from "../tracing/server";
 
 // =============================================================================
 // Inline Express Types (no @types/express dependency)
@@ -326,12 +324,10 @@ export function errorHandler(): ErrorMiddleware {
  * ```
  */
 export function tracingHandler(): RequestMiddleware {
-  // Node has async context; the browser-safe default stack would mix up concurrent requests.
-  setRandomFill((buf) => void randomFillSync(buf));
-  const als = new AsyncLocalStorage<Span>();
-  setContextStrategy({ get: () => als.getStore(), run: (span, fn) => als.run(span, fn) });
-
   return (req: ExpressRequest, res: ExpressResponse, next: NextFunction): void => {
+    // Node has async context; the browser-safe default stack would mix up concurrent requests. The one shared
+    // strategy is installed on the first request any server wrapper sees, and never again (CSL-5593).
+    installNodeTracingContext();
     const startTime = req._codmir?.startTime ?? Date.now();
     const header = req.headers["traceparent"];
     const tx = startTransaction({

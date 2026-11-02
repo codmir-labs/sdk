@@ -14,7 +14,11 @@ import type { Span, Transaction } from "./span";
 
 let als: AsyncLocalStorage<Span> | undefined;
 
-/** Idempotent. Node 18 has no `globalThis.crypto`, so ids need `randomFillSync` too. */
+/**
+ * The one place a Node async context strategy is installed (CSL-5593): Express, Next.js, Hono and Remix all call
+ * this on their first request. Idempotent, so any mix of wrappers in one process shares one AsyncLocalStorage and
+ * agrees on the active span. Node 18 has no `globalThis.crypto`, so ids need `randomFillSync` too.
+ */
 export function installNodeTracingContext(): void {
   if (als) return;
   setRandomFill((buf) => void randomFillSync(buf));
