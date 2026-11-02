@@ -779,8 +779,9 @@ export class TaskRunnerIntegration extends EventEmitter {
       totalTasks: tasks.length,
       completedTasks: tasks.filter(t => t.progress?.phase === 'completed').length,
       failedTasks: tasks.filter(t => t.progress?.phase === 'failed').length,
-      averageSubtasks: tasks.reduce((sum, t) => sum + (t.subtasks?.length || 0), 0) / tasks.length,
-      averageRecoveryAttempts: tasks.reduce((sum, t) => sum + (t.recoveryAttempts?.length || 0), 0) / tasks.length,
+      // With no tasks the averages are 0, not 0 / 0
+      averageSubtasks: tasks.length === 0 ? 0 : tasks.reduce((sum, t) => sum + (t.subtasks?.length || 0), 0) / tasks.length,
+      averageRecoveryAttempts: tasks.length === 0 ? 0 : tasks.reduce((sum, t) => sum + (t.recoveryAttempts?.length || 0), 0) / tasks.length,
       commonFailureReasons: this.extractCommonFailures(tasks),
       performanceMetrics: this.calculatePerformanceMetrics(tasks)
     }

@@ -767,9 +767,9 @@ describe('TaskRunnerIntegration', () => {
       expect(auto.getInsights().performanceMetrics.averageCompletionTime).toBe(4000)
     })
 
-    // BUG (not fixed here, CSL-5522): with no tasks, averageSubtasks and averageRecoveryAttempts are
+    // Fixed (CSL-5545), was: with no tasks, averageSubtasks and averageRecoveryAttempts are
     // 0 / 0 = NaN instead of 0.
-    it.fails('reports 0 for the averages when there are no tasks (BUG: NaN)', () => {
+    it('reports 0 for the averages when there are no tasks (BUG: NaN)', () => {
       const insights = integration.getInsights()
       expect(insights.totalTasks).toBe(0)
       expect(insights.averageSubtasks).toBe(0)
