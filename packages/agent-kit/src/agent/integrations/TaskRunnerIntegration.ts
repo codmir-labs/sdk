@@ -134,7 +134,6 @@ export class TaskRunnerIntegration extends EventEmitter {
    */
   dispose(): void {
     for (const { emitter, event, handler } of this.subscriptions) {
-      // off(), not removeListener(): EventEngine keeps a second registry of handlers that only off() clears
       emitter.off(event, handler)
     }
     this.subscriptions = []
