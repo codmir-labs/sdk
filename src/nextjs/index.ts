@@ -176,19 +176,14 @@ export function captureRequestError(
   errorContext: Partial<ErrorContext>,
   request?: Request
 ): string {
+  // CSL-5639: no request object, headers or cookies in the context. The event's `request` (origin, path, method) comes from
+  // the scope below; the route pattern is `errorContext.routePath`.
   const capture = (): string =>
     coreCaptureException(error, {
       mechanism: "server",
       ...errorContext,
-      request: request
-        ? {
-            url: request.url,
-            method: request.method,
-            headers: Object.fromEntries(request.headers),
-          }
-        : undefined,
+      ...(errorContext.routePath ? { route: errorContext.routePath } : {}),
     });
-  // CSL-5637: the event's own `request` is origin and path plus method only; the `request` above in the extra context is unchanged.
   return request ? withRequestScope(requestScopeFrom({ url: request.url, method: request.method }), capture) : capture();
 }
 
@@ -213,7 +208,7 @@ export async function captureRouterError(
       routerKind: context.routerKind,
       routePath: context.routePath,
       routeType: context.routeType,
-      request,
+      route: context.routePath,
     }),
   );
 }

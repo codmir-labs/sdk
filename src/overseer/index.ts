@@ -26,6 +26,7 @@ import type { TransactionEvent } from "../tracing/types";
 import { SDK_INFO } from "../version";
 import { PatchRuntime, type SelfHealingConfig } from "./patch-runtime";
 import { getRequestScope } from "./request-scope";
+import { sanitizeExtra } from "./sanitize-extra";
 import { browserRequest, envContexts } from "./runtime-context";
 import { addSourceContext } from "./source-context";
 import { parseStackTrace } from "./stack";
@@ -292,7 +293,8 @@ class OverseerClient {
       user: this.user || undefined,
       tags: { ...this.tags },
       extra: {
-        ...context,
+        // CSL-5639: no request, headers, cookies, query, params or body, whatever the caller passed.
+        ...sanitizeExtra(context),
         conversationId: this.conversationId,
         sessionId: this.sessionId,
       },
@@ -439,6 +441,7 @@ class OverseerClient {
   addBreadcrumb(breadcrumb: Breadcrumb): void {
     this.breadcrumbs.push({
       ...breadcrumb,
+      ...(breadcrumb.data ? { data: sanitizeExtra(breadcrumb.data) } : {}),
       timestamp: breadcrumb.timestamp || new Date().toISOString(),
     });
 

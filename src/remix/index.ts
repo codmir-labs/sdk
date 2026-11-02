@@ -90,15 +90,6 @@ interface DataFunctionArgs {
 type DataFunction = (args: DataFunctionArgs) => Promise<unknown> | unknown;
 
 /** Headers that should never be captured */
-const SENSITIVE_HEADERS = new Set([
-  "authorization",
-  "cookie",
-  "set-cookie",
-  "x-api-key",
-  "x-auth-token",
-  "proxy-authorization",
-]);
-
 // =============================================================================
 // Internal State
 // =============================================================================
@@ -158,7 +149,6 @@ export function handleError(
 ): void {
   const context: Record<string, unknown> = {
     mechanism: "remix-handleError",
-    request: extractRequestContext(request),
   };
 
   // Response errors carry status information
@@ -214,7 +204,6 @@ export function wrapLoader<T extends DataFunction>(loader: T): T {
       data: {
         url,
         method: args.request.method,
-        params: args.params,
       },
     });
 
@@ -224,8 +213,6 @@ export function wrapLoader<T extends DataFunction>(loader: T): T {
       if (remixConfig.captureLoaderErrors) {
         coreCaptureException(error instanceof Error ? error : new Error(String(error)), {
           mechanism: "remix-loader",
-          request: extractRequestContext(args.request),
-          params: args.params,
         });
       }
       throw error;
@@ -262,7 +249,6 @@ export function wrapAction<T extends DataFunction>(action: T): T {
       data: {
         url,
         method: args.request.method,
-        params: args.params,
       },
     });
 
@@ -272,8 +258,6 @@ export function wrapAction<T extends DataFunction>(action: T): T {
       if (remixConfig.captureActionErrors) {
         const context: Record<string, unknown> = {
           mechanism: "remix-action",
-          request: extractRequestContext(args.request),
-          params: args.params,
         };
 
         // Capture form data keys (not values) for context
@@ -323,7 +307,6 @@ export function wrapAction<T extends DataFunction>(action: T): T {
 export function captureRemixServerError(error: unknown, request: RemixRequest): string {
   const context: Record<string, unknown> = {
     mechanism: "remix-server-render",
-    request: extractRequestContext(request),
   };
 
   if (error instanceof Error) {
@@ -435,22 +418,6 @@ function setupRouteTracking(): void {
 // =============================================================================
 // Helpers
 // =============================================================================
-
-function extractRequestContext(request: RemixRequest): Record<string, unknown> {
-  const headers: Record<string, string> = {};
-
-  request.headers.forEach((value, key) => {
-    if (!SENSITIVE_HEADERS.has(key.toLowerCase())) {
-      headers[key] = value;
-    }
-  });
-
-  return {
-    url: request.url,
-    method: request.method,
-    headers,
-  };
-}
 
 function safeParseUrl(url: string): string {
   try {
