@@ -8,7 +8,7 @@
  * `location.pathname` differs, so a query-only or same-path update does not split the trace.
  */
 
-import { setStandingRoot } from "./context";
+import { releaseTrace, setStandingRoot } from "./context";
 import { startTransaction } from "./index";
 import type { Span, Transaction } from "./span";
 
@@ -83,6 +83,13 @@ export function startBrowserTracing(options: BrowserTracingOptions = {}): () => 
         span.end(endTimeMs);
       }
       open.clear();
+      // A startSpan whose promise never settles is still on the context stack: end it as cancelled, and drop it so
+      // the next root starts clean.
+      for (const span of releaseTrace(tx)) {
+        if (span.isEnded) continue;
+        span.setStatus("cancelled");
+        span.end(endTimeMs);
+      }
       if (kind === "pageload") options.onPageloadEnd?.(tx);
       tx.end(endTimeMs);
       if (current?.tx === tx) {

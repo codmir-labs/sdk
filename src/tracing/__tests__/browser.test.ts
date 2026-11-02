@@ -2,7 +2,7 @@
 /** CSL-5584: pageload and navigation root transactions in the browser. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { close, flush, init } from "../../overseer/index";
-import { getActiveSpan, instrumentFetch } from "../index";
+import { getActiveSpan, instrumentFetch, startSpan } from "../index";
 import { startBrowserTracing } from "../browser";
 import { TransactionEventSchema, sentTransactions, type FetchCall } from "./helpers";
 
@@ -213,5 +213,45 @@ describe("idle and final timeouts", () => {
     expect(tx.spans.map((s: any) => [s.description, s.status])).toEqual([["hung", "cancelled"]]);
     expect(Date.parse(tx.end_timestamp) - Date.parse(tx.start_timestamp)).toBeGreaterThanOrEqual(10000);
     expect(TransactionEventSchema.safeParse(tx).success).toBe(true);
+  });
+});
+
+describe("a startSpan that never settles (CSL-5592)", () => {
+  it("does not stay active after a navigation replaces its root", async () => {
+    start(1);
+    void startSpan({ op: "function", name: "hung" }, () => new Promise<void>(() => {}));
+    window.history.pushState(null, "", "/next");
+    expect(getActiveSpan()?.op).toBe("navigation");
+    await fetch("/api/after");
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const txs = await sent();
+    const nav = txs.find((t) => t.op === "navigation");
+    const pageload = txs.find((t) => t.op === "pageload");
+    expect(nav.spans.map((s: any) => s.description)).toEqual(["GET /api/after"]);
+    expect(nav.spans[0].parent_span_id).toBe(nav.span_id);
+    expect(pageload.spans.map((s: any) => s.description)).toEqual(["hung"]);
+  });
+
+  it("is ended with a non-ok status when its root ends, however deeply it is nested", async () => {
+    start(1);
+    void startSpan({ op: "function", name: "outer" }, () => {
+      void startSpan({ op: "function", name: "inner" }, () => new Promise<void>(() => {}));
+      return new Promise<void>(() => {});
+    });
+    window.history.pushState(null, "", "/next");
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const pageload = (await sent()).find((t) => t.op === "pageload");
+    const byName = Object.fromEntries(pageload.spans.map((s: any) => [s.description, s]));
+    expect(byName.outer.status).toBe("cancelled");
+    expect(byName.inner.status).toBe("cancelled");
+  });
+
+  it("leaves the stack clean when the root ends on the final timeout", async () => {
+    start(1, { finalTimeout: 2000 });
+    void startSpan({ op: "function", name: "hung" }, () => new Promise<void>(() => {}));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(getActiveSpan()).toBeUndefined();
   });
 });
