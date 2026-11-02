@@ -1,0 +1,23 @@
+{
+  "name": "@codmir/agent-kit",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Agent, council, serverless, runtime, AI-monitoring and MCP code split out of @codmir/sdk (CSL-5590). Never published.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "nanoid": "^5.0.9",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@prisma/client": "6.19.3",
+    "@types/express": "5.0.6",
+    "@types/node": "^20.14.0",
+    "next-auth": "4.24.15",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
+}

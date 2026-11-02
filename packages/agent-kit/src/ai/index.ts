@@ -50,7 +50,7 @@ import {
   type UserContext,
   type Breadcrumb,
   type SeverityLevel,
-} from "../overseer/index";
+} from "@codmir/sdk/overseer";
 
 import { nanoid } from "nanoid";
 
@@ -1086,7 +1086,7 @@ export {
   type UserContext,
   type Breadcrumb,
   type SeverityLevel,
-} from "../overseer/index";
+} from "@codmir/sdk/overseer";
 
 export const captureException = coreCaptureException;
 export const captureMessage = coreCaptureMessage;
