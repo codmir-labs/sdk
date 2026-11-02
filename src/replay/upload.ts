@@ -13,6 +13,7 @@ export const MAX_EVENTS_PER_SEGMENT = 10_000;
 /** `fetch(..., { keepalive: true })` bodies are limited to 64 KB by browsers. */
 export const KEEPALIVE_MAX_BYTES = 60_000;
 export const RETRY_DELAY_MS = 1000;
+/** The server accepts at most 500; the newest are kept. */
 export const MAX_ERROR_EVENT_IDS = 500;
 
 /** `stored`: accepted. `refused`: 202 `{stored:false}` (no card, or no credits): stop uploading this session. `failed`: dropped. */
@@ -63,7 +64,7 @@ export function buildSegmentBody(
     segment: segment.sequenceNumber,
     started_at: new Date(first).toISOString(),
     ended_at: new Date(Math.max(first, last)).toISOString(),
-    error_event_ids: segment.errorIds.slice(0, MAX_ERROR_EVENT_IDS),
+    error_event_ids: segment.errorIds.slice(-MAX_ERROR_EVENT_IDS),
     sdk: { ...SDK_INFO },
     events: segment.events,
   };

@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SDK_INFO } from "../../version";
-import { CONTRACT_EXAMPLE, MAX_BODY_BYTES, ReplaySegmentUploadSchema } from "./helpers";
+import { CONTRACT_EXAMPLE, MAX_BODY_BYTES, ReplaySegmentUploadSchema, ReplayUploadResponseSchema } from "./helpers";
 
 const DSN = "https://ingest.example.test/api/overseer";
 const REPLAY_URL = `${DSN}/replay`;
@@ -356,16 +356,47 @@ describe("upload helpers", () => {
   it("treats 202 {stored:false} as a refusal: no retry, and no more uploads this session", async () => {
     useFakeClock();
     respond = () => new Response(JSON.stringify({ stored: false, reason: "payment_required" }), { status: 202 });
-    const { replay } = await load({ replaysSessionSampleRate: 1 });
+    const { overseer, replay } = await load({ replaysSessionSampleRate: 1 });
     replay.startReplay();
     await settle();
     const { record } = await import("@rrweb/record");
     record.addCustomEvent("a", 1);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(replayCalls()).toHaveLength(1);
+    expect(ReplayUploadResponseSchema.parse({ stored: false, reason: "payment_required" }).stored).toBe(false);
     record.addCustomEvent("b", 1);
     await vi.advanceTimersByTimeAsync(90_000);
     expect(replayCalls()).toHaveLength(1);
+    // The recorder stopped, so errors are no longer linked to a replay.
+    overseer.captureException(new Error("after-refusal"));
+    await vi.advanceTimersByTimeAsync(2000);
+    const err = ingestCalls().flatMap((c) => c.body.events).find((e: any) => e.type === "error");
+    expect(err.event.tags?.replay_id).toBeUndefined();
+  });
+
+  it("keeps the newest 500 error ids per segment", async () => {
+    const { buildSegmentBody } = await import("../upload");
+    const ids = Array.from({ length: 600 }, (_, i) => `e${i}`);
+    const body = buildSegmentBody({}, { replayId: CONTRACT_EXAMPLE.replay_id, sequenceNumber: 0, events: [{ type: 2, timestamp: 1 }], errorIds: ids });
+    expect(body.error_event_ids).toHaveLength(500);
+    expect(body.error_event_ids[0]).toBe("e100");
+    expect(body.error_event_ids[499]).toBe("e599");
+    expect(ReplaySegmentUploadSchema.safeParse(body).success).toBe(true);
+  });
+
+  it("a 503 is retried once, then dropped (replay storage not configured)", async () => {
+    useFakeClock();
+    respond = () => new Response("{}", { status: 503 });
+    const { replay } = await load({ replaysSessionSampleRate: 1 });
+    replay.startReplay();
+    await settle();
+    const { record } = await import("@rrweb/record");
+    record.addCustomEvent("a", 1);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(replayCalls()).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(replayCalls()).toHaveLength(2);
   });
 
   it("flushes the current segment on pagehide with keepalive when the body fits 64 KB", async () => {
