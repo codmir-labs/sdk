@@ -1,4 +1,4 @@
-import { nanoid } from "nanoid";
+import { generateId } from "../id";
 import { generateSpanId, formatTraceparent } from "./propagation";
 import { MAX_SPANS_PER_TRANSACTION, type SpanEvent, type SpanStatus, type TransactionEvent, type TransactionMeasurements } from "./types";
 
@@ -143,7 +143,7 @@ export class Transaction extends Span {
     const ctx = this.context();
     const tx: TransactionEvent = {
       type: "transaction",
-      event_id: nanoid(),
+      event_id: generateId(),
       trace_id: this.traceId,
       span_id: this.spanId,
       op: clip(this.op, 64) || "unknown",

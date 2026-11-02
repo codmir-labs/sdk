@@ -27,7 +27,7 @@
  * subtrees are not recorded, and a password field is masked whatever the config says.
  */
 
-import { nanoid } from "nanoid";
+import { generateId } from "../id";
 import { getClient } from "../overseer/index";
 import {
   resolvePrivacy,
@@ -485,7 +485,7 @@ export class ReplayRecorder {
 
     chunks.forEach((chunk, index) => {
       const segment: ReplaySegment = {
-        id: nanoid(),
+        id: generateId(),
         sessionId: this.replayId,
         sequenceNumber: this.nextSegment++,
         startTime: chunk[0].timestamp,

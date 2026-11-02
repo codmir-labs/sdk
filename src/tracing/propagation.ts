@@ -20,7 +20,7 @@ export function setRandomFill(fill: RandomFill | undefined): void {
   nodeFill = fill;
 }
 
-function fillRandom(buf: Uint8Array): void {
+export function fillRandom(buf: Uint8Array): void {
   const web = (globalThis as { crypto?: { getRandomValues?: (b: Uint8Array) => unknown } }).crypto;
   if (web?.getRandomValues) {
     web.getRandomValues(buf);

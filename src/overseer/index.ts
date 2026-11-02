@@ -21,7 +21,7 @@
  * ```
  */
 
-import { nanoid } from "nanoid";
+import { generateId } from "../id";
 import type { TransactionEvent } from "../tracing/types";
 import { SDK_INFO } from "../version";
 import { PatchRuntime, type SelfHealingConfig } from "./patch-runtime";
@@ -263,7 +263,7 @@ class OverseerClient {
     if (!this.config.enabled) return "";
     if (!this.shouldSample(this.config.sampleRate)) return "";
 
-    const eventId = nanoid();
+    const eventId = generateId();
     const err = error instanceof Error ? error : new Error(String(error));
 
     const event: OverseerEvent = {
@@ -304,7 +304,7 @@ class OverseerClient {
     if (!this.config.enabled) return "";
     if (!this.shouldSample(this.config.sampleRate)) return "";
 
-    const eventId = nanoid();
+    const eventId = generateId();
 
     const event: OverseerEvent = {
       id: eventId,

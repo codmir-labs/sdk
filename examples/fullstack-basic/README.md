@@ -127,4 +127,3 @@ billed Overseer event, so the project needs a card on file and credits.
 | `client.js`, `public/index.html` | the page: browser entry, `startReplay()`, the Throw button, a password field |
 | `capture-server.mjs`, `schemas.mjs` | the local platform stand-in and the schemas it validates with |
 | `smoke.mjs` | the end-to-end check |
-| `browser-shims.js` | works around `@codmir/sdk` 2.2.0 bundling nanoid's Node build into its browser chunks (imports `crypto`, uses `Buffer`); delete it, and the `alias` and `inject` lines in `server.mjs`, when the SDK is fixed |

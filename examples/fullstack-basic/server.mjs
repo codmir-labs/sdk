@@ -38,9 +38,6 @@ await build({
   format: "esm",
   platform: "browser",
   target: "es2022",
-  // The SDK's browser chunks import Node's `crypto` and use `Buffer` (nanoid's Node build); see browser-shims.js.
-  alias: { crypto: join(here, "browser-shims.js") },
-  inject: [join(here, "browser-shims.js")],
   logLevel: "warning",
 });
 
