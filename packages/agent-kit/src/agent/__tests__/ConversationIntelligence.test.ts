@@ -360,10 +360,10 @@ describe('ConversationIntelligence', () => {
       expect(types).not.toContain('gather_information')
     })
 
-    // BUG (not fixed here, CSL-5522): indicatesCodeAnalysisNeed's keyword list contains an empty
+    // Fixed (CSL-5547), was: indicatesCodeAnalysisNeed's keyword list contains an empty
     // string (ConversationIntelligence.ts:510), and `text.includes('')` is always true, so an
     // 'analyze_code' need is predicted for every conversation, including small talk.
-    it.fails('does not predict a code-analysis need for small talk (BUG: empty keyword matches everything)', async () => {
+    it('does not predict a code-analysis need for small talk (BUG: empty keyword matches everything)', async () => {
       expect((await needs(['good morning'])).map(n => n.type)).not.toContain('analyze_code')
     })
 

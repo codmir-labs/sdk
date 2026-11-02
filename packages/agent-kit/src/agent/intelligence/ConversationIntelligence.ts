@@ -507,7 +507,7 @@ export class ConversationIntelligence extends EventEmitter {
 
   private indicatesCodeAnalysisNeed(conversation: Context['conversation']): boolean {
     const allText = conversation.messages.map(m => m.content).join(' ').toLowerCase()
-    const codeKeywords = ['file', '', '.ts', '.py', 'function', 'method', 'class', 'performance', 'optimize']
+    const codeKeywords = ['file', '.ts', '.py', 'function', 'method', 'class', 'performance', 'optimize']
     return codeKeywords.some(keyword => allText.includes(keyword))
   }
 
