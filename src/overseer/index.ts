@@ -23,6 +23,7 @@
 
 import { nanoid } from "nanoid";
 import type { TransactionEvent } from "../tracing/types";
+import { SDK_INFO } from "../version";
 import { PatchRuntime, type SelfHealingConfig } from "./patch-runtime";
 import {
   DEFAULT_DSN,
@@ -276,7 +277,7 @@ class OverseerClient {
       breadcrumbs: [...this.breadcrumbs],
       environment: this.config.environment,
       release: this.config.release,
-      sdk: { name: "@codmir/sdk", version: "1.0.0" },
+      sdk: { ...SDK_INFO },
       contexts: {
         conversation: this.conversationId ? { id: this.conversationId } : undefined,
         session: this.sessionId ? { id: this.sessionId } : undefined,
@@ -304,7 +305,7 @@ class OverseerClient {
       breadcrumbs: [...this.breadcrumbs],
       environment: this.config.environment,
       release: this.config.release,
-      sdk: { name: "@codmir/sdk", version: "1.0.0" },
+      sdk: { ...SDK_INFO },
     };
 
     this.sendEvent(event);

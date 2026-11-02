@@ -17,6 +17,7 @@ import { getClient } from "../overseer/index";
 import { getActiveSpan, withActiveSpan, isThenable } from "./context";
 import { generateTraceId, parseTraceparent, type TraceparentData } from "./propagation";
 import { Span, Transaction, type SpanOptions, type TransactionContext } from "./span";
+import { SDK_INFO as SDK } from "../version";
 
 export { parseTraceparent, formatTraceparent, generateTraceId, generateSpanId } from "./propagation";
 export type { TraceparentData } from "./propagation";
@@ -31,8 +32,6 @@ export type { InstrumentFetchOptions } from "./fetch";
 // =============================================================================
 // Transactions and spans
 // =============================================================================
-
-const SDK = { name: "@codmir/sdk", version: "1.0.0" };
 
 function transactionContext(): TransactionContext {
   const client = getClient();
