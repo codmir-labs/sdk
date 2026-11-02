@@ -6,6 +6,8 @@ import type { Span } from "./span";
 export interface ContextStrategy {
   get(): Span | undefined;
   run<T>(span: Span, fn: () => T): T;
+  /** Drops every span of `traceId` still held, returning them. Only the browser's stack holds spans past their `fn`. */
+  release?(traceId: string): Span[];
 }
 
 /**
@@ -21,6 +23,11 @@ function stackStrategy(): ContextStrategy {
   };
   return {
     get: () => stack[stack.length - 1],
+    release(traceId) {
+      const dropped = stack.filter((span) => span.traceId === traceId);
+      for (const span of dropped) remove(span);
+      return dropped;
+    },
     run(span, fn) {
       stack.push(span);
       let result: ReturnType<typeof fn>;
@@ -45,6 +52,15 @@ let strategy: ContextStrategy = stackStrategy();
 
 export function setContextStrategy(next: ContextStrategy): void {
   strategy = next;
+}
+
+/**
+ * Drops from the context every span still held for `root`'s trace and returns them, so a `startSpan` whose promise
+ * never settles cannot stay active once its transaction has ended. A no-op where the strategy holds nothing
+ * (AsyncLocalStorage on Node).
+ */
+export function releaseTrace(root: Span): Span[] {
+  return strategy.release?.(root.traceId) ?? [];
 }
 
 /** A root that stays active until cleared, for the browser's pageload and navigation transactions. */
