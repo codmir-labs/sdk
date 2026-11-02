@@ -18,6 +18,7 @@
  * ```
  */
 
+import { SDK_VERSION } from "../version";
 import {
   init as coreInit,
   captureException as coreCaptureException,
@@ -122,7 +123,7 @@ export async function verify(config: VerifyConfig): Promise<VerifyResult> {
 
     coreSetTags({
       source: "sdk-verify",
-      sdk_version: "1.0.1",
+      sdk_version: SDK_VERSION,
     });
 
     eventId = coreCaptureMessage("Codmir SDK setup verified", "info");
