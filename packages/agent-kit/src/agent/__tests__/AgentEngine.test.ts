@@ -262,6 +262,39 @@ describe('AgentEngine', () => {
       expect(seen).toEqual(['context_built', 'decisions_made:1/1', 'processing_complete:1'])
     })
 
+    it('emits decision_made for each decision it keeps (CSL-5552)', async () => {
+      const engine = make()
+      await engine.initialize()
+      const seen: Decision[] = []
+      engine.on('decision_made', d => seen.push(d))
+
+      const result = await run(engine, conversation(BUG_REPORT))
+      expect(result.decisions).toHaveLength(1)
+      expect(seen).toEqual(result.decisions)
+    })
+
+    it('emits learning_generated for each learning it extracts (CSL-5552)', async () => {
+      const engine = make({ learningEnabled: true })
+      await engine.initialize()
+      const extracted = [{ id: 'l1', description: 'a' }, { id: 'l2', description: 'b' }]
+      vi.spyOn((engine as any).learningSystem, 'extractLearnings').mockResolvedValue(extracted)
+      const seen: unknown[] = []
+      engine.on('learning_generated', l => seen.push(l))
+
+      const result = await run(engine, conversation(BUG_REPORT))
+      expect(result.learnings).toEqual(extracted)
+      expect(seen).toEqual(extracted)
+    })
+
+    it('emits no learning_generated when learning is disabled (CSL-5552)', async () => {
+      const engine = make({ learningEnabled: false })
+      await engine.initialize()
+      const seen: unknown[] = []
+      engine.on('learning_generated', l => seen.push(l))
+      await run(engine, conversation(BUG_REPORT))
+      expect(seen).toEqual([])
+    })
+
     it('creates a strategic plan and tracks it as active', async () => {
       const engine = make()
       await engine.initialize()
