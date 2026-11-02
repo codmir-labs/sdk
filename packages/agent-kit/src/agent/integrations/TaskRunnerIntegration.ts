@@ -261,13 +261,30 @@ export class TaskRunnerIntegration extends EventEmitter {
       })
       
       // Handle failures
-      const failures = results.filter(r => r.status === 'rejected')
-      if (failures.length > 0 && this.config.enableIntelligentRecovery) {
-        for (let i = 0; i < failures.length; i++) {
-          const failedSubtask = group[i]
-          await this.attemptSubtaskRecovery(task, failedSubtask, failures[i].reason)
+      // results[i] belongs to group[i]: pair them by position in the group, not by position
+      // in the filtered list of rejections.
+      if (this.config.enableIntelligentRecovery) {
+        for (let i = 0; i < results.length; i++) {
+          const result = results[i]
+          if (result.status !== 'rejected') continue
+          const recovered = await this.attemptSubtaskRecovery(task, group[i], result.reason)
+          if (recovered) {
+            task.progress!.subtasksCompleted += 1
+            task.progress!.overall = (task.progress!.subtasksCompleted / task.progress!.subtasksTotal) * 100
+          }
         }
       }
+    }
+    
+    // A subtask that still failed (after any retry) means the task did not complete
+    const failedSubtasks = task.subtasks.filter(s => s.status === 'failed')
+    if (failedSubtasks.length > 0) {
+      task.progress!.phase = 'failed'
+      this.emit('task:failed', {
+        task,
+        error: new Error(`${failedSubtasks.length} of ${task.subtasks.length} subtasks failed: ${failedSubtasks.map(s => s.title).join(', ')}`)
+      })
+      return
     }
     
     // Final completion
@@ -622,14 +639,16 @@ export class TaskRunnerIntegration extends EventEmitter {
     return this.taskClients.get(key)
   }
 
-  private async attemptSubtaskRecovery(task: EnhancedTask, subtask: SubTask, error: any): Promise<void> {
+  private async attemptSubtaskRecovery(task: EnhancedTask, subtask: SubTask, error: any): Promise<boolean> {
     console.log(`🔄 Attempting recovery for subtask: ${subtask.title}`)
     
     // Simple retry for now
     try {
       await this.executeSubtask(task, subtask, await this.buildTaskContext(task))
+      return true
     } catch (retryError) {
       console.error(`❌ Subtask recovery failed: ${subtask.title}`)
+      return false
     }
   }
 

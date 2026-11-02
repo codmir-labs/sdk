@@ -446,9 +446,9 @@ describe('TaskRunnerIntegration', () => {
       )
     })
 
-    // BUG (not fixed here, CSL-5522): after the groups run, executeSubtasks unconditionally sets
+    // Fixed (CSL-5541), was: after the groups run, executeSubtasks unconditionally sets
     // phase = 'completed' and overall = 100, even when subtasks failed and no recovery is enabled.
-    it.fails('does not report a task completed while one of its subtasks failed (BUG: always completed)', async () => {
+    it('does not report a task completed while one of its subtasks failed (BUG: always completed)', async () => {
       stubBreakdown(auto, [{ title: 'Bad', description: 'boom' }])
       runner.eventsFor = () => [failed('nope')]
       const task = await auto.submitTask({ goal: 'g' })
@@ -638,10 +638,10 @@ describe('TaskRunnerIntegration', () => {
         expect(task.subtasks![0]).toMatchObject({ status: 'failed', error: 'still broken' })
       })
 
-      // BUG (not fixed here, CSL-5522): executeSubtasks pairs `failures[i]` with `group[i]`, but
+      // Fixed (CSL-5542), was: executeSubtasks pairs `failures[i]` with `group[i]`, but
       // `failures` is the filtered list of rejected results, so index i is not the i-th subtask of the
       // group. When the second subtask is the one that failed, the first (healthy) one is retried.
-      it.fails('retries the subtask that failed, not the first of its group (BUG: index mismatch)', async () => {
+      it('retries the subtask that failed, not the first of its group (BUG: index mismatch)', async () => {
         stubBreakdown(recovering, [
           { title: 'Healthy', description: 'ok' },
           { title: 'Broken', description: 'bad' }
