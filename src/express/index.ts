@@ -99,9 +99,8 @@ type ErrorMiddleware = (
 
 export interface ExpressConfig extends OverseerConfig {
   /**
-   * Capture request body in error reports.
-   * Disabled by default for privacy — may contain sensitive data.
-   * @default false
+   * @deprecated Ignored since CSL-5639: a request body is never put in an error report, because it may hold
+   * credentials and personal data. Kept so existing `init({ captureRequestBody })` calls still type-check.
    */
   captureRequestBody?: boolean;
 
@@ -136,15 +135,6 @@ interface CodemirRequestContext {
 }
 
 /** Headers stripped from error reports to avoid leaking secrets */
-const SENSITIVE_HEADERS = new Set([
-  "authorization",
-  "cookie",
-  "set-cookie",
-  "x-api-key",
-  "x-auth-token",
-  "proxy-authorization",
-]);
-
 // =============================================================================
 // Express-Specific Initialization
 // =============================================================================
@@ -179,6 +169,11 @@ export function init(config: ExpressConfig = {}): void {
 
   // Tracing: outgoing fetches become child spans and carry traceparent (CSL-5575).
   instrumentFetch({ breadcrumbs: false });
+}
+
+/** CSL-5639: the request's path, never its query string or fragment: a breadcrumb or transaction name is an event field too. */
+function pathOnly(req: ExpressRequest): string {
+  return (req.originalUrl || req.url).split(/[?#]/)[0] || "/";
 }
 
 /** CSL-5637: origin and path of the request, and its method. Never the query string, headers or cookies (the Host header only names the origin). */
@@ -218,13 +213,11 @@ export function requestHandler(): RequestMiddleware {
     coreAddBreadcrumb({
       type: "http",
       category: "http.request",
-      message: `${req.method} ${req.originalUrl || req.url}`,
+      message: `${req.method} ${pathOnly(req)}`,
       data: {
         method: req.method,
-        url: req.originalUrl || req.url,
+        url: pathOnly(req),
         path: req.path,
-        params: Object.keys(req.params).length > 0 ? req.params : undefined,
-        query: Object.keys(req.query).length > 0 ? req.query : undefined,
       },
       level: "info",
     });
@@ -267,32 +260,10 @@ export function errorHandler(): ErrorMiddleware {
     _res: ExpressResponse,
     next: NextFunction
   ): void => {
-    // Build sanitized headers
-    const sanitizedHeaders: Record<string, string> = {};
-    for (const [key, value] of Object.entries(req.headers)) {
-      if (!SENSITIVE_HEADERS.has(key.toLowerCase()) && value !== undefined) {
-        sanitizedHeaders[key] = Array.isArray(value) ? value.join(", ") : value;
-      }
-    }
-
-    // Build request context
-    const requestContext: Record<string, unknown> = {
-      mechanism: "express-error-handler",
-      request: {
-        method: req.method,
-        url: req.originalUrl || req.url,
-        path: req.path,
-        baseUrl: req.baseUrl,
-        headers: sanitizedHeaders,
-        query: req.query,
-        params: req.params,
-      },
-    };
-
-    // Optionally include request body
-    if (expressConfig.captureRequestBody && req.body !== undefined) {
-      (requestContext.request as Record<string, unknown>).body = req.body;
-    }
+    // CSL-5639: never the request's headers, cookies, query, params or body. The event's `request` (origin, path, method)
+    // comes from the scope below; the route pattern is the one safe thing to add.
+    const requestContext: Record<string, unknown> = { mechanism: "express-error-handler" };
+    if (typeof req.route?.path === "string") requestContext.route = `${req.baseUrl ?? ""}${req.route.path}`;
 
     // Extract user context if configured
     if (expressConfig.extractUser) {
@@ -348,7 +319,7 @@ export function tracingHandler(): RequestMiddleware {
     const header = req.headers["traceparent"];
     const tx = startTransaction({
       op: "http.server",
-      name: `${req.method} ${req.originalUrl || req.url}`,
+      name: `${req.method} ${pathOnly(req)}`,
       traceparent: Array.isArray(header) ? header[0] : header,
       data: { "http.request.method": req.method },
     });
@@ -370,10 +341,10 @@ export function tracingHandler(): RequestMiddleware {
       coreAddBreadcrumb({
         type: "http",
         category: "http.response",
-        message: `${req.method} ${req.originalUrl || req.url} ${res.statusCode}`,
+        message: `${req.method} ${pathOnly(req)} ${res.statusCode}`,
         data: {
           method: req.method,
-          url: req.originalUrl || req.url,
+          url: pathOnly(req),
           statusCode: res.statusCode,
           durationMs: duration,
         },
