@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "noEmit": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@codmir/sdk": ["../../src/index.ts"],
+      "@codmir/sdk/types": ["../../src/types.ts"],
+      "@codmir/sdk/overseer": ["../../src/overseer/index.ts"],
+      "@codmir/sdk/runtime/protocol": ["./src/runtime/protocol/index.ts"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+}

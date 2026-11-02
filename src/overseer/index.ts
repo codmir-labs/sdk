@@ -708,4 +708,3 @@ export function getOverseerKey(): string {
 export { OverseerClient };
 export { PatchRuntime } from "./patch-runtime";
 export type { SelfHealingConfig, PatchManifest, PatchEntry, PatchOp } from "./patch-runtime";
-export { OverseerSystem } from '../agent/overseer/OverseerSystem';

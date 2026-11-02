@@ -15,111 +15,26 @@ npm install @codmir/sdk
 
 | Use case | Import |
 |----------|--------|
-| AI monitoring | `@codmir/sdk/ai` |
 | Error tracking | `@codmir/sdk/overseer` |
 | Next.js | `@codmir/sdk/nextjs` |
 | Express | `@codmir/sdk/express` |
 | React Native | `@codmir/sdk/react-native` |
 | Browser (vanilla) | `@codmir/sdk/browser` |
 | Remix | `@codmir/sdk/remix` |
-| Serverless | `@codmir/sdk/serverless` |
 | Bug reporting | `@codmir/sdk/report` |
 | API client | `@codmir/sdk` |
 | Setup verification | `@codmir/sdk/verify` |
 
-## AI Monitoring
+## What is in this package
 
-Track every LLM call across providers with two lines of setup. Token usage, cost, latency, and errors are captured automatically.
+`@codmir/sdk` is the error, tracing and replay SDK: error capture (`overseer`), tracing, session replay, the
+framework integrations (Next.js, Express, Hono, Remix, React Native, browser), bug reporting, setup verification
+and the API client.
 
-### Wrap OpenAI
-
-```typescript
-import * as Codmir from '@codmir/sdk/ai';
-import OpenAI from 'openai';
-
-Codmir.init({
-  dsn: process.env.CODMIR_DSN,
-});
-
-const openai = Codmir.wrapOpenAI(new OpenAI());
-
-// Every call is now tracked — tokens, cost, latency
-const response = await openai.chat.completions.create({
-  model: 'gpt-4o',
-  messages: [{ role: 'user', content: 'Hello' }],
-});
-```
-
-### Wrap Anthropic
-
-```typescript
-import * as Codmir from '@codmir/sdk/ai';
-import Anthropic from '@anthropic-ai/sdk';
-
-Codmir.init({ dsn: process.env.CODMIR_DSN });
-
-const anthropic = Codmir.wrapAnthropic(new Anthropic());
-
-const response = await anthropic.messages.create({
-  model: 'claude-sonnet-4-20250514',
-  max_tokens: 1024,
-  messages: [{ role: 'user', content: 'Hello' }],
-});
-```
-
-### Generic provider
-
-```typescript
-import { trackAICall } from '@codmir/sdk/ai';
-
-const result = await trackAICall('custom', { model: 'llama-3' }, async () => {
-  return await myProvider.generate('Hello');
-});
-```
-
-### Usage summary
-
-```typescript
-const summary = Codmir.getAIUsageSummary();
-console.log(`Total cost: $${summary.totalCost.toFixed(4)}`);
-console.log(`Calls: ${summary.totalCalls}`);
-console.log(`Avg latency: ${summary.avgLatencyMs}ms`);
-```
-
-## Agent Session Tracing
-
-Correlate LLM calls into replayable agent sessions. Every tool call, decision, and error is captured in a timeline you can debug like a video.
-
-```typescript
-import * as Codmir from '@codmir/sdk/ai';
-
-Codmir.init({ dsn: process.env.CODMIR_DSN });
-
-// Start a session
-const session = Codmir.startSession({
-  agent: 'support-bot',
-  metadata: { userId: 'u_123', ticket: 'T-456' },
-});
-
-// All LLM calls are automatically correlated
-await openai.chat.completions.create({ ... });
-
-// Add custom decision events
-Codmir.addSessionEvent('decision', {
-  action: 'escalate_to_human',
-  reason: 'confidence_below_threshold',
-  confidence: 0.42,
-});
-
-// Group related work into spans
-Codmir.startSessionSpan('tool_execution');
-// ... tool work ...
-Codmir.endSessionSpan();
-
-// End and flush to your dashboard
-const completed = Codmir.endSession();
-await Codmir.flushSession(completed);
-```
+The agent runtime, council, serverless, task-runner protocol, AI-call monitoring (`/ai`), MCP client (`/mcp`)
+and the framework task helpers were removed from the published package in CSL-5590. They live in the private,
+unpublished workspace `packages/agent-kit` (`@codmir/agent-kit`) in this repo. Importing `@codmir/sdk/agent`,
+`/council`, `/serverless`, `/runtime`, `/ai` or `/mcp` no longer works.
 
 ## Error Tracking
 

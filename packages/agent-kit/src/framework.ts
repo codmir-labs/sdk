@@ -9,7 +9,7 @@ import {
   TaskComplexity, 
   TaskPriority, 
   ExecutionEnvironment 
-} from './types';
+} from '@codmir/sdk/types';
 
 export class FrameworkTaskBuilder {
   private request: Partial<FrameworkTaskRequest> = {

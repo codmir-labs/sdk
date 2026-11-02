@@ -57,36 +57,6 @@
       "require": "./dist/replay/index.cjs",
       "import": "./dist/replay/index.js"
     },
-    "./serverless": {
-      "types": "./dist/serverless/index.d.ts",
-      "require": "./dist/serverless/index.cjs",
-      "import": "./dist/serverless/index.js"
-    },
-    "./council": {
-      "types": "./dist/council/index.d.ts",
-      "require": "./dist/council/index.cjs",
-      "import": "./dist/council/index.js"
-    },
-    "./runtime": {
-      "types": "./src/runtime/index.ts",
-      "require": "./dist/runtime/index.cjs",
-      "import": "./dist/runtime/index.js"
-    },
-    "./runtime/protocol": {
-      "types": "./src/runtime/protocol/index.ts",
-      "require": "./dist/runtime/protocol/index.cjs",
-      "import": "./dist/runtime/protocol/index.js"
-    },
-    "./agent": {
-      "types": "./dist/agent/index.d.ts",
-      "require": "./dist/agent/index.cjs",
-      "import": "./dist/agent/index.js"
-    },
-    "./mcp": {
-      "types": "./dist/mcp/index.d.ts",
-      "require": "./dist/mcp/index.cjs",
-      "import": "./dist/mcp/index.js"
-    },
     "./express": {
       "types": "./dist/express/index.d.ts",
       "require": "./dist/express/index.cjs",
@@ -96,11 +66,6 @@
       "types": "./dist/hono/index.d.ts",
       "require": "./dist/hono/index.cjs",
       "import": "./dist/hono/index.js"
-    },
-    "./ai": {
-      "types": "./dist/ai/index.d.ts",
-      "require": "./dist/ai/index.cjs",
-      "import": "./dist/ai/index.js"
     },
     "./remix": {
       "types": "./dist/remix/index.d.ts",
@@ -129,13 +94,14 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup src/index.ts src/client.ts src/types.ts src/framework.ts src/overseer/index.ts src/tracing/index.ts src/nextjs/index.ts src/nextjs/server.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/serverless/index.ts src/council/index.ts src/runtime/index.ts src/runtime/protocol/index.ts src/agent/index.ts src/mcp/index.ts src/express/index.ts src/hono/index.ts src/ai/index.ts src/remix/index.ts src/remix/server.ts src/verify/index.ts src/report/index.ts --format cjs,esm --clean",
-    "dev": "tsup src/index.ts src/client.ts src/types.ts src/framework.ts src/overseer/index.ts src/tracing/index.ts src/nextjs/index.ts src/nextjs/server.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/serverless/index.ts src/council/index.ts src/runtime/index.ts src/runtime/protocol/index.ts src/agent/index.ts src/mcp/index.ts src/express/index.ts src/hono/index.ts src/ai/index.ts src/remix/index.ts src/remix/server.ts src/verify/index.ts src/report/index.ts --format cjs,esm --dts --watch",
+    "build": "tsup src/index.ts src/client.ts src/types.ts src/overseer/index.ts src/tracing/index.ts src/nextjs/index.ts src/nextjs/server.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/express/index.ts src/hono/index.ts src/remix/index.ts src/remix/server.ts src/verify/index.ts src/report/index.ts --format cjs,esm --clean",
+    "dev": "tsup src/index.ts src/client.ts src/types.ts src/overseer/index.ts src/tracing/index.ts src/nextjs/index.ts src/nextjs/server.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/express/index.ts src/hono/index.ts src/remix/index.ts src/remix/server.ts src/verify/index.ts src/report/index.ts --format cjs,esm --dts --watch",
     "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint src/",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:agent-kit": "npm test --workspace @codmir/agent-kit"
   },
   "keywords": [
     "codmir",
@@ -144,14 +110,12 @@
     "client",
     "typescript",
     "ai",
-    "serverless",
-    "cloud",
-    "functions",
-    "sandbox",
-    "modal-alternative",
     "project-management",
     "tickets",
-    "tasks"
+    "tasks",
+    "error-tracking",
+    "tracing",
+    "session-replay"
   ],
   "author": "Codmir <hello@codmir.com>",
   "license": "Apache-2.0",
@@ -239,5 +203,8 @@
       ],
       "@semantic-release/github"
     ]
-  }
+  },
+  "workspaces": [
+    "packages/*"
+  ]
 }
