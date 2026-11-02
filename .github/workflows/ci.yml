@@ -29,6 +29,8 @@ jobs:
       - run: npm run test:agent-kit
       - run: npm run build
       - run: npm run check:dist
+      # The dist cases in root-entry.test.ts skip without a build, so run them after one (CSL-5375).
+      - run: npx vitest run src/__tests__/root-entry.test.ts
 
   release:
     needs: [build]
