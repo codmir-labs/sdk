@@ -6,6 +6,11 @@ const { version } = JSON.parse(readFileSync(new URL("./package.json", import.met
 // Same injection as tsup.config.ts, so tests see the version a build would report (CSL-5589).
 export default defineConfig({
   // packages/agent-kit has its own vitest config (npm run test:agent-kit).
-  test: { exclude: ["**/node_modules/**", "**/dist/**", "packages/**"] },
+  test: {
+    exclude: ["**/node_modules/**", "**/dist/**", "packages/**"],
+    // rrweb keeps `Date.now` from when it loads. Inlined, `vi.resetModules()` loads it afresh under each test's
+    // fake clock, so the replay tests can move rrweb's time (CSL-5612).
+    server: { deps: { inline: [/rrweb/] } },
+  },
   define: { __SDK_VERSION__: JSON.stringify(version) },
 });

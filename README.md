@@ -36,6 +36,29 @@ and the framework task helpers were removed from the published package in CSL-55
 unpublished workspace `packages/agent-kit` (`@codmir/agent-kit`) in this repo. Importing `@codmir/sdk/agent`,
 `/council`, `/serverless`, `/runtime`, `/ai` or `/mcp` no longer works.
 
+## Session Replay
+
+`@codmir/sdk/replay` records the page with [rrweb](https://github.com/rrweb-io/rrweb) (loaded lazily, only by this
+entry) and uploads segments to Codmir. Call `startReplay()` after `init()`:
+
+```typescript
+import { init } from '@codmir/sdk/browser';
+import { startReplay } from '@codmir/sdk/replay';
+
+init({
+  clientKey: 'osk_...',
+  replaysSessionSampleRate: 0.1, // default 0: share of sessions recorded and uploaded every 30 s / 5,000 events
+  replaysOnErrorSampleRate: 1.0, // default 1: keep the last 30-60 s, upload them plus the next 30 s on an error
+});
+startReplay();
+```
+
+Both rates at 0 record nothing. While a replay records, every error event carries `tags.replay_id`.
+
+Privacy is on by default: every input is masked, `[data-private]` and `.private` text is masked, `[data-codmir-block]`
+subtrees are not recorded, and password fields are masked whatever the config says. Pass
+`startReplay({ privacy: { maskSelectors: [...], blockSelectors: [...] } })` to change the selectors.
+
 ## Error Tracking
 
 ### Next.js

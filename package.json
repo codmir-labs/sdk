@@ -1,6 +1,6 @@
 {
   "name": "@codmir/sdk",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Codmir SDK: error tracking, tracing and session replay, plus the Codmir API client",
   "type": "module",
   "main": "./dist/index.js",
@@ -213,6 +213,7 @@
     "dist/chunk-*.cjs"
   ],
   "dependencies": {
+    "@rrweb/record": "2.2.0",
     "nanoid": "^5.0.9",
     "zod": "^3.23.8"
   },

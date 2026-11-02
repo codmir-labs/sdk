@@ -31,6 +31,8 @@ jobs:
       - run: npm run check:dist
       # The dist cases in root-entry.test.ts skip without a build, so run them after one (CSL-5375).
       - run: npx vitest run src/__tests__/root-entry.test.ts
+      # rrweb must stay out of every bundle but /replay; skips without a build too (CSL-5612).
+      - run: npx vitest run src/replay/__tests__/dist-bundles.test.ts
 
   release:
     needs: [build]

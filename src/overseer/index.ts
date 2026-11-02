@@ -168,8 +168,17 @@ type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'selfHealin
   secretKey: string;
 };
 
+/** What `@codmir/sdk/replay`'s `startReplay()` registers so errors link to the replay that recorded them. */
+export interface ReplayHook {
+  /** The id of the replay recording now, or null. */
+  getReplayId(): string | null;
+  /** Called with the id of every error event captured while the hook is set. */
+  onError(eventId: string): void;
+}
+
 class OverseerClient {
   private config: ResolvedConfig;
+  private replayHook: ReplayHook | null = null;
   private user: UserContext | null = null;
   private tags: Record<string, string> = {};
   private breadcrumbs: Breadcrumb[] = [];
@@ -286,6 +295,7 @@ class OverseerClient {
       },
     };
 
+    this.linkReplay(event);
     this.sendEvent(event);
     return eventId;
   }
@@ -312,6 +322,31 @@ class OverseerClient {
 
     this.sendEvent(event);
     return eventId;
+  }
+
+  /** Set by `startReplay()` in `@codmir/sdk/replay`; null unlinks. Not part of the stable API. */
+  setReplayHook(hook: ReplayHook | null): void {
+    this.replayHook = hook;
+  }
+
+  getReplaySampleRates(): { session: number; onError: number } {
+    return { session: this.config.replaysSessionSampleRate, onError: this.config.replaysOnErrorSampleRate };
+  }
+
+  /** While a replay records, the error carries its id (`tags.replay_id` is what the server reads) and the replay learns the error id. */
+  private linkReplay(event: OverseerEvent): void {
+    const hook = this.replayHook;
+    if (!hook) return;
+    try {
+      const replayId = hook.getReplayId();
+      if (replayId) {
+        event.tags = { ...event.tags, replay_id: replayId };
+        event.contexts = { ...event.contexts, replay: { replay_id: replayId } };
+      }
+      hook.onError(event.id);
+    } catch {
+      // replay must never break error capture
+    }
   }
 
   setUser(user: UserContext | null): void {
