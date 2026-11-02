@@ -465,6 +465,9 @@ export class ConversationIntelligence extends EventEmitter {
       if (content.includes('???') || content.match(/\?{2,}/)) clarityScore -= 0.2 // Confusion
     }
 
+    // No user message: nothing to score, so stay at the 0.5 base (0 / 0 would be NaN)
+    if (userMessages.length === 0) return 0.5
+
     return Math.max(0, Math.min(1, clarityScore / userMessages.length + 0.5))
   }
 
@@ -481,6 +484,9 @@ export class ConversationIntelligence extends EventEmitter {
       if (content.includes('environment') || content.includes('version')) completenessScore += 0.15
       if (message.entities.length > 2) completenessScore += 0.1 // Rich entity content
     }
+
+    // No user message: nothing to score, so stay at the 0.3 base (0 / 0 would be NaN)
+    if (userMessages.length === 0) return 0.3
 
     return Math.max(0, Math.min(1, completenessScore / userMessages.length + 0.3))
   }

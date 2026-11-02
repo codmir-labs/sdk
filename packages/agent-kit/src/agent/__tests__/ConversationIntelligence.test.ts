@@ -480,12 +480,13 @@ describe('ConversationIntelligence', () => {
       expect(analysis.completeness).toBeCloseTo(0.4)
     })
 
-    // BUG (not fixed here, CSL-5522): assessClarity and assessCompleteness divide by the number of
+    // Fixed (CSL-5549), was: assessClarity and assessCompleteness divide by the number of
     // user messages. A conversation with no user message gives 0 / 0 = NaN, which survives the
     // Math.max/Math.min clamp and ends up in the analysis.
-    it.fails('gives a finite clarity when the conversation has no user message (BUG: NaN)', async () => {
+    it('gives a finite clarity and completeness when the conversation has no user message (BUG: NaN)', async () => {
       const { analysis } = await analyse(ci, ctx([msg('I can help with that', 'assistant')]))
-      expect(Number.isFinite(analysis.clarity)).toBe(true)
+      expect(analysis.clarity).toBe(0.5)
+      expect(analysis.completeness).toBe(0.3)
     })
   })
 
