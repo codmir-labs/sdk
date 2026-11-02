@@ -105,7 +105,39 @@ export class TaskRunnerIntegration extends EventEmitter {
     this.taskIntelligence = new TaskIntelligence(config)
   }
 
-  async initialize(): Promise<void> {
+  private initPromise?: Promise<void>
+  /** Every listener this instance put on an emitter it does not own, so dispose() can take exactly those off. */
+  private subscriptions: Array<{ emitter: EventEmitter; event: string; handler: (...args: any[]) => void }> = []
+
+  /** Idempotent: a second call (or a concurrent one) shares the first, and adds no listeners. */
+  initialize(): Promise<void> {
+    if (!this.initPromise) {
+      this.initPromise = this.doInitialize().catch(error => {
+        this.initPromise = undefined
+        throw error
+      })
+    }
+    return this.initPromise
+  }
+
+  /**
+   * Remove every listener this instance added, including the ones on the process-wide EventEngine,
+   * so a discarded integration is not kept alive by (or still reacting to) it. initialize() works again afterwards.
+   */
+  dispose(): void {
+    for (const { emitter, event, handler } of this.subscriptions) {
+      emitter.removeListener(event, handler)
+    }
+    this.subscriptions = []
+    this.initPromise = undefined
+  }
+
+  private subscribe(emitter: EventEmitter, event: string, handler: (...args: any[]) => void): void {
+    emitter.on(event, handler)
+    this.subscriptions.push({ emitter, event, handler })
+  }
+
+  private async doInitialize(): Promise<void> {
     await Promise.all([
       this.engine.initialize(),
       this.taskAgent.initialize(),
@@ -717,19 +749,18 @@ export class TaskRunnerIntegration extends EventEmitter {
 
   private setupEventHandlers(): void {
     // Listen to engine events
-    this.engine.on('decision_made', (decision) => {
+    this.subscribe(this.engine, 'decision_made', (decision) => {
       this.emit('decision:made', decision)
     })
     
-    this.engine.on('learning_generated', (learning) => {
+    this.subscribe(this.engine, 'learning_generated', (learning) => {
       this.emit('learning:generated', learning)
     })
     
-    // Listen to event engine
     // EventEmitter has no wildcard support, so 'task:*' would be a literal name nothing emits.
     // Subscribe to each task event the engine really emits.
     for (const subtype of ['started', 'progress', 'completed', 'failed', 'stopped']) {
-      eventEngine.on(`task:${subtype}`, (event) => {
+      this.subscribe(eventEngine, `task:${subtype}`, (event) => {
         this.emit('event', event)
       })
     }

@@ -37,7 +37,7 @@ export class DatabaseAdapter {
 
   constructor(private config: DatabaseAdapterConfig) {
     this.prisma = config.prisma
-    this.cacheTimeout = config.cacheTimeout || 300000 // 5 minutes default
+    this.cacheTimeout = config.cacheTimeout ?? 300000 // 5 minutes default; 0 is a real value (expire at once)
   }
 
   /**
@@ -390,7 +390,7 @@ export class DatabaseAdapter {
         where: {
           projectId: params.projectId,
           type: params.type,
-          confidence: params.minConfidence ? { gte: params.minConfidence } : undefined
+          confidence: params.minConfidence !== undefined ? { gte: params.minConfidence } : undefined
         },
         orderBy: { confidence: 'desc' },
         take: params.limit || 20

@@ -197,6 +197,10 @@ export class AgentEngine extends EventEmitter {
           plans
         })
 
+        for (const learning of learnings) {
+          this.emit('learning_generated', learning)
+        }
+
         // Apply learnings immediately
         await this.learningSystem.applyLearnings(learnings)
       }
@@ -308,6 +312,11 @@ export class AgentEngine extends EventEmitter {
       urgency === 'critical'
     )
 
+    // One decision_made per decision: TaskRunnerIntegration, CLIIntegration, APIAdapter and
+    // EventSystemAdapter all listen for it and were never called.
+    for (const decision of confidentDecisions) {
+      this.emit('decision_made', decision)
+    }
     this.emit('decisions_made', { decisions: confidentDecisions, totalConsidered: decisions.length })
 
     return confidentDecisions

@@ -87,13 +87,18 @@ const failed = (error?: string) => ({ type: 'state_change', payload: { state: 'f
 const FIXED_NOW = new Date('2025-01-01T00:00:00.000Z')
 const SUBTASK_ID = (i: number) => `subtask_${FIXED_NOW.getTime()}_${i}`
 
+/** Every integration a test builds, so afterEach can dispose them: initialize() subscribes to the process-wide eventEngine. */
+const created: TaskRunnerIntegration[] = []
+
 function makeIntegration(overrides: Partial<TaskRunnerConfig> = {}) {
-  return new TaskRunnerIntegration({
+  const made = new TaskRunnerIntegration({
     runnerUrl: 'http://runner.test/',
     runnerToken: 'tok-123',
     workspaceRoot: '/work/root',
     ...overrides
   } as TaskRunnerConfig)
+  created.push(made)
+  return made
 }
 
 /** Make the real TaskAgent return a given breakdown (the real one cannot be fed a project, see bug test below). */
@@ -135,8 +140,8 @@ describe('TaskRunnerIntegration', () => {
 
   afterEach(() => {
     expect(runner.unexpected).toEqual([])
-    // initialize() subscribes to the process-wide EventEngine and never unsubscribes; do not let tests pile up listeners
-    eventEngine.removeAllListeners('task:*')
+    // initialize() subscribes to the process-wide EventEngine; dispose so tests do not pile up listeners
+    for (const made of created.splice(0)) made.dispose()
     vi.useRealTimers()
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
@@ -170,13 +175,59 @@ describe('TaskRunnerIntegration', () => {
     // EventEmitter has no wildcard support, so the integration's 'event' is never emitted.
     it('re-emits EventEngine task events as "event" (BUG: listens on literal "task:*")', async () => {
       await integration.initialize()
-      // Count this integration's own events: integrations from earlier tests stay subscribed to the
-      // shared eventEngine and push into the current `emitted`, so it cannot be asserted on directly.
-      const seen: unknown[] = []
-      integration.on('event', e => seen.push(e))
       const event = { type: 'task', subtype: 'started', taskId: 't1' }
       eventEngine.emit('task:started', event)
-      expect(seen).toEqual([event])
+      expect(emitted.filter(e => e.event === 'event')).toEqual([{ event: 'event', payload: event }])
+    })
+
+    // CSL-5551: initialize() used to add a fresh set of listeners to the global eventEngine on every call.
+    describe('listener teardown', () => {
+      const taskEvents = ['started', 'progress', 'completed', 'failed', 'stopped'].map(s => `task:${s}`)
+      const counts = () => taskEvents.map(e => eventEngine.listenerCount(e))
+      const engineCounts = (i: TaskRunnerIntegration) => {
+        const engine = (i as any).engine
+        return ['decision_made', 'learning_generated'].map(e => engine.listenerCount(e))
+      }
+
+      it('two initialize() calls plus dispose() leave the global listener count where it started', async () => {
+        const before = counts()
+        await integration.initialize()
+        await integration.initialize()
+        expect(counts()).toEqual(before.map(n => n + 1))
+
+        integration.dispose()
+        expect(counts()).toEqual(before)
+        expect(engineCounts(integration)).toEqual([0, 0])
+      })
+
+      it('concurrent initialize() calls share one initialisation', async () => {
+        const before = counts()
+        await Promise.all([integration.initialize(), integration.initialize()])
+        expect(counts()).toEqual(before.map(n => n + 1))
+      })
+
+      it('only removes its own listeners, and stops re-emitting after dispose', async () => {
+        const other = makeIntegration()
+        await other.initialize()
+        await integration.initialize()
+        integration.dispose()
+
+        eventEngine.emit('task:started', { type: 'task', subtype: 'started', taskId: 't1' })
+        expect(emitted.filter(e => e.event === 'event')).toHaveLength(0)
+
+        const seenByOther: unknown[] = []
+        other.on('event', e => seenByOther.push(e))
+        eventEngine.emit('task:progress', { type: 'task', subtype: 'progress', taskId: 't1' })
+        expect(seenByOther).toHaveLength(1)
+      })
+
+      it('can be initialised again after dispose', async () => {
+        const before = counts()
+        await integration.initialize()
+        integration.dispose()
+        await integration.initialize()
+        expect(counts()).toEqual(before.map(n => n + 1))
+      })
     })
   })
 
