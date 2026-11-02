@@ -418,6 +418,12 @@ describe('DatabaseAdapter', () => {
       })
     })
 
+    it('keeps a minConfidence of 0 as a filter (CSL-5553)', async () => {
+      prisma.agentLearning.findMany.mockResolvedValue([])
+      await makeAdapter(prisma).getLearnings({ minConfidence: 0 })
+      expect(prisma.agentLearning.findMany.mock.calls[0][0].where.confidence).toEqual({ gte: 0 })
+    })
+
     it('defaults to a limit of 20 and no confidence filter', async () => {
       prisma.agentLearning.findMany.mockResolvedValue([])
       await makeAdapter(prisma).getLearnings({})
@@ -484,6 +490,18 @@ describe('DatabaseAdapter', () => {
       expect(prisma.user.findUnique).toHaveBeenCalledTimes(1)
 
       vi.setSystemTime(new Date('2025-01-01T00:00:01.500Z'))
+      await adapter.getUserContext('u1')
+      expect(prisma.user.findUnique).toHaveBeenCalledTimes(2)
+    })
+
+    it('a cacheTimeout of 0 expires entries immediately instead of falling back to five minutes (CSL-5553)', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2025-01-01T00:00:00Z'))
+      prisma.user.findUnique.mockResolvedValue({ id: 'u1', name: 'Ada' })
+      const adapter = makeAdapter(prisma, { enableCaching: true, cacheTimeout: 0 })
+
+      await adapter.getUserContext('u1')
+      vi.setSystemTime(new Date('2025-01-01T00:00:00.001Z'))
       await adapter.getUserContext('u1')
       expect(prisma.user.findUnique).toHaveBeenCalledTimes(2)
     })
