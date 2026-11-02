@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Codmir SDK sample app</title>
+    <style>
+      body { font: 16px/1.5 ui-sans-serif, system-ui, sans-serif; max-width: 32rem; margin: 3rem auto; padding: 0 1rem; }
+      label { display: block; margin: 1rem 0 0.25rem; }
+      input { width: 100%; padding: 0.5rem; box-sizing: border-box; }
+      button { margin-top: 1rem; padding: 0.5rem 1rem; }
+      #status { color: #555; font-size: 0.875rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Codmir SDK sample app</h1>
+    <p id="status">loading</p>
+    <label for="name">Name (masked in the replay: every input is)</label>
+    <input id="name" type="text" autocomplete="off" />
+    <label for="password">Password (always masked)</label>
+    <input id="password" type="password" autocomplete="off" />
+    <button id="throw" type="button">Throw</button>
+    <script type="module" src="/build/client.js"></script>
+  </body>
+</html>

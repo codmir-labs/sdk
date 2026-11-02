@@ -1,0 +1,22 @@
+{
+  "name": "codmir-example-fullstack-basic",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "A sample app that sends an error, a 3-span trace and a masked session replay to Codmir (CSL-5588)",
+  "scripts": {
+    "start": "node server.mjs",
+    "capture-server": "node capture-server.mjs",
+    "smoke": "xvfb-run -a node smoke.mjs",
+    "smoke:display": "node smoke.mjs"
+  },
+  "dependencies": {
+    "@codmir/sdk": "file:../..",
+    "esbuild": "^0.25.0",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.0.0",
+    "zod": "^3.23.8"
+  }
+}
