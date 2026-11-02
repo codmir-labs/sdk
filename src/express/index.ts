@@ -48,6 +48,7 @@ import {
 import { instrumentFetch } from "../tracing/fetch";
 import { startTransaction, withActiveSpan, type Span } from "../tracing/index";
 import { installNodeTracingContext } from "../tracing/server";
+import { requestScopeFrom, withRequestScope, type RequestScope } from "../overseer/request-scope";
 
 // =============================================================================
 // Inline Express Types (no @types/express dependency)
@@ -63,6 +64,8 @@ interface ExpressRequest {
   route?: { path?: unknown };
   query: Record<string, unknown>;
   headers: Record<string, string | string[] | undefined>;
+  /** `http` or `https`; set by Express (and by `trust proxy` from X-Forwarded-Proto). */
+  protocol?: string;
   body?: unknown;
   ip?: string;
   user?: Record<string, unknown>;
@@ -178,6 +181,17 @@ export function init(config: ExpressConfig = {}): void {
   instrumentFetch({ breadcrumbs: false });
 }
 
+/** CSL-5637: origin and path of the request, and its method. Never the query string, headers or cookies (the Host header only names the origin). */
+function scopeOf(req: ExpressRequest): RequestScope {
+  const host = req.headers.host;
+  return requestScopeFrom({
+    url: req.originalUrl || req.url,
+    method: req.method,
+    host: Array.isArray(host) ? host[0] : host,
+    protocol: req.protocol,
+  });
+}
+
 // =============================================================================
 // Request Handler Middleware
 // =============================================================================
@@ -223,7 +237,9 @@ export function requestHandler(): RequestMiddleware {
       }
     }
 
-    next();
+    // Everything downstream, async tail included, captures under this request (CSL-5637).
+    installNodeTracingContext();
+    withRequestScope(scopeOf(req), () => next());
   };
 }
 
@@ -293,7 +309,7 @@ export function errorHandler(): ErrorMiddleware {
     }
 
     // Capture the exception
-    const eventId = coreCaptureException(err, requestContext);
+    const eventId = withRequestScope(scopeOf(req), () => coreCaptureException(err, requestContext));
 
     // Store event ID on request for downstream access
     if (req._codmir) {
@@ -368,7 +384,7 @@ export function tracingHandler(): RequestMiddleware {
     // A client that hangs up never gets a "finish".
     res.on("close", finish);
 
-    withActiveSpan(tx, () => next());
+    withRequestScope(scopeOf(req), () => withActiveSpan(tx, () => next()));
   };
 }
 
