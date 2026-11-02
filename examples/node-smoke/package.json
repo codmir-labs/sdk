@@ -1,0 +1,13 @@
+{
+  "name": "codmir-example-node-smoke",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Sends one error, one trace and one replay segment into a Codmir project and checks each was accepted (CSL-5628)",
+  "scripts": {
+    "smoke": "node smoke.mjs"
+  },
+  "dependencies": {
+    "@codmir/sdk": "file:../.."
+  }
+}
