@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="web vitals">
+<rect x="1" y="1" width="46" height="46" rx="12" fill="#F59E0B" fill-opacity="0.12" stroke="#F59E0B" stroke-opacity="0.4"/>
+<g transform="translate(12 12)" fill="none" stroke="#F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" color="#F59E0B">
+<path d="M3.5 17a8.5 8.5 0 1 1 17 0"/><path d="M12 17l4.5-5.5"/><circle cx="12" cy="17" r="1.25"/><path d="M6.5 10.5l1.2 1M12 6.5V8M17.5 10.5l-1.2 1"/>
+</g>
+</svg>
