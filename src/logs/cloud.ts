@@ -5,6 +5,7 @@
  */
 import type { OverseerEvent } from "../overseer/index";
 import { SDK_VERSION } from "../version";
+import { num } from "./num";
 import { redact } from "./redact";
 import type { CloudOptions, Finding, LogLevel } from "./types";
 
@@ -90,9 +91,9 @@ export function createCloud(
   base: { service?: string; release?: string; environment?: string },
 ): Cloud {
   const o: CloudOptions = options === true ? {} : options;
-  const everyMs = Math.max(0, o.everyMinutes ?? CLOUD_DEFAULTS.everyMinutes) * 60_000;
-  const perBatch = Math.max(0, Math.floor(o.perBatch ?? CLOUD_DEFAULTS.perBatch));
-  const perDay = Math.max(0, Math.floor(o.perDay ?? CLOUD_DEFAULTS.perDay));
+  const everyMs = num(o.everyMinutes, CLOUD_DEFAULTS.everyMinutes, 0, 525_600) * 60_000;
+  const perBatch = Math.floor(num(o.perBatch, CLOUD_DEFAULTS.perBatch, 0, 10_000));
+  const perDay = Math.floor(num(o.perDay, CLOUD_DEFAULTS.perDay, 0, 1_000_000));
   const minRank = RANK[o.minSeverity ?? "warning"] ?? RANK.warning;
   let day = -1;
   let today = 0;

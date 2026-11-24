@@ -22,13 +22,16 @@ const QUERY = /\?(?!\[q\])(?:\[[a-z]+\]|[^\s"'<>)\]}])+/g;
 const JWT = /\beyJ[\w-]{5,}\.[\w-]{5,}(?:\.[\w-]*)?/g;
 const BEARER = /(bearer|basic)\s+([A-Za-z0-9._~+/=-]{6,})/gi;
 const PLACEHOLDER = "\\[(?:secret|token|jwt|email|ip|id|uuid|hex|num|cookie|redacted)\\]";
+// `auth` but not `author` (`authorization` stays one), and `sig` only as a whole part: `signal` and `design` are no secrets.
+// The name may be quoted, as in a JSON pair.
 const SECRET_PAIR = new RegExp(
-  `\\b([A-Za-z0-9_-]*(?:token|secret|password|passwd|pwd|api[-_]?key|apikey|auth|signature|sig|session|credential)[A-Za-z0-9_-]*)\\s*[=:]\\s*(?!(?:bearer|basic)\\b|${PLACEHOLDER})("[^"]*"|'[^']*'|[^\\s,;&)}\\]]+)`,
+  `((?:token|secret|password|passwd|pwd|api[-_]?key|auth(?!or(?!i[sz]))|signature|session|credential)[A-Za-z0-9_-]{0,40}|(?:^|[^A-Za-z0-9])sig(?:[_-][A-Za-z0-9_-]{0,40})?)(["']?)\\s*[=:]\\s*(?!(?:bearer|basic)\\b|${PLACEHOLDER})("[^"]*"|'[^']*'|[^\\s,;&)}\\]]+)`,
   "gi",
 );
 const PREFIXED = /\b(?:sk|pk|rk|whsec|ghp|gho|ghu|ghs|ghr|github_pat|xox[abprs]|AKIA|ASIA|AIza|ya29|npm|glpat)[-_]?[A-Za-z0-9_-]{8,}/g;
 const EMAIL = /[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
-const IPV4 = /(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?!\d)/g;
+// The character before is captured instead of looked behind for: a lookbehind stops older browsers from parsing the file.
+const IPV4 = /(^|[^\d.])(?:\d{1,3}\.){3}\d{1,3}(?!\d)/g;
 const COLON_RUN = /[0-9a-fA-F]*(?::[0-9a-fA-F]*){2,}/g;
 const COLON_ID = new RegExp(`\\b${HEX}{1,12}(?::${HEX}{1,12}){3,}\\b`, "g");
 const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
@@ -113,12 +116,12 @@ function pass(text: string, extra?: readonly RegExp[]): string {
   if (s.includes("ookie")) s = s.replace(COOKIE, (_m, k: string) => `${k.toLowerCase()}=[cookie]`);
   if (s.includes("eyJ")) s = s.replace(JWT, "[jwt]");
   if (/bearer|basic/i.test(s)) s = s.replace(BEARER, (m, k: string, t: string) => (/^bearer$/i.test(k) || /[\d=+/]/.test(t) ? `${k} [token]` : m));
-  if (/[=:]/.test(s)) s = s.replace(SECRET_PAIR, (_m, k: string) => `${k}=[secret]`);
+  if (/[=:]/.test(s)) s = s.replace(SECRET_PAIR, (_m, k: string, q: string) => `${k}${q}=[secret]`);
   s = s.replace(PREFIXED, "[token]");
   // After the keyword patterns: a query such as `?,Bearer abc` would otherwise swallow the word that marks the token.
   if (s.includes("?")) s = s.replace(QUERY, "?[q]");
   if (s.includes("@")) s = s.replace(EMAIL, "[email]");
-  if (s.includes(".")) s = s.replace(IPV4, "[ip]");
+  if (s.includes(".")) s = s.replace(IPV4, "$1[ip]");
   if (s.includes(":")) {
     s = s.replace(COLON_RUN, ipv6);
     s = s.replace(COLON_ID, "[id]");
@@ -130,6 +133,35 @@ function pass(text: string, extra?: readonly RegExp[]): string {
   s = s.replace(LONG_RUN, (m) => (mixedCase(m) || m.length >= 40 ? "[secret]" : m));
   if (s.includes("/")) s = s.replace(PATH_ID, "/:id");
   return s;
+}
+
+/** Longest text that is parsed as JSON; a longer one is taken as it is. */
+const MAX_PARSE = 16_384;
+
+const words = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+
+/** The message of a structured record (`msg`, `message` or `event`, then its error's), or "" when it has none. */
+export function objectText(o: unknown): string {
+  if (typeof o !== "object" || o === null) return "";
+  const r = o as Record<string, unknown>;
+  const main = words(r.msg) || words(r.message) || words(r.event);
+  const e = r.err ?? r.error;
+  const cause = words(e) || words((e as { message?: unknown } | null | undefined)?.message);
+  return main && cause && cause !== main ? `${main}: ${cause}` : main || cause;
+}
+
+/** The text of a log line: a string as it is, a JSON line or an object by its message, an Error by its stack. */
+export function lineText(message: unknown): string {
+  if (typeof message === "string") {
+    if (message.length > MAX_PARSE || !/^\s*\{/.test(message)) return message;
+    try {
+      return objectText(JSON.parse(message)) || message;
+    } catch {
+      return message;
+    }
+  }
+  if (message instanceof Error) return message.stack || `${message.name}: ${message.message}`;
+  return objectText(message) || safeString(message);
 }
 
 function safeString(v: unknown): string {
@@ -213,9 +245,10 @@ function frameFile(line: string, extra?: readonly RegExp[]): string {
 /**
  * The grouping text of a log message: the first line that is not a stack frame, redacted, with dates, times,
  * durations, hashes, numbers and quoted values folded, plus the file of the first stack frame. At most 160 characters.
+ * A JSON line is read by its message: its quoted values would fold every line into one.
  */
 export function messageKey(text: unknown, extra?: readonly RegExp[]): string {
-  const raw = typeof text === "string" ? text.slice(0, MAX_INPUT) : safeString(text).slice(0, MAX_INPUT);
+  const raw = lineText(text).slice(0, MAX_INPUT);
   const lines = raw.split(/\r?\n/);
   const first = lines.find((l) => l.trim() && !/^\s*at\s/.test(l)) ?? "";
   const frame = lines.find((l) => /^\s*at\s/.test(l));

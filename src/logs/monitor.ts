@@ -5,7 +5,8 @@
  * (texts are cut before any pattern runs) and a call made while a batch is being delivered is skipped.
  */
 import { createCloud, findingEvent, type Candidate, type Cloud, type SendState } from "./cloud";
-import { MAX_KEY, MAX_SAMPLE, compileExtra, isScannerPath, messageKey, pathPattern, redact, shortId, uaFamily } from "./redact";
+import { num } from "./num";
+import { MAX_KEY, MAX_SAMPLE, compileExtra, isScannerPath, lineText, messageKey, pathPattern, redact, shortId, uaFamily } from "./redact";
 import type { Finding, Judgement, LogBatch, LogLevel, LogMonitor, LogMonitorOptions, LogRecord, MarkOptions, MonitorStats, RequestRecord, TimeInput } from "./types";
 
 export const COUNT_BATCHES = 96;
@@ -15,7 +16,8 @@ const ALARM_HITS = 3;
 const GROWTH_FACTOR = 10;
 const MAX_RELEASES = 8;
 const MAX_MARKS = 500;
-const KEY_CACHE = 2000;
+/** A week: past 24.8 days a timer overflows and fires at once, again and again. */
+const MAX_BATCH_MINUTES = 7 * 24 * 60;
 const DEFAULT_LEVELS: LogLevel[] = ["warning", "error", "fatal"];
 
 const LEVELS: Record<string, LogLevel> = {
@@ -86,8 +88,8 @@ const grows = (g: Group, hits: number): boolean => {
 const clip = (s: string | undefined, n: number): string => (s ? redact(s).slice(0, n) : "");
 
 /** One example of a log line: redacted, quoted values folded (a name or an id between quotes is data), lines joined. */
-const sampleOf = (message: unknown, extra?: readonly RegExp[]): string =>
-  redact(typeof message === "string" ? message.replace(/\s*\n\s*/g, " | ") : message, extra)
+const sampleOf = (text: string, extra?: readonly RegExp[]): string =>
+  redact(text.slice(0, 4 * MAX_SAMPLE).replace(/\s*\n\s*/g, " | "), extra)
     .replace(/"[^"]*"|'[^']*'|`[^`]*`/g, "[v]")
     .slice(0, MAX_SAMPLE);
 
@@ -95,15 +97,14 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
   const opts = options ?? {};
   const extra = compileExtra(opts.redact);
   const levels = new Set<string>(opts.include?.levels?.length ? opts.include.levels : DEFAULT_LEVELS);
-  const minStatus = Number.isFinite(opts.include?.minStatus) ? (opts.include?.minStatus as number) : 400;
-  const maxGroups = Math.max(1, Math.floor(opts.limits?.groups ?? 500));
-  const batchMs = Math.max(1, opts.batchMinutes ?? 15) * 60_000;
+  const minStatus = num(opts.include?.minStatus, 400, 0, 1000);
+  const maxGroups = Math.floor(num(opts.limits?.groups, 500, 1, 100_000));
+  const batchMs = num(opts.batchMinutes, 15, 1, MAX_BATCH_MINUTES) * 60_000;
   const noiseTests = (opts.noise ?? []).map((n) => (typeof n === "string" ? (label: string) => label.toLowerCase().includes(n.toLowerCase()) : (label: string) => new RegExp(n.source, n.flags.replace(/[gy]/g, "")).test(label)));
   const cloud: Cloud | null = opts.cloud ? createCloud(opts.cloud, { service: opts.service, release: opts.release, environment: typeof opts.cloud === "object" ? opts.cloud.environment : undefined }) : null;
 
   const groups = new Map<string, Group>();
   const marks = new Map<string, MarkOptions>();
-  const keyCache = new Map<string, string>();
   const pending = new Set<Promise<unknown>>();
   const counters = { records: 0, ignored: 0, dropped: 0, batches: 0, reentrant: 0, errors: 0 };
   let windowStart = Date.now();
@@ -113,19 +114,6 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
   let timer: ReturnType<typeof setInterval> | null = null;
 
   const isNoise = (label: string): boolean => noiseTests.some((t) => { try { return t(label); } catch { return false; } });
-
-  /** The grouping text of a log line, cached: apps log the same lines over and over. */
-  const textKey = (level: string, message: unknown): string => {
-    const raw = typeof message === "string" ? message : "";
-    const ck = `${level}\0${raw.length > 1000 ? raw.slice(0, 1000) : raw}`;
-    let k = keyCache.get(ck);
-    if (k === undefined) {
-      k = `${level}|${messageKey(raw, extra)}`.slice(0, MAX_KEY);
-      if (keyCache.size >= KEY_CACHE) keyCache.clear();
-      keyCache.set(ck, k);
-    }
-    return k;
-  };
 
   const evict = (): void => {
     let worst: Group | null = null;
@@ -236,13 +224,14 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
       }
       const now = Date.now();
       const ms = toMs(rec.time, now);
-      const key = textKey(level, rec.message);
+      const text = lineText(rec.message);
+      const key = `${level}|${messageKey(text, extra)}`.slice(0, MAX_KEY);
       let g = groups.get(key);
       if (!g) {
         g = open(key, () => {
           const title = key.slice(level.length + 1);
           const label = `${level.toUpperCase()} ${title}`;
-          return { kind: "message" as const, title: title.slice(0, 200), level, noise: isNoise(label), sample: sampleOf(rec.message, extra) };
+          return { kind: "message" as const, title: title.slice(0, 200), level, noise: isNoise(label), sample: sampleOf(text, extra) };
         }, ms);
       }
       touch(g, ms, rec.release, rec.service);
@@ -322,9 +311,15 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
       return false;
     }) ?? false;
 
-  /** Ends the open window. Returns the cloud sending in flight, if any. */
-  const runBatch = (): Promise<unknown> | null => {
-    if (busy) return null;
+  /** Keeps what a batch started (an async onBatch, a sending) until it is done, for `flush` to wait on. */
+  const track = (p: Promise<unknown>): void => {
+    const tracked: Promise<unknown> = p.finally(() => pending.delete(tracked));
+    pending.add(tracked);
+  };
+
+  /** Ends the open window. */
+  const runBatch = (): void => {
+    if (busy) return;
     const now = Date.now();
     const out: Finding[] = [];
     const candidates: Candidate[] = [];
@@ -347,30 +342,29 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
     windowStart = now;
     windowRecords = 0;
     counters.batches += 1;
-    if (out.length === 0) return null;
+    if (out.length === 0) return;
 
     busy = true;
     try {
-      if (opts.onBatch) guard(() => opts.onBatch?.(batch));
+      const answer = opts.onBatch ? guard(() => opts.onBatch?.(batch) as unknown) : undefined;
+      // An async onBatch: its rejection is counted here, never left to become an unhandled rejection of the app.
+      if (typeof (answer as PromiseLike<unknown> | undefined)?.then === "function") track(Promise.resolve(answer as PromiseLike<unknown>).catch(() => void (counters.errors += 1)));
     } finally {
       busy = false;
     }
-    if (!cloud) return null;
+    if (!cloud) return;
     const p = guard(() => {
       const chosen = cloud.select(candidates, now);
       return cloud.send(chosen.map((c) => findingEvent(c.finding, { environment: undefined, release: opts.release })));
     });
-    if (!p) return null;
-    const tracked = p.catch(() => false).finally(() => pending.delete(tracked));
-    pending.add(tracked);
-    return tracked;
+    if (p) track(p.catch(() => false));
   };
 
   const startTimer = (): void => {
     timer = setInterval(() => void guard(runBatch), batchMs);
     (timer as { unref?: () => void }).unref?.();
   };
-  startTimer();
+  guard(startTimer); // a runtime that refuses timers here (a worker's module scope) still gets `flush()`
 
   const flush = async (): Promise<void> => {
     try {

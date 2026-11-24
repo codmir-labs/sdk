@@ -11,9 +11,10 @@
  * app.use(expressLogs(logs));
  * ```
  */
-import { appendFileSync, chmodSync, existsSync, renameSync, statSync, unlinkSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs";
+import { dirname } from "node:path";
 import { format } from "node:util";
-import type { MiddlewareHandler } from "hono";
+import { objectText } from "./redact";
 import type { LogBatch, LogMonitor } from "./types";
 
 type Recorder = Pick<LogMonitor, "record">;
@@ -36,7 +37,9 @@ export function captureConsole(monitor: Recorder, methods: ConsoleMethod[] = ["e
       if (active && !inside) {
         inside = true;
         try {
-          monitor.record({ level: method === "warn" ? "warning" : method, message: format(...args) });
+          // An object on its own is taken by its message: printed, its quoted values would fold every object into one.
+          const one = args.length === 1 && !(args[0] instanceof Error) ? objectText(args[0]) : "";
+          monitor.record({ level: method === "warn" ? "warning" : method, message: one || format(...args) });
         } catch {
           // the app's own logging never fails because of the monitor
         } finally {
@@ -94,14 +97,16 @@ export const SINK_MAX_BYTES = 5 * 1024 * 1024;
 export const SINK_KEEP = 2;
 
 /**
- * An `onBatch` that appends each batch as one JSON line to `path` (file mode 0600). At 5 MB the file is renamed to
- * `path.1` (and `path.1` to `path.2`; older ones are deleted), so the sink holds at most about 15 MB. It never throws.
+ * An `onBatch` that appends each batch as one JSON line to `path` (file mode 0600; its folder is made when missing). At
+ * 5 MB the file is renamed to `path.1` (and `path.1` to `path.2`; older ones are deleted), so the sink holds at most
+ * about 15 MB. It never throws.
  */
 export function fileSink(path: string): (batch: LogBatch) => void {
   return (batch) => {
     try {
       const line = `${JSON.stringify(batch)}\n`;
-      if (existsSync(path) && statSync(path).size + line.length > SINK_MAX_BYTES) rotate(path);
+      if (!existsSync(path)) mkdirSync(dirname(path), { recursive: true });
+      else if (statSync(path).size + line.length > SINK_MAX_BYTES) rotate(path);
       appendFileSync(path, line, { mode: 0o600 });
       // A file made earlier with wider rights is narrowed too.
       if (statSync(path).mode & 0o077) chmodSync(path, 0o600);
@@ -159,8 +164,14 @@ export function expressLogs(monitor: RequestRecorder): (req: ExpressReq, res: Ex
   };
 }
 
+/** What {@link honoLogs} reads of Hono's context; `hono` itself is not imported, so an app without it still type-checks. */
+interface HonoContext {
+  req: { method: string; path: string; matchedRoutes: ReadonlyArray<{ path: string }>; header(name: string): string | undefined };
+  res: { status: number };
+}
+
 /** Hono middleware: the same as {@link expressLogs}, with the matched route when there is one. */
-export function honoLogs(monitor: RequestRecorder): MiddlewareHandler {
+export function honoLogs(monitor: RequestRecorder): (c: HonoContext, next: () => Promise<void>) => Promise<void> {
   return async (c, next) => {
     const started = performance.now();
     let status = 500;
@@ -173,7 +184,8 @@ export function honoLogs(monitor: RequestRecorder): MiddlewareHandler {
         const handler = matched.length > 0 ? matched[matched.length - 1].path : "";
         monitor.request({
           method: c.req.method,
-          path: handler && handler !== "/*" ? handler : pathOnly(c.req.path),
+          // A path that ends in `*` is a middleware's (nothing else matched): the request's own path says more.
+          path: handler && !handler.endsWith("*") ? handler : pathOnly(c.req.path),
           status,
           durationMs: performance.now() - started,
           userAgent: c.req.header("user-agent"),

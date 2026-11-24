@@ -992,7 +992,8 @@ flowchart LR
 
 Only `warning`, `error` and `fatal` lines and requests with status 400 and above become findings. Everything else is only
 counted in `stats()`. A log line is grouped by its text with numbers, ids, hashes, dates and quoted values folded; a
-request by method, path pattern (`/users/:n`) and status.
+request by method, path pattern (`/users/:n`) and status. A JSON line or an object is grouped by its `msg`, `message` or
+`event` (and the message of its `err` or `error`), an `Error` by its first line and the file it came from.
 
 | Judgement | When |
 | --- | --- |
@@ -1019,7 +1020,7 @@ import express from 'express';
 const logs = createLogMonitor({
   service: 'billing',
   release: process.env.APP_VERSION,
-  onBatch: fileSink('./logs/findings.jsonl'), // one JSON line per batch, mode 0600, rotates at 5 MB, keeps 2
+  onBatch: fileSink('./logs/findings.jsonl'), // one JSON line per batch, mode 0600, makes the folder, rotates at 5 MB, keeps 2
 });
 captureConsole(logs, ['error', 'warn']); // returns a function that puts the originals back
 captureProcess(logs); // uncaught exceptions and unhandled rejections, recorded as fatal
@@ -1061,13 +1062,13 @@ your own patterns with `redact: [/ORDER-\d{6}/]`; every match becomes `[redacted
 
 | Option (`createLogMonitor`) | Default | Meaning |
 | --- | --- | --- |
-| `batchMinutes` | 15 | Minutes between batches; the timer never keeps the process alive |
+| `batchMinutes` | 15 | Minutes between batches, 1 to 10,080; the timer never keeps the process alive. Where a runtime refuses timers (a worker's module scope), call `flush()` yourself |
 | `include.levels` | `['warning', 'error', 'fatal']` | Levels that become findings |
 | `include.minStatus` | 400 | Lowest status that becomes a finding |
 | `noise` | `[]` | Your own noise: a string (substring) or a RegExp, tested against `GET /path 404` or `ERROR the folded message` |
 | `redact` | `[]` | Your own redaction patterns |
 | `limits.groups` | 500 | Groups held; the quietest is dropped and counted in `stats().dropped` |
-| `onBatch` | none | Called with `{ from, to, records, findings, alarms }`; an error it throws never reaches your app |
+| `onBatch` | none | Called with `{ from, to, records, findings, alarms }`; it may be async, and an error it throws or rejects with is counted in `stats().errors` and never reaches your app |
 | `service`, `release` | none | Attached to findings; a record can carry its own |
 | `cloud` | off | `true`, or `{ apiKey, dsn, minSeverity: 'warning', everyMinutes: 60, perBatch: 50, perDay: 1000 }` |
 
@@ -1081,7 +1082,7 @@ your own patterns with `redact: [/ORDER-\d{6}/]`; every match becomes `[redacted
 | Cloud: repeat | Once per 60 minutes while a finding has hits |
 
 Codmir bills stored events. In cloud mode each finding sent is one event, so `perDay` is your ceiling: 1,000 findings a
-day at most, and far fewer in practice, because a finding is sent once an hour and `noise` and `known` are not sent at all.
+day at most, and far fewer in practice, because a finding is sent at most once an hour, `known` only once and `noise` never.
 Local mode costs nothing.
 
 `logs.flush()` ends the open batch now; `logs.stop()` does that once more, stops the timer and ignores later records. A call
@@ -1552,8 +1553,8 @@ is tree-shaken, then compressed with gzip level 9. Importing less can only make 
 | `@codmir/sdk/tracing` | 28.3 kB | 9.9 kB |
 | `@codmir/sdk/browser` | 34.0 kB | 11.9 kB |
 | `@codmir/sdk/replay` | 29.8 kB, plus 75.7 kB for rrweb | 10.4 kB, plus 23.4 kB for rrweb |
-| `@codmir/sdk/logs` | 15.4 kB | 6.8 kB |
-| `@codmir/sdk/logs/node` | 2.2 kB | 1.1 kB |
+| `@codmir/sdk/logs` | 15.8 kB | 7.0 kB |
+| `@codmir/sdk/logs/node` | 2.9 kB | 1.6 kB |
 
 rrweb is a separate chunk that loads only when `startReplay()` decides to record. The log monitor loads the error client
 only when `cloud` is on.
