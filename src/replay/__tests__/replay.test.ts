@@ -18,6 +18,11 @@ const replayCalls = () => calls.filter((c) => c.url === REPLAY_URL);
 const ingestCalls = () => calls.filter((c) => c.url === `${DSN}/ingest`);
 const allReplayText = () => replayCalls().map((c) => c.raw).join("\n");
 
+type SnapshotNode = { id: number; attributes?: Record<string, string>; childNodes?: SnapshotNode[] };
+type SentEvent = { type: number; data: { href?: string; source?: number; id?: number; text?: string; node?: SnapshotNode } };
+/** Every rrweb event uploaded so far, in order. */
+const sentEvents = (): SentEvent[] => replayCalls().flatMap((c) => c.body.events as SentEvent[]);
+
 beforeEach(() => {
   calls = [];
   respond = () => new Response(JSON.stringify({ stored: true }), { status: 202 });
@@ -120,6 +125,74 @@ describe("masking (default config)", () => {
     expect(text).not.toContain("card-4242-4242");
     expect(text).not.toContain("block-secret-subtree");
     expect(text).toContain("public-visible-text");
+  });
+});
+
+describe("input mask length", () => {
+  const LENGTHS = [1, 3, 16, 17, 40];
+
+  const fixedMask = async () => {
+    const { DEFAULT_PRIVACY, toRrwebPrivacy } = await import("../privacy");
+    return toRrwebPrivacy(DEFAULT_PRIVACY).maskInputFn("s");
+  };
+
+  /** The text of every uploaded input event, by the `id` attribute of the field it was typed into. */
+  function typedTexts(): Record<string, string[]> {
+    const fields = new Map<number, string>();
+    const walk = (node: SnapshotNode) => {
+      if (node.attributes?.id) fields.set(node.id, node.attributes.id);
+      node.childNodes?.forEach(walk);
+    };
+    const events = sentEvents();
+    for (const e of events) if (e.type === 2 && e.data.node) walk(e.data.node);
+    const texts: Record<string, string[]> = {};
+    for (const e of events) {
+      if (e.type !== 3 || e.data.source !== 5) continue;
+      (texts[fields.get(e.data.id as number) ?? "unknown"] ??= []).push(e.data.text as string);
+    }
+    return texts;
+  }
+
+  it("masks every non-empty value to one length, whatever its own, and keeps an empty value empty", async () => {
+    const { DEFAULT_PRIVACY, toRrwebPrivacy } = await import("../privacy");
+    const { maskInputFn } = toRrwebPrivacy(DEFAULT_PRIVACY);
+    const masks = LENGTHS.map((n) => maskInputFn("s".repeat(n)));
+    expect(masks).toEqual(LENGTHS.map(() => masks[0]));
+    expect(masks[0]).toMatch(/^\*+$/);
+    expect(maskInputFn("")).toBe("");
+  });
+
+  it("uploads that one mask for a typed value of any length and for a password, and an emptied field as empty", async () => {
+    useFakeClock();
+    document.body.innerHTML = `${LENGTHS.map((n) => `<input id="text-${n}" type="text">`).join("")}<input id="pw" type="password">`;
+    const { replay } = await load({ replaysSessionSampleRate: 1 });
+    replay.startReplay();
+    await settle();
+
+    for (const n of LENGTHS) type(document.getElementById(`text-${n}`) as HTMLInputElement, "s".repeat(n));
+    const pw = document.getElementById("pw") as HTMLInputElement;
+    type(pw, "hunter2-secret");
+    type(pw, "");
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    const mask = await fixedMask();
+    expect(typedTexts()).toEqual({ ...Object.fromEntries(LENGTHS.map((n) => [`text-${n}`, [mask]])), pw: [mask, ""] });
+  });
+
+  it("masks a password to the same mask with maskAllInputs off, while an unmasked field records as typed", async () => {
+    useFakeClock();
+    document.body.innerHTML = `<input id="pw-1" type="password"><input id="pw-40" type="password"><input id="name" type="text">`;
+    const { replay } = await load({ replaysSessionSampleRate: 1 });
+    replay.startReplay({ privacy: { maskAllInputs: false, maskInputTypes: [] } });
+    await settle();
+
+    type(document.getElementById("pw-1") as HTMLInputElement, "s");
+    type(document.getElementById("pw-40") as HTMLInputElement, "s".repeat(40));
+    type(document.getElementById("name") as HTMLInputElement, "ordinary-typed-text");
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    const mask = await fixedMask();
+    expect(typedTexts()).toEqual({ "pw-1": [mask], "pw-40": [mask], name: ["ordinary-typed-text"] });
   });
 });
 
@@ -415,5 +488,123 @@ describe("upload helpers", () => {
     expect((replayCalls()[0].init as { keepalive?: boolean }).keepalive).toBe(
       replayCalls()[0].raw.length <= 60_000 ? true : undefined,
     );
+  });
+});
+
+describe("the page's address in uploads", () => {
+  const PAGE = "https://app.example.com/a/b?access_token=QRY123&x=1#id_token=FRAG456";
+  const SCRUBBED = "https://app.example.com/a/b";
+  /** vitest's jsdom environment exposes its JSDOM; `reconfigure` moves the page to another address without navigating. */
+  const jsdom = () => (globalThis as unknown as { jsdom: { reconfigure(options: { url: string }): void } }).jsdom;
+  /** The page's tokens found anywhere in `text`. */
+  const leaked = (text: string) => ["QRY123", "FRAG456"].filter((token) => text.includes(token));
+  const metaHrefs = () => sentEvents().filter((e) => e.type === 4).map((e) => e.data.href);
+
+  let original: string;
+  beforeEach(() => {
+    original = window.location.href;
+    jsdom().reconfigure({ url: PAGE });
+  });
+  afterEach(() => jsdom().reconfigure({ url: original }));
+
+  it("a Meta event uploads with origin and path only, credentials dropped, width and height kept", async () => {
+    const { buildSegmentBody } = await import("../upload");
+    const events = [
+      { type: 4, timestamp: 1, data: { href: PAGE, width: 1024, height: 768 } },
+      { type: 4, timestamp: 2, data: { href: "https://user:pw@app.example.com/a/b?access_token=QRY123#id_token=FRAG456", width: 1, height: 2 } },
+    ];
+    const body = buildSegmentBody({}, { replayId: CONTRACT_EXAMPLE.replay_id, sequenceNumber: 0, events, errorIds: [] });
+    expect(body.events.map((e) => e.data)).toEqual([
+      { href: SCRUBBED, width: 1024, height: 768 },
+      { href: SCRUBBED, width: 1, height: 2 },
+    ]);
+    expect(leaked(JSON.stringify(body))).toEqual([]);
+    expect(ReplaySegmentUploadSchema.safeParse(body).success).toBe(true);
+    expect(events.map((e) => e.data.href)).toEqual([PAGE, "https://user:pw@app.example.com/a/b?access_token=QRY123#id_token=FRAG456"]);
+  });
+
+  // Every path that sends a segment; `metas` is how many Meta events (the page's address) it uploads. The page has no
+  // fragment-only link: rrweb stores `href="#x"` resolved against the page's full address, and the DOM is page content.
+  const paths: Array<[string, Record<string, unknown>, number, (m: Awaited<ReturnType<typeof load>>) => Promise<void>]> = [
+    ["the 30 s timer", { replaysSessionSampleRate: 1 }, 1, async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    }],
+    ["the 5,000-event cap", { replaysSessionSampleRate: 1 }, 1, async () => {
+      const { record } = await import("@rrweb/record");
+      for (let i = 0; i < 5000; i++) record.addCustomEvent("tick", { i });
+      await vi.advanceTimersByTimeAsync(0);
+    }],
+    ["pagehide (keepalive)", { replaysSessionSampleRate: 1 }, 1, async () => {
+      window.dispatchEvent(new Event("pagehide"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(replayCalls().map((c) => (c.init as { keepalive?: boolean }).keepalive)).toEqual([true]);
+    }],
+    ["visibilitychange to hidden (keepalive)", { replaysSessionSampleRate: 1 }, 1, async () => {
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(replayCalls().map((c) => (c.init as { keepalive?: boolean }).keepalive)).toEqual([true]);
+    }],
+    ["stopReplay", { replaysSessionSampleRate: 1 }, 1, async ({ replay }) => {
+      replay.stopReplay();
+      await vi.advanceTimersByTimeAsync(0);
+    }],
+    ["an error in on-error mode", { replaysOnErrorSampleRate: 1 }, 1, async ({ overseer }) => {
+      overseer.captureException(new Error("boom"));
+      await vi.advanceTimersByTimeAsync(0);
+    }],
+    ["the post-error window and the next buffer's error", { replaysOnErrorSampleRate: 1 }, 2, async ({ overseer }) => {
+      overseer.captureException(new Error("first"));
+      await vi.advanceTimersByTimeAsync(30_000); // the follow-up segment, then a new buffer with its own full snapshot
+      overseer.captureException(new Error("second"));
+      await vi.advanceTimersByTimeAsync(0);
+    }],
+  ];
+
+  it.each(paths)("no token anywhere in the uploads from %s", async (_path, config, metas, act) => {
+    useFakeClock();
+    document.body.innerHTML = `<h1>Account</h1><a href="/settings">Settings</a><p>signed-in-page</p>`;
+    const loaded = await load(config);
+    expect(loaded.replay.startReplay()).toBeTruthy();
+    await settle();
+    click();
+    await act(loaded);
+
+    expect(replayCalls().length).toBeGreaterThan(0);
+    expect(leaked(allReplayText())).toEqual([]);
+    expect(metaHrefs()).toEqual(Array.from({ length: metas }, () => SCRUBBED));
+    expect(allReplayText()).toContain("signed-in-page");
+  });
+
+  const modes: Array<[string, Record<string, number>, (recorder: { markError(id: string): void }) => Promise<void>]> = [
+    ["session", { sessionSampleRate: 1 }, async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    }],
+    ["on-error", { sessionSampleRate: 0, errorSampleRate: 1 }, async (recorder) => recorder.markError("e1")],
+  ];
+
+  it.each(modes)("leaves the events the recorder holds as they were in %s mode: only the uploaded copy is scrubbed", async (_mode, rates, flush) => {
+    useFakeClock();
+    const { replay } = await load();
+    const recorder = replay.createReplayRecorder({ ...rates, upload: { url: REPLAY_URL, key: "osk_test" } });
+    // onSegment gets the very event objects the upload is then built from, before it is built.
+    const held: Array<{ events: unknown[]; before: string }> = [];
+    recorder.onSegment((segment) => held.push({ events: segment.events, before: JSON.stringify(segment.events) }));
+    try {
+      expect(recorder.start()).toBeTruthy();
+      await settle();
+      click();
+      await flush(recorder);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(held).toHaveLength(1);
+      expect(replayCalls()).toHaveLength(1);
+      expect(JSON.stringify(held[0].events)).toBe(held[0].before);
+      const heldHrefs = (held[0].events as SentEvent[]).filter((e) => e.type === 4).map((e) => e.data.href);
+      expect(heldHrefs).toEqual([PAGE]);
+      expect(metaHrefs()).toEqual([SCRUBBED]);
+    } finally {
+      recorder.stop();
+    }
   });
 });

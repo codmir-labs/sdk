@@ -56,7 +56,7 @@ The real output of `npm run smoke`:
 Phase 1: tracesSampleRate=1
   [sampled] capture: 001-transaction.json transaction "GET /api/demo" with 2 child spans
   [sampled] capture: 002-error.json error "Server demo error: /api/boom"
-  [sampled] capture: 003-replay.json replay 80ba21eb-852d-4d5e-846e-c2a92afe8adc segment 0 (42 events)
+  [sampled] capture: 003-replay.json replay 80ba21eb-852d-4d5e-846e-c2a92afe8adc segment 0 (13 events)
   [sampled] capture: 004-error.json error "Browser demo error: Throw button" (replay 80ba21eb-852d-4d5e-846e-c2a92afe8adc)
   [sampled] capture: 005-replay.json replay 80ba21eb-852d-4d5e-846e-c2a92afe8adc segment 1 (1 events)
 Phase 2: tracesSampleRate=0
@@ -72,9 +72,9 @@ PASS  both outbound calls carried a traceparent of this trace, naming their own 
 PASS  exactly 2 errors, one from the server and one from the browser  (2)
 PASS  the browser error carries tags.replay_id  (80ba21eb-852d-4d5e-846e-c2a92afe8adc)
 PASS  the server error has no replay_id
-PASS  at least 1 replay segment matches that replay_id  (2 segment(s), 43 events)
+PASS  at least 1 replay segment matches that replay_id  (2 segment(s), 14 events)
 PASS  the segment links the browser error (error_event_ids)
-PASS  the replay recorded the typing, as asterisks only  (31 input event(s))
+PASS  the replay recorded the typing, as asterisks only  (2 input event(s))
 PASS  the typed password appears nowhere in any capture
 PASS  the typed text field value appears nowhere in any capture
 PASS  tracesSampleRate=0: no transaction  (0)

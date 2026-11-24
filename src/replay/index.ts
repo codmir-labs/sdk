@@ -39,6 +39,7 @@ import {
   chunkEvents,
   postSegment,
   replayEndpoint,
+  RRWEB_META,
   type RrwebEvent,
   type UploadTarget,
 } from "./upload";
@@ -221,9 +222,6 @@ const DEFAULT_CONFIG: Omit<ReplayConfig, "privacy" | "upload" | "beforeSend"> = 
   bufferDuration: 60_000,
   postErrorDuration: 30_000,
 };
-
-/** rrweb event types the recorder reads. */
-const RRWEB_META = 4;
 
 type Mode = "idle" | "session" | "buffer" | "post-error";
 type RrwebRecord = typeof import("@rrweb/record").record;
