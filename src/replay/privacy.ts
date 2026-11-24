@@ -38,6 +38,17 @@ export interface RrwebPrivacyOptions {
 /** What every masked, non-empty input value is recorded as, whatever its length. */
 const INPUT_MASK = "*".repeat(8);
 
+/**
+ * What `maskAllInputs` masks: the list rrweb 2.2.0 masks for its own `maskAllInputs: true`, then `hidden` and `file`,
+ * which that list leaves out, so a hidden field's value (a CSRF token, an id) and a picked file's name would record as
+ * they are. rrweb ignores `maskInputOptions` while its own flag is on, so it gets this list with the flag off.
+ */
+const EVERY_INPUT = [
+  "color", "date", "datetime-local", "email", "month", "number", "range", "search", "tel", "text", "time", "url",
+  "week", "textarea", "select", "password",
+  "hidden", "file",
+];
+
 const join = (selectors: string[]): string | undefined => {
   const parts = selectors.map((s) => s.trim()).filter(Boolean);
   return parts.length > 0 ? parts.join(", ") : undefined;
@@ -51,11 +62,13 @@ export function resolvePrivacy(privacy?: Partial<ReplayPrivacyConfig>): ReplayPr
 export function toRrwebPrivacy(privacy: ReplayPrivacyConfig): RrwebPrivacyOptions {
   const maskInputOptions: Record<string, boolean> = {};
   for (const type of privacy.maskInputTypes) maskInputOptions[type] = true;
+  if (privacy.maskAllInputs) for (const type of EVERY_INPUT) maskInputOptions[type] = true;
   // Never negotiable: a password is masked even with `maskAllInputs: false` and an empty `maskInputTypes`.
   maskInputOptions.password = true;
 
   return {
-    maskAllInputs: privacy.maskAllInputs,
+    // Off whatever the config says: `maskInputOptions` above already holds every input when `maskAllInputs` is on.
+    maskAllInputs: false,
     maskInputOptions,
     maskTextSelector: join(privacy.maskSelectors),
     blockSelector: join(privacy.blockSelectors),

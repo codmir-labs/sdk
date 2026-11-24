@@ -19,7 +19,18 @@ const ingestCalls = () => calls.filter((c) => c.url === `${DSN}/ingest`);
 const allReplayText = () => replayCalls().map((c) => c.raw).join("\n");
 
 type SnapshotNode = { id: number; attributes?: Record<string, string>; childNodes?: SnapshotNode[] };
-type SentEvent = { type: number; data: { href?: string; source?: number; id?: number; text?: string; node?: SnapshotNode } };
+type SentEvent = {
+  type: number;
+  data: {
+    href?: string;
+    source?: number;
+    id?: number;
+    text?: string;
+    node?: SnapshotNode;
+    adds?: Array<{ node: SnapshotNode }>;
+    attributes?: Array<{ id: number; attributes: Record<string, unknown> }>;
+  };
+};
 /** Every rrweb event uploaded so far, in order. */
 const sentEvents = (): SentEvent[] => replayCalls().flatMap((c) => c.body.events as SentEvent[]);
 
@@ -193,6 +204,96 @@ describe("input mask length", () => {
 
     const mask = await fixedMask();
     expect(typedTexts()).toEqual({ "pw-1": [mask], "pw-40": [mask], name: ["ordinary-typed-text"] });
+  });
+});
+
+describe("hidden and file inputs", () => {
+  const configs: Array<[string, Record<string, unknown>]> = [
+    ["the default config", {}],
+    ["maskAllInputs: true with no masked types", { maskAllInputs: true, maskInputTypes: [] }],
+  ];
+
+  /** Every value an input was recorded with: its `value` attribute in snapshots, added nodes and changes, and input events. */
+  function inputValues(): string[] {
+    const nodes = (n: SnapshotNode): SnapshotNode[] => [n, ...(n.childNodes ?? []).flatMap(nodes)];
+    const values: string[] = [];
+    const take = (attributes?: Record<string, unknown>) => {
+      if (attributes && typeof attributes.value === "string") values.push(attributes.value);
+    };
+    for (const e of sentEvents()) {
+      if (e.type === 2 && e.data.node) nodes(e.data.node).forEach((n) => take(n.attributes));
+      if (e.type !== 3) continue;
+      if (e.data.source === 0) {
+        e.data.adds?.forEach((add) => nodes(add.node).forEach((n) => take(n.attributes)));
+        e.data.attributes?.forEach((change) => take(change.attributes));
+      }
+      if (e.data.source === 5) values.push(e.data.text as string);
+    }
+    return values;
+  }
+
+  it("hands rrweb every input type, hidden and file included, with rrweb's own maskAllInputs off", async () => {
+    const { DEFAULT_PRIVACY, toRrwebPrivacy } = await import("../privacy");
+    // rrweb 2.2.0's list for its own maskAllInputs: true, which ignores maskInputOptions and has no hidden or file.
+    const rrwebList = ["color", "date", "datetime-local", "email", "month", "number", "range", "search", "tel", "text"];
+    rrwebList.push("time", "url", "week", "textarea", "select", "password");
+    const on = toRrwebPrivacy(DEFAULT_PRIVACY);
+    expect(on.maskAllInputs).toBe(false);
+    expect(Object.keys(on.maskInputOptions).sort()).toEqual([...rrwebList, "hidden", "file", "credit-card"].sort());
+    const off = toRrwebPrivacy({ ...DEFAULT_PRIVACY, maskAllInputs: false, maskInputTypes: ["email"] });
+    expect(off.maskAllInputs).toBe(false);
+    expect(off.maskInputOptions).toEqual({ email: true, password: true });
+  });
+
+  it.each(configs)("no part of a hidden input's value leaves the page under %s", async (_config, privacy) => {
+    useFakeClock();
+    document.body.innerHTML = `<input id="csrf" type="hidden" value="csrf-abc123"><input type="HIDDEN" value="upper-777"><input id="was-text" type="text">`;
+    const { replay } = await load({ replaysSessionSampleRate: 1 });
+    expect(replay.startReplay({ privacy })).toBeTruthy();
+    await settle();
+
+    const added = document.createElement("input");
+    added.type = "hidden";
+    added.value = "added-456";
+    document.body.appendChild(added);
+    await vi.advanceTimersByTimeAsync(0);
+    const csrf = document.getElementById("csrf") as HTMLInputElement;
+    csrf.setAttribute("value", "attr-789");
+    await vi.advanceTimersByTimeAsync(0);
+    // A script setting the property: rrweb hears its hooked setter and the value attribute the property reflects to.
+    csrf.value = "prop-321";
+    await vi.advanceTimersByTimeAsync(0);
+    // A typed field turned hidden: the browser moves the typed value into its value attribute.
+    const wasText = document.getElementById("was-text") as HTMLInputElement;
+    type(wasText, "typed-654");
+    await vi.advanceTimersByTimeAsync(0);
+    wasText.type = "hidden";
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    const text = allReplayText();
+    expect(["csrf-abc123", "upper-777", "added-456", "attr-789", "prop-321", "typed-654"].filter((v) => text.includes(v))).toEqual([]);
+    const values = inputValues();
+    // The two in the snapshot, the added one, its input event, two changes on csrf and its input event, the typed field's
+    // input event, and that field's change to hidden.
+    expect(values).toHaveLength(9);
+    expect(new Set(values)).toEqual(new Set(["********"]));
+  });
+
+  it.each(configs)("a picked file's name never leaves the page under %s", async (_config, privacy) => {
+    useFakeClock();
+    document.body.innerHTML = `<input id="upload" type="file">`;
+    const { replay } = await load({ replaysSessionSampleRate: 1 });
+    expect(replay.startReplay({ privacy })).toBeTruthy();
+    await settle();
+
+    // jsdom cannot pick a file. A browser reports one as C:\fakepath\<name>, which rrweb reads from `value` on change.
+    const upload = document.getElementById("upload") as HTMLInputElement;
+    Object.defineProperty(upload, "value", { configurable: true, get: () => "C:\\fakepath\\tax-return-2025.pdf" });
+    upload.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(allReplayText()).not.toContain("tax-return");
+    expect(inputValues()).toEqual(["********"]);
   });
 });
 
@@ -523,8 +624,8 @@ describe("the page's address in uploads", () => {
     expect(events.map((e) => e.data.href)).toEqual([PAGE, "https://user:pw@app.example.com/a/b?access_token=QRY123#id_token=FRAG456"]);
   });
 
-  // Every path that sends a segment; `metas` is how many Meta events (the page's address) it uploads. The page has no
-  // fragment-only link: rrweb stores `href="#x"` resolved against the page's full address, and the DOM is page content.
+  // Every path that sends a segment; `metas` is how many Meta events (the page's address) it uploads. The page holds a
+  // fragment-only link, which rrweb records resolved against the page's full address, query included, until it is cut.
   const paths: Array<[string, Record<string, unknown>, number, (m: Awaited<ReturnType<typeof load>>) => Promise<void>]> = [
     ["the 30 s timer", { replaysSessionSampleRate: 1 }, 1, async () => {
       await vi.advanceTimersByTimeAsync(30_000);
@@ -563,7 +664,7 @@ describe("the page's address in uploads", () => {
 
   it.each(paths)("no token anywhere in the uploads from %s", async (_path, config, metas, act) => {
     useFakeClock();
-    document.body.innerHTML = `<h1>Account</h1><a href="/settings">Settings</a><p>signed-in-page</p>`;
+    document.body.innerHTML = `<h1>Account</h1><a href="#top">Top</a><a href="/settings">Settings</a><p>signed-in-page</p>`;
     const loaded = await load(config);
     expect(loaded.replay.startReplay()).toBeTruthy();
     await settle();
@@ -606,5 +707,196 @@ describe("the page's address in uploads", () => {
     } finally {
       recorder.stop();
     }
+  });
+
+  describe("links and sources that point at the page", () => {
+    /** Origin and path of the addresses `history` moves the page to below; each query holds a token too. */
+    const NAV = "https://app.example.com/a/c";
+    const LATE = "https://app.example.com/d";
+    const tokens = (text: string) => ["QRY123", "FRAG456", "NAV789", "REPL321", "LATE555"].filter((t) => text.includes(t));
+
+    /** Every uploaded value of attribute `name`: in full snapshots, in added nodes, and in attribute changes. */
+    function recorded(name: string) {
+      const nodes = (n: SnapshotNode): SnapshotNode[] => [n, ...(n.childNodes ?? []).flatMap(nodes)];
+      const values = (tree: SnapshotNode) => nodes(tree).flatMap((n) => (n.attributes && name in n.attributes ? [n.attributes[name]] : []));
+      const events = sentEvents();
+      const mutations = events.filter((e) => e.type === 3 && e.data.source === 0);
+      return {
+        snapshot: events.flatMap((e) => (e.type === 2 && e.data.node ? values(e.data.node) : [])),
+        added: mutations.flatMap((e) => (e.data.adds ?? []).flatMap((add) => values(add.node))),
+        changed: mutations.flatMap((e) => (e.data.attributes ?? []).flatMap((c) => (name in c.attributes ? [c.attributes[name]] : []))),
+      };
+    }
+
+    // Each fragment-only case: the element, its attribute, the value written, and what it must upload as.
+    const cases: Array<[string, string, string, string]> = [
+      ["a", "href", "#top", `${SCRUBBED}#top`],
+      ["a", "href", "#", `${SCRUBBED}#`],
+      ["img", "src", "#", `${SCRUBBED}#`],
+      ["img", "srcset", "#a 1x, ?w=2 2x", `${SCRUBBED}#a 1x, ${SCRUBBED}?w=2 2x`],
+      ["table", "background", "#", `${SCRUBBED}#`],
+      ["object", "data", "#", `${SCRUBBED}#`],
+    ];
+
+    it.each(cases)("<%s %s=%j> uploads without the page's query from the full snapshot, an added node and a change", async (tag, name, value, expected) => {
+      useFakeClock();
+      document.body.innerHTML = `<${tag} id="snap" ${name}="${value}"></${tag}><${tag} id="change" ${name}="/start"></${tag}>`;
+      const { replay } = await load({ replaysSessionSampleRate: 1 });
+      expect(replay.startReplay()).toBeTruthy();
+      await settle();
+      const added = document.createElement(tag);
+      added.setAttribute(name, value);
+      document.body.appendChild(added);
+      document.getElementById("change")?.setAttribute(name, value);
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(recorded(name)).toEqual({ snapshot: [expected, "https://app.example.com/start"], added: [expected], changed: [expected] });
+      expect(tokens(allReplayText())).toEqual([]);
+    });
+
+    it("leaves every other value as rrweb recorded it: its own query, another path or site, a form action, CSS", async () => {
+      useFakeClock();
+      document.body.innerHTML = [
+        `<a id="empty" href="">empty</a><a id="own-query" href="?tab=2">tab</a><a id="other-path" href="next">next</a>`,
+        `<a id="other-site" href="https://other.example.com/a/b?x=1#top">other</a><form id="form" action="#done"></form>`,
+        `<svg><use id="use" href="#icon"></use></svg><div id="inline" style="background: url(#bg)"></div>`,
+        `<style id="css">.x { background: url(#css) }</style>`,
+      ].join("");
+      const { replay } = await load({ replaysSessionSampleRate: 1 });
+      expect(replay.startReplay()).toBeTruthy();
+      await settle();
+      document.getElementById("own-query")?.setAttribute("href", "?tab=3");
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      const byId = new Map<string, Record<string, string>>();
+      const walk = (n: SnapshotNode) => {
+        if (n.attributes?.id) byId.set(n.attributes.id, n.attributes);
+        n.childNodes?.forEach(walk);
+      };
+      sentEvents().forEach((e) => e.type === 2 && e.data.node && walk(e.data.node));
+      expect(byId.get("empty")?.href).toBe("");
+      expect(byId.get("own-query")?.href).toBe(`${SCRUBBED}?tab=2`);
+      expect(byId.get("other-path")?.href).toBe("https://app.example.com/a/next");
+      expect(byId.get("other-site")?.href).toBe("https://other.example.com/a/b?x=1#top");
+      expect(byId.get("form")?.action).toBe("#done");
+      expect(byId.get("use")?.href).toBe("#icon");
+      expect(byId.get("inline")?.style).toBe("background: url(https://app.example.com/a/#bg)");
+      expect(byId.get("css")?._cssText).toContain("url(#css)");
+      expect(recorded("href").changed).toEqual([`${SCRUBBED}?tab=3`]);
+      expect(tokens(allReplayText())).toEqual([]);
+    });
+
+    it("cuts a link in a later segment, which has no Meta event of its own", async () => {
+      useFakeClock();
+      document.body.innerHTML = `<a href="#top">Top</a>`;
+      const { replay } = await load({ replaysSessionSampleRate: 1 });
+      expect(replay.startReplay()).toBeTruthy();
+      await settle();
+      await vi.advanceTimersByTimeAsync(30_000);
+      const later = document.createElement("a");
+      later.setAttribute("href", "#later");
+      document.body.appendChild(later);
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(replayCalls().map((c) => (c.body.events as SentEvent[]).filter((e) => e.type === 4).length)).toEqual([1, 0]);
+      expect(recorded("href")).toEqual({ snapshot: [`${SCRUBBED}#top`], added: [`${SCRUBBED}#later`], changed: [] });
+      expect(tokens(allReplayText())).toEqual([]);
+    });
+
+    it("cuts the query of the address the page has when each event records, after pushState and replaceState", async () => {
+      useFakeClock();
+      document.body.innerHTML = `<a id="top" href="#top">Top</a><img id="img" srcset="#a 1x">`;
+      const { replay } = await load({ replaysSessionSampleRate: 1 });
+      expect(replay.startReplay()).toBeTruthy();
+      await settle();
+      history.pushState({}, "", "/a/c?session=NAV789&y=2");
+      const after = document.createElement("a");
+      after.setAttribute("href", "#after");
+      document.body.appendChild(after);
+      document.getElementById("top")?.setAttribute("href", "#changed");
+      await vi.advanceTimersByTimeAsync(0);
+      history.replaceState({}, "", "?other=REPL321");
+      document.getElementById("img")?.setAttribute("srcset", "#z 1x, ?w=2 2x");
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(metaHrefs()).toEqual([SCRUBBED]);
+      expect(recorded("href")).toEqual({ snapshot: [`${SCRUBBED}#top`], added: [`${NAV}#after`], changed: [`${NAV}#changed`] });
+      expect(recorded("srcset")).toEqual({ snapshot: [`${SCRUBBED}#a 1x`], added: [], changed: [`${NAV}#z 1x, ${NAV}?w=2 2x`] });
+      expect(tokens(allReplayText())).toEqual([]);
+    });
+
+    it("cuts the query in the on-error buffer, across a checkout taken after a navigation and a navigation after it", async () => {
+      useFakeClock();
+      document.body.innerHTML = `<a id="top" href="#top">Top</a>`;
+      const { overseer, replay } = await load({ replaysOnErrorSampleRate: 1 });
+      expect(replay.startReplay()).toBeTruthy();
+      await settle();
+      history.pushState({}, "", "/a/c?session=NAV789&y=2");
+      await vi.advanceTimersByTimeAsync(31_000);
+      click(); // rrweb checks for a checkout when an event arrives: a Meta and a full snapshot, at the new address
+      await vi.advanceTimersByTimeAsync(0);
+      history.pushState({}, "", "/d?late=LATE555");
+      const late = document.createElement("a");
+      late.setAttribute("href", "#late");
+      document.body.appendChild(late);
+      await vi.advanceTimersByTimeAsync(0);
+      overseer.captureException(new Error("boom"));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(replayCalls()).toHaveLength(1);
+      expect(metaHrefs()).toEqual([SCRUBBED, NAV]);
+      expect(recorded("href")).toEqual({ snapshot: [`${SCRUBBED}#top`, `${NAV}#top`], added: [`${LATE}#late`], changed: [] });
+      expect(tokens(allReplayText())).toEqual([]);
+    });
+
+    it("cuts only a value that is the page's address, alone or with a fragment, and copies instead of mutating", async () => {
+      const { dropPageQuery } = await import("../page-query");
+      const page = "https://app.example.com/a/b?access_token=QRY123&x=1";
+      const el = (attributes: Record<string, string>, id: number) => ({ type: 2, tagName: "a", attributes, childNodes: [], id });
+      const kept = el({ href: `${page}&tab=2`, title: `${page}#top` }, 3);
+      const snapshot = {
+        type: 2,
+        timestamp: 1,
+        data: {
+          node: {
+            type: 0,
+            id: 1,
+            childNodes: [
+              el({ href: `${page}#top`, "xlink:href": page, srcset: `${page}#a 1x, ${page} 2x, ${page}&w=2 3x`, HREF: `${page}#up` }, 2),
+              kept,
+              el({ href: `${page}2`, src: `https://other.example.com/?access_token=QRY123` }, 4),
+            ],
+          },
+        },
+      };
+      const mutation = {
+        type: 3,
+        timestamp: 2,
+        data: {
+          source: 0,
+          texts: [],
+          removes: [],
+          adds: [{ parentId: 1, nextId: null, node: el({ src: `${page}#` }, 5) }],
+          attributes: [{ id: 2, attributes: { href: `${page}#x`, style: { color: "red" }, title: null } }],
+        },
+      };
+      const before = JSON.stringify([snapshot, mutation]);
+
+      const out = dropPageQuery(snapshot, `${page}#id_token=FRAG456`) as typeof snapshot;
+      expect(out.data.node.childNodes.map((n) => n.attributes)).toEqual([
+        { href: `${SCRUBBED}#top`, "xlink:href": SCRUBBED, srcset: `${SCRUBBED}#a 1x, ${SCRUBBED} 2x, ${page}&w=2 3x`, HREF: `${SCRUBBED}#up` },
+        { href: `${page}&tab=2`, title: `${page}#top` },
+        { href: `${page}2`, src: "https://other.example.com/?access_token=QRY123" },
+      ]);
+      expect(out.data.node.childNodes[1]).toBe(kept);
+      const changed = dropPageQuery(mutation, page) as typeof mutation;
+      expect(changed.data.adds[0].node.attributes).toEqual({ src: `${SCRUBBED}#` });
+      expect(changed.data.attributes[0].attributes).toEqual({ href: `${SCRUBBED}#x`, style: { color: "red" }, title: null });
+      expect(JSON.stringify([snapshot, mutation])).toBe(before);
+      // Nothing to cut: no query in the page's address, or an event that holds no attributes.
+      expect(dropPageQuery(snapshot, SCRUBBED)).toBe(snapshot);
+      const meta = { type: 4, timestamp: 3, data: { href: page } };
+      expect(dropPageQuery(meta, page)).toBe(meta);
+    });
   });
 });
