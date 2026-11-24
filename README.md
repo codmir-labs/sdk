@@ -72,7 +72,7 @@ npm install @codmir/sdk
 - [Troubleshooting](#troubleshooting)
 - [FAQ](#faq)
 - [Repository layout](#repository-layout)
-- [Development](#development)
+- [Development](#development): [releasing](#releasing)
 - [License](#license)
 
 </details>
@@ -1553,7 +1553,8 @@ To [`packages/agent-kit`](packages/agent-kit), a private workspace in this repo 
 | [`packages/agent-kit/`](packages/agent-kit) | `@codmir/agent-kit`: agent runtime, council, serverless, task-runner protocol, AI-call monitoring, MCP client and framework task helpers; private, never published |
 | [`scripts/`](scripts) | `check-dist-types.mjs` (every export target exists after a build) and `publish.sh` (manual publish) |
 | [`docs/assets/`](docs/assets) | This page's hero and icons |
-| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Typecheck, lint, tests, build and dist checks on Node 18, 20 and 22, the example smoke on Node 20, and releases with semantic-release |
+| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Typecheck, lint, tests, build and dist checks on Node 18, 20 and 22 and the example smoke on Node 20, on every push and pull request to `main`; the release job, with semantic-release, runs only when a maintainer dispatches the workflow by hand ([Releasing](#releasing)) |
+| [`.github/release/`](.github/release) | `no-downgrade.cjs`, the semantic-release plugin that refuses a version not above npm `latest`, and the tests of it and of the release job |
 | [CHANGELOG.md](CHANGELOG.md) | Released and unreleased changes |
 | [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) | Migrating from the older agent SDK API |
 | [AI_REFERENCE.md](AI_REFERENCE.md) | An API client reference written for AI assistants |
@@ -1573,7 +1574,7 @@ npm test
 | --- | --- |
 | `npm run build` | tsup: every entry point as ESM and CommonJS with type declarations |
 | `npm run dev` | The same build in watch mode |
-| `npm test` | Vitest: the SDK's tests and the Node smoke example's (`packages/` has its own) |
+| `npm test` | Vitest: the SDK's tests, the Node smoke example's and the release checks in `.github/release/` (`packages/` has its own) |
 | `npm run test:agent-kit` | The `packages/agent-kit` tests |
 | `npm run lint` | ESLint over `src/` |
 | `npm run typecheck` | `tsc --noEmit` |
@@ -1581,6 +1582,20 @@ npm test
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, and report bugs in
 [GitHub Issues](https://github.com/codmir-labs/sdk/issues).
+
+### Releasing
+
+A push or a merge to `main` runs the CI checks and never releases. A maintainer releases by hand: in GitHub
+Actions, run the **CI** workflow on `main` (**Run workflow**, or `gh workflow run ci.yml --ref main`). Once the build
+matrix passes, the release job runs semantic-release. It takes the next version from the conventional commits since
+the last `v*` tag, updates `CHANGELOG.md` and `package.json`, tags the release, publishes it to npm and creates a
+GitHub release.
+
+The release refuses any version that is not above the npm `latest` of `@codmir/sdk`, prereleases included. The check
+is [`.github/release/no-downgrade.cjs`](.github/release/no-downgrade.cjs), a semantic-release plugin listed in the
+`release.plugins` of [`package.json`](package.json). A refusal names both versions, and it usually means that the
+`v*` tag of the version on `latest` is missing: tag the commit that version was published from
+(`npm view @codmir/sdk@<version> gitHead`) as `v<version>`, push the tag and run the workflow again.
 
 ## License
 

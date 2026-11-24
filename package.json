@@ -266,6 +266,7 @@
     ],
     "plugins": [
       "@semantic-release/commit-analyzer",
+      "./.github/release/no-downgrade.cjs",
       "@semantic-release/release-notes-generator",
       [
         "@semantic-release/changelog",
