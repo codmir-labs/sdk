@@ -227,7 +227,9 @@ Each import is its own bundle, so a page that only reports errors never loads th
 | `@codmir/sdk/replay` | `startReplay`, `stopReplay`, `ReplayRecorder`, `DEFAULT_PRIVACY` | Browser |
 | `@codmir/sdk/tracing` | `startSpan`, `startTransaction`, `startChildSpan`, `traceparent` helpers, `instrumentFetch`, `instrumentXhr` | Anywhere |
 | `@codmir/sdk/logs` | `createLogMonitor`, `redact`, `pathPattern`, `messageKey`: findings from an app's own logs, local first; the `LogStore` and `LogState` types for the `store` option | Anywhere |
-| `@codmir/sdk/logs/node` | `captureConsole`, `captureProcess`, `fileSink`, `fileStore`, `expressLogs`, `honoLogs` | Node.js |
+| `@codmir/sdk/logs/node` | `captureConsole`, `captureProcess`, `fileSink`, `fileStore`, `expressLogs`, `honoLogs`, and for [logs you already have](#read-logs-you-already-have) `readLog`, `followFile` | Node.js |
+| `@codmir/sdk/logs/parse` | `parseLogLine`, `parseLogLines`: one line of JSON, Vercel, Railway, journald, pino, access-log or plain-text output as a record or a request | Anywhere |
+| `codmir-logs` (a command, `bin`) | `npx codmir-logs [files…]`: [findings from logs you already have](#read-logs-you-already-have), on your machine | Node.js |
 | `@codmir/sdk/nextjs` | Next.js `init`, `captureRouterError`, `captureRequestError`, route-change breadcrumbs | Browser and server |
 | `@codmir/sdk/nextjs/server` | `withCodmirTracing`, `withCodmirMiddleware` | Node.js runtime |
 | `@codmir/sdk/express` | `init`, `requestHandler`, `tracingHandler`, `errorHandler` | Node.js |
@@ -1075,6 +1077,85 @@ id of its key is dropped, and at most `limits.groups` groups (the largest totals
 throws, hangs on a huge value or answers with a promise changes nothing but `stats().errors`. To keep the state elsewhere
 (a database, a key-value service), pass your own `{ load(): unknown; save(state: LogState): void }`; both are synchronous.
 
+### Read logs you already have
+
+You cannot always change the app, and the logs are often somewhere already. `codmir-logs` reads them and gives the same findings, on your machine, with no account and no network:
+
+```bash
+npx codmir-logs app.log                                  # a file (a .gz file is unpacked)
+journalctl -u myapp -o json | npx codmir-logs            # the system journal
+vercel logs … --json | npx codmir-logs --format vercel   # a hosting platform's CLI output (Vercel; Railway's is --format railway)
+node server.js | npx codmir-logs --format pino           # pino, or any JSON lines
+npx codmir-logs /var/log/nginx/access.log                # a web server's access log (Common or Combined Log Format)
+docker logs --timestamps myapp 2>&1 | npx codmir-logs    # a container's output
+```
+
+```
+JUDGED    HITS  TITLE                                                         FIRST SEEN           LAST SEEN
+new          5  report failed for user #: upstream rejected api_key=[secret]  2026-11-24 10:01:00  2026-11-24 10:01:40
+read 8 lines (662 B): 7 records, 0 requests, 1 skipped. 1 finding: 1 new.
+```
+
+The format is found per line by default (`--format auto`); say it with `--format` when you know it. A line that does not fit its format is read as plain text, so no line is lost.
+
+| Format | What it reads |
+| --- | --- |
+| `json` | One JSON object per line. Level from `level`, `severity`, `lvl` or `log.level` (a word, or a pino number); text from `message`, `msg`, `event` or `error.message` (an error object adds `type: message`); time from `time`, `timestamp`, `ts` or `@timestamp` (ISO, seconds, milliseconds, microseconds or nanoseconds, by size); service from `service`, `name` or `logger`; release from `release`, `version` or `dd.version`. A request when it has a method, a path or URL and a status: `method/path/status`, `req.method/req.url/res.statusCode`, `httpRequest.*` or `request.*/response.status`, with the duration (`durationMs`, `duration`, `responseTime`, `elapsed`) and the user agent. A request logged at error level with a status under 400 stays a log line. |
+| `pino` | The same reader: numeric `level` (10 trace to 60 fatal), `msg`, `time`, `req`, `res`, `responseTime`, `err.type` and `err.message` |
+| `vercel` | The CLI's JSON lines (`{"type":"request"\|"log","data":…}`; `summary` and error lines are skipped), a log drain's objects (one per line, or a JSON array of them) and the older CLI's flat line. A line with both a response and a message is the request when the status is 500 or above, else the log line when its level is warning or worse, else the request. The deployment is the release; the environment (and source) is the service |
+| `railway` | JSON lines with `timestamp`, `severity` or `level`, `message` and `attributes` (`level`, `method`, `path`, `status` in it) |
+| `journald` | `journalctl -o json`: `PRIORITY` 0 to 7 (0-2 fatal, 3 error, 4 warning, 5-6 info, 7 debug), `MESSAGE` (text, bytes or null), `__REALTIME_TIMESTAMP`, service from the unit, `SYSLOG_IDENTIFIER` or `_COMM`. A `MESSAGE` that is itself JSON is read as JSON, with the journal's service and time |
+| `clf` | Apache and nginx Common and Combined Log Format: method, path, status, time and user agent. The client address, the user and the referer are never kept |
+| `text` | A leading ISO or `[…]` time and a level word in the first 60 characters (`ERROR`, `[error]`, `E/`, `level=error msg="…"`). A stack-trace line (`    at …`, `Caused by:`, a Python `File "…", line …`) belongs to the line before it and is skipped. A time with no zone is UTC. A Docker `--timestamps` prefix in front of JSON is read |
+
+The Vercel and Railway shapes are written from their documented and sample output, not checked against the services; a line that does not fit is read as text, and `--format` lets you pick the reader.
+
+A line is cut to 64 KB before anything is done with it, JSON nested more than 20 levels deep is read as text, and every
+pattern is linear: no line makes the command slow. A 200 MB file is read in a few seconds with flat memory.
+
+| Option | Meaning |
+| --- | --- |
+| `[files…]` | Files to read, `-` or none for standard input |
+| `--format <f>` | `auto` (default), `json`, `vercel`, `railway`, `journald`, `pino`, `clf`, `text` |
+| `--json` | One JSON document: the findings and the read counts (with `--follow`, one line per batch) |
+| `--state <file>` | Keeps findings and marks (`fileStore`), so a second run knows what is `seen`, `known` or `back` |
+| `--min-status <n>`, `--level <l>` | What becomes a finding: status from 400 up and warning and up by default |
+| `--noise <text>` | Your own noise (repeatable) |
+| `--service <name>`, `--release <name>` | For lines that do not name one |
+| `--follow`, `--batch <min>` | Keep reading files as they grow (or standard input), and print each finished batch (1 minute by default) |
+| `--fail-on new\|alarm\|any` | Exit 1 when there is a new, back or alarm finding; an alarm; anything but noise and known |
+| `--top <n>` | Rows printed, 20 by default |
+| `--cloud` | Also send the findings to Codmir. Needs `CODMIR_CLIENT_KEY`; nothing is sent without this flag |
+| `codmir-logs mark <id> --known <note>` or `--fixed` `--state <file>` | Sets a mark, as `logs.mark()` does |
+
+A run over files is one batch, and the times in it are the log's own, not the clock's. Exit codes: 0, 1 when `--fail-on`
+matches, 2 for a wrong call or a file that cannot be read. Ctrl-C ends a `--follow` with a last batch and exit 0; a closed
+pipe (`| head`) ends quietly.
+
+**What is printed.** A table of the findings (judgement, hits, title, first and last seen) and one summary line; with `--json`, the
+findings as `createLogMonitor` gives them. Every text printed has its control characters and escape sequences removed: a log
+line can hold terminal commands, and none of them runs. Colour only on a terminal and when `NO_COLOR` is unset.
+**What is kept.** Only with `--state`: the state file of [Findings that survive a restart](#findings-that-survive-a-restart),
+mode 0600, nothing raw in it. **What is never sent.** Nothing, unless you pass `--cloud`; then what [Send the findings to
+Codmir](#send-the-findings-to-codmir) says, with the same caps. Secrets, addresses, query strings and fragments in a line,
+a path or a name are removed before a finding is kept, printed or sent; a client address in an access log is not read at all.
+
+The same readers are a library. `parseLogLine(line, format?)` (`@codmir/sdk/logs/parse`, no Node import) gives a
+`{ record }` or a `{ request }` for the monitor, or `null`; `readLog` and `followFile` (`@codmir/sdk/logs/node`) feed a monitor:
+
+```ts
+import { createLogMonitor } from '@codmir/sdk/logs';
+import { followFile, readLog } from '@codmir/sdk/logs/node';
+
+const logs = createLogMonitor({ onBatch: (b) => console.log(b.findings) });
+const read = await readLog('./app.log.gz', logs, { format: 'auto', signal }); // { lines, records, requests, skipped, bytes }
+const tail = followFile('./app.log', logs, { from: 'end', intervalMs: 1000 }); // polls with stat; survives truncation, rotation, a missing file
+await tail.stop();
+```
+
+`followFile` takes a regular file only, has no native watcher and its timer does not keep the process alive. A line without
+its newline is not read until the writer ends it. A file that is truncated and written past its old size between two looks is not noticed.
+
 ### Send the findings to Codmir
 
 ```ts
@@ -1387,6 +1468,8 @@ makes its own, with the same queue and retry.
 | `cloud` | off | `true`, or `{ apiKey, dsn, minSeverity, everyMinutes: 60, perBatch: 50, perDay: 1000 }` |
 | `store` | none | Keeps findings and marks across a restart: `fileStore(path)` or your own `{ load, save }` |
 
+The `codmir-logs` command is configured by its flags (see [Read logs you already have](#read-logs-you-already-have)) and three environment variables: `CODMIR_CLIENT_KEY` (the project key, read only with `--cloud`), `CODMIR_DSN` (the ingest endpoint for `--cloud`; the SDK's own by default) and `NO_COLOR`.
+
 ## Verify your setup
 
 After installing, send your project a test message:
@@ -1599,7 +1682,9 @@ is tree-shaken, then compressed with gzip level 9. Importing less can only make 
 | `@codmir/sdk/browser` | 34.0 kB | 11.9 kB |
 | `@codmir/sdk/replay` | 29.8 kB, plus 75.7 kB for rrweb | 10.4 kB, plus 23.4 kB for rrweb |
 | `@codmir/sdk/logs` | 18.8 kB | 8.2 kB |
-| `@codmir/sdk/logs/node` | 3.6 kB | 1.9 kB |
+| `@codmir/sdk/logs/node` | 19.0 kB | 8.2 kB, with the line parsers and the redaction they use |
+| `@codmir/sdk/logs/parse` | 12.2 kB | 5.3 kB |
+| `codmir-logs` (the command, a Node program, not a page's bundle) | 42.0 kB | 17.5 kB |
 
 rrweb is a separate chunk that loads only when `startReplay()` decides to record. The log monitor loads the error client
 only when `cloud` is on.
@@ -1771,6 +1856,7 @@ To [`packages/agent-kit`](packages/agent-kit), a private workspace in this repo 
 | [`src/client.ts`](src/client.ts), [`src/types.ts`](src/types.ts) | The API client, its types and Zod schemas |
 | [`examples/fullstack-basic/`](examples/fullstack-basic) | An Express app and a page that send an error, a 3-span trace and a masked replay to a local capture server, checked against the platform's schemas |
 | [`examples/node-smoke/`](examples/node-smoke) | A Node smoke test: one error, one trace and one replay segment, each checked as accepted |
+| [`examples/log-read/`](examples/log-read) | Nine small logs (JSON lines, pino, Vercel, Railway, the journal, an access log, text, a container's output) with one planted bug, and `codmir-logs` finding it with the network refused |
 | [`examples/nextjs-build/`](examples/nextjs-build) | A Next.js app that imports `@codmir/sdk/nextjs` in a client component, `app/error.tsx`, `pages/_app.tsx` and an `instrumentation.ts` next to a middleware, and must build |
 | [`packages/agent-kit/`](packages/agent-kit) | `@codmir/agent-kit`: agent runtime, council, serverless, task-runner protocol, AI-call monitoring, MCP client and framework task helpers; private, never published |
 | [`scripts/`](scripts) | `check-dist-types.mjs` (every export target exists after a build) and `publish.sh` (manual publish) |

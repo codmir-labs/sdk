@@ -127,6 +127,16 @@
         "default": "./dist/logs/node.cjs"
       }
     },
+    "./logs/parse": {
+      "import": {
+        "types": "./dist/logs/parse.d.ts",
+        "default": "./dist/logs/parse.js"
+      },
+      "require": {
+        "types": "./dist/logs/parse.d.cts",
+        "default": "./dist/logs/parse.cjs"
+      }
+    },
     "./express": {
       "import": {
         "types": "./dist/express/index.d.ts",
@@ -188,14 +198,17 @@
       }
     }
   },
+  "bin": {
+    "codmir-logs": "./dist/logs/cli.js"
+  },
   "files": [
     "dist",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup src/index.ts src/client.ts src/types.ts src/overseer/index.ts src/tracing/index.ts src/nextjs/index.ts src/nextjs/server.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/logs/index.ts src/logs/node.ts src/express/index.ts src/hono/index.ts src/remix/index.ts src/remix/server.ts src/verify/index.ts src/report/index.ts --format cjs,esm --clean --dts",
-    "dev": "tsup src/index.ts src/client.ts src/types.ts src/overseer/index.ts src/tracing/index.ts src/nextjs/index.ts src/nextjs/server.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/logs/index.ts src/logs/node.ts src/express/index.ts src/hono/index.ts src/remix/index.ts src/remix/server.ts src/verify/index.ts src/report/index.ts --format cjs,esm --dts --watch",
+    "build": "tsup src/index.ts src/client.ts src/types.ts src/overseer/index.ts src/tracing/index.ts src/nextjs/index.ts src/nextjs/server.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/logs/index.ts src/logs/node.ts src/logs/parse.ts src/logs/cli.ts src/express/index.ts src/hono/index.ts src/remix/index.ts src/remix/server.ts src/verify/index.ts src/report/index.ts --format cjs,esm --clean --dts",
+    "dev": "tsup src/index.ts src/client.ts src/types.ts src/overseer/index.ts src/tracing/index.ts src/nextjs/index.ts src/nextjs/server.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/logs/index.ts src/logs/node.ts src/logs/parse.ts src/logs/cli.ts src/express/index.ts src/hono/index.ts src/remix/index.ts src/remix/server.ts src/verify/index.ts src/report/index.ts --format cjs,esm --dts --watch",
     "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",

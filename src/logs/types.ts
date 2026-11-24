@@ -226,3 +226,9 @@ export interface LogMonitor {
   stop(): Promise<void>;
   stats(): MonitorStats;
 }
+
+/** What `parseLogLine` reads: `auto` decides per line; the others read a line as that format when it fits and as plain text when it does not. */
+export type LogFormat = "auto" | "json" | "vercel" | "railway" | "journald" | "pino" | "clf" | "text";
+
+/** One line of an existing log, as the monitor takes it in: a log record or a served request. */
+export type ParsedLine = { record: LogRecord } | { request: RequestRecord };

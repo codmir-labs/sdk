@@ -1,0 +1,11 @@
+{"level":30,"time":1795514400000,"pid":812,"hostname":"web-1","name":"shop","msg":"server started"}
+{"level":30,"time":1795514405000,"name":"shop","req":{"method":"GET","url":"/","headers":{"user-agent":"Mozilla/5.0"}},"res":{"statusCode":200},"responseTime":11,"msg":"request completed"}
+{"level":30,"time":1795514406000,"name":"shop","req":{"method":"GET","url":"/orders/1042","headers":{"user-agent":"Mozilla/5.0"}},"res":{"statusCode":200},"responseTime":23,"msg":"request completed"}
+{"level":30,"time":1795514407000,"name":"shop","req":{"method":"POST","url":"/cart","headers":{"user-agent":"Mozilla/5.0"}},"res":{"statusCode":201},"responseTime":31,"msg":"request completed"}
+{"level":30,"time":1795514408000,"name":"shop","req":{"method":"GET","url":"/orders/1043","headers":{"user-agent":"Mozilla/5.0"}},"res":{"statusCode":200},"responseTime":19,"msg":"request completed"}
+{"level":50,"time":1795514460000,"name":"shop","err":{"type":"Error","message":"upstream rejected api_key=sk_live_abcdefghijklmnop"},"msg":"report failed for user 4821"}
+{"level":50,"time":1795514470000,"name":"shop","err":{"type":"Error","message":"upstream rejected api_key=sk_live_abcdefghijklmnop"},"msg":"report failed for user 1307"}
+{"level":50,"time":1795514480000,"name":"shop","err":{"type":"Error","message":"upstream rejected api_key=sk_live_abcdefghijklmnop"},"msg":"report failed for user 9954"}
+{"level":50,"time":1795514490000,"name":"shop","err":{"type":"Error","message":"upstream rejected api_key=sk_live_abcdefghijklmnop"},"msg":"report failed for user 2216"}
+{"level":50,"time":1795514500000,"name":"shop","err":{"type":"Error","message":"upstream rejected api_key=sk_live_abcdefghijklmnop"},"msg":"report failed for user 7740"}
+{"level":30,"time":1795514520000,"name":"shop","msg":"order 1044 shipped"}

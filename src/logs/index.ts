@@ -18,6 +18,7 @@ export type {
   Finding,
   Judgement,
   LogBatch,
+  LogFormat,
   LogLevel,
   LogMonitor,
   LogMonitorOptions,
@@ -28,6 +29,7 @@ export type {
   LogStore,
   MarkOptions,
   MonitorStats,
+  ParsedLine,
   RequestRecord,
   TimeInput,
 } from "./types";

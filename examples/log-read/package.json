@@ -1,0 +1,14 @@
+{
+  "name": "codmir-example-log-read",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "A log file with a planted bug, and codmir-logs finding it on this machine: no account, no network",
+  "scripts": {
+    "start": "codmir-logs logs/app.log",
+    "smoke": "node smoke.mjs"
+  },
+  "dependencies": {
+    "@codmir/sdk": "file:../.."
+  }
+}
