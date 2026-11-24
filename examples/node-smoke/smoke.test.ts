@@ -86,6 +86,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   overseer.close();
+  // Node 19+ server.close() drops idle keep-alive sockets itself; Node 18 waits out keepAliveTimeout (5 s) per test
+  // without this. src/overseer/__tests__/close-7688.test.ts pins that the SDK stops sending after close() (CSL-7688).
+  server.closeIdleConnections();
   await new Promise<void>((r) => server.close(() => r()));
 });
 
