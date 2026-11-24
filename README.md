@@ -226,8 +226,8 @@ Each import is its own bundle, so a page that only reports errors never loads th
 | `@codmir/sdk/browser` | `init` with global handlers, click and request breadcrumbs, `fetch` and XHR spans, `startBrowserTracing` | Browser |
 | `@codmir/sdk/replay` | `startReplay`, `stopReplay`, `ReplayRecorder`, `DEFAULT_PRIVACY` | Browser |
 | `@codmir/sdk/tracing` | `startSpan`, `startTransaction`, `startChildSpan`, `traceparent` helpers, `instrumentFetch`, `instrumentXhr` | Anywhere |
-| `@codmir/sdk/logs` | `createLogMonitor`, `redact`, `pathPattern`, `messageKey`: findings from an app's own logs, local first | Anywhere |
-| `@codmir/sdk/logs/node` | `captureConsole`, `captureProcess`, `fileSink`, `expressLogs`, `honoLogs` | Node.js |
+| `@codmir/sdk/logs` | `createLogMonitor`, `redact`, `pathPattern`, `messageKey`: findings from an app's own logs, local first; the `LogStore` and `LogState` types for the `store` option | Anywhere |
+| `@codmir/sdk/logs/node` | `captureConsole`, `captureProcess`, `fileSink`, `fileStore`, `expressLogs`, `honoLogs` | Node.js |
 | `@codmir/sdk/nextjs` | Next.js `init`, `captureRouterError`, `captureRequestError`, route-change breadcrumbs | Browser and server |
 | `@codmir/sdk/nextjs/server` | `withCodmirTracing`, `withCodmirMiddleware` | Node.js runtime |
 | `@codmir/sdk/express` | `init`, `requestHandler`, `tracingHandler`, `errorHandler` | Node.js |
@@ -977,7 +977,7 @@ flowchart LR
     subgraph judge["Every 15 minutes"]
         direction TB
         J1["Judge each group<br/>new, alarm, back, known, noise"]
-        J2["onBatch()<br/>fileSink()"]
+        J2["onBatch()<br/>fileSink()<br/>store.save()"]
     end
     subgraph cloud["Cloud mode, off by default"]
         direction TB
@@ -1032,6 +1032,49 @@ app.use(expressLogs(logs)); // status and duration of every answered request, th
 For Hono, `app.use(honoLogs(logs))` does the same. `captureProcess` adds no `unhandledRejection` listener, because that
 would change what Node does with one.
 
+### Findings that survive a restart
+
+Findings and marks live in memory. After a restart every old problem would be `new` again, a `known` or `fixed` mark would
+be gone and, in cloud mode, the same finding would be sent again at once. Give the monitor a `store` and it keeps them:
+
+```ts
+import { createLogMonitor } from '@codmir/sdk/logs';
+import { fileStore } from '@codmir/sdk/logs/node';
+
+const logs = createLogMonitor({ store: fileStore('./logs/state.json') }); // loaded now, saved after every batch
+logs.record({ level: 'error', message: 'payment failed for order 8812' });
+await logs.stop(); // saves once more
+```
+
+`store.load()` is called once, when the monitor is made. `store.save()` is called at the end of every batch (after
+`onBatch` and the cloud decision), on `mark()` and in `stop()`, never per record. After a restart:
+
+- A repeat is `seen`, not `new`. A group last seen more than 24 hours ago is `back` on its next hit; a `fixed` mark makes
+  the next hit `back`; `known` stays `known`, with its note.
+- `total`, `counts`, first seen, releases and user-agent families go on. Every whole batch window the process was down is
+  one 0 in `counts` (at most 96), so "10 times its usual" keeps working. A group quiet for 30 days is forgotten.
+- In cloud mode a finding sent 20 minutes before the restart is not sent again for 40 more minutes, the hits since the
+  last send are counted right, and `perDay` goes on counting within the same UTC day.
+
+The file is JSON: `{ version, savedAt, batchMinutes, groups, marks, cloud }`. A group is what the monitor holds for it:
+key and id, title, the redacted sample, counts per batch, total, first and last seen, releases, user-agent families,
+the `known` note and what was sent. **It holds nothing raw.** Everything was redacted before the monitor kept it; what
+you typed (a mark's note and id) is redacted when saved, and a group whose key `redact` would change, such as a path with
+an address in it, is not kept. A note that looks like an id is changed too: `issues/12345` is saved as `issues/:id`.
+
+`fileStore(path)` writes a temporary file next to `path` (mode 0600, created exclusively, named for the process) and
+renames it over `path`, so a crash leaves the old state or the new one, never half of one; it makes the folder, and a
+file that had wider rights ends up 0600. It reads a regular file of at most 5 MB (some 7,000 groups) and nothing else: a
+symbolic link, a folder or a device is an empty start. **Use one file per process** (and per worker): two processes on one
+path never mix, because the last save wins, but then each loses what the other kept.
+
+Loading trusts nothing. A wrong version, a broken, cut or hand-edited file or a store that throws means an empty start. A
+group with a bad field is dropped on its own and the others stay; counts and times must be whole numbers in range (a time
+in the future becomes now), strings are cut to the lengths the monitor uses and redacted again, a group whose id is not the
+id of its key is dropped, and at most `limits.groups` groups (the largest totals) and 500 marks are taken. A store that
+throws, hangs on a huge value or answers with a promise changes nothing but `stats().errors`. To keep the state elsewhere
+(a database, a key-value service), pass your own `{ load(): unknown; save(state: LogState): void }`; both are synchronous.
+
 ### Send the findings to Codmir
 
 ```ts
@@ -1071,6 +1114,7 @@ your own patterns with `redact: [/ORDER-\d{6}/]`; every match becomes `[redacted
 | `onBatch` | none | Called with `{ from, to, records, findings, alarms }`; it may be async, and an error it throws or rejects with is counted in `stats().errors` and never reaches your app |
 | `service`, `release` | none | Attached to findings; a record can carry its own |
 | `cloud` | off | `true`, or `{ apiKey, dsn, minSeverity: 'warning', everyMinutes: 60, perBatch: 50, perDay: 1000 }` |
+| `store` | none | `{ load(), save(state) }`, both synchronous: `fileStore(path)` from `@codmir/sdk/logs/node`, or your own. Findings and marks then [survive a restart](#findings-that-survive-a-restart) |
 
 | Limit | Value |
 | --- | --- |
@@ -1341,6 +1385,7 @@ makes its own, with the same queue and retry.
 | `include` | warning, error, fatal; status 400+ | What becomes a finding |
 | `limits.groups` | 500 | Groups held at once |
 | `cloud` | off | `true`, or `{ apiKey, dsn, minSeverity, everyMinutes: 60, perBatch: 50, perDay: 1000 }` |
+| `store` | none | Keeps findings and marks across a restart: `fileStore(path)` or your own `{ load, save }` |
 
 ## Verify your setup
 
@@ -1553,8 +1598,8 @@ is tree-shaken, then compressed with gzip level 9. Importing less can only make 
 | `@codmir/sdk/tracing` | 28.3 kB | 9.9 kB |
 | `@codmir/sdk/browser` | 34.0 kB | 11.9 kB |
 | `@codmir/sdk/replay` | 29.8 kB, plus 75.7 kB for rrweb | 10.4 kB, plus 23.4 kB for rrweb |
-| `@codmir/sdk/logs` | 15.8 kB | 7.0 kB |
-| `@codmir/sdk/logs/node` | 2.9 kB | 1.6 kB |
+| `@codmir/sdk/logs` | 18.8 kB | 8.2 kB |
+| `@codmir/sdk/logs/node` | 3.6 kB | 1.9 kB |
 
 rrweb is a separate chunk that loads only when `startReplay()` decides to record. The log monitor loads the error client
 only when `cloud` is on.

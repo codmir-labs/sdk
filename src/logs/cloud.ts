@@ -11,6 +11,7 @@ import type { CloudOptions, Finding, LogLevel } from "./types";
 
 /** What the monitor keeps per group so a finding is not sent twice in an hour, and every hit is sent once. */
 export interface SendState {
+  /** When the group was last sent; none, or 0 after a restart that had none, if it never was. */
   sentAt?: number;
   sentBack: number;
   /** The group's total when it was last sent. */
@@ -26,7 +27,7 @@ export interface Candidate {
 
 export const CLOUD_DEFAULTS = { everyMinutes: 60, perBatch: 50, perDay: 1000 } as const;
 const SEND_TIMEOUT_MS = 5000;
-const DAY_MS = 86_400_000;
+const utcDay = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 const RANK: Record<string, number> = { debug: 0, info: 1, warning: 2, error: 3, fatal: 4 };
 const PRIORITY: Record<string, number> = { alarm: 0, back: 1, new: 2, known: 3, seen: 4, noise: 5 };
 
@@ -87,6 +88,9 @@ export interface Cloud {
   /** Hands the events to the client and waits for its flush, at most 5 s. Never throws. */
   send(events: OverseerEvent[]): Promise<boolean>;
   counters(): { sent: number; skipped: number; today: number };
+  /** The UTC day (`2026-11-24`) the per-day count is for, and the count; what a restart takes up again. */
+  state(): { day: string; sent: number };
+  restore(saved: unknown): void;
   close(): void;
 }
 
@@ -99,7 +103,7 @@ export function createCloud(
   const perBatch = Math.floor(num(o.perBatch, CLOUD_DEFAULTS.perBatch, 0, 10_000));
   const perDay = Math.floor(num(o.perDay, CLOUD_DEFAULTS.perDay, 0, 1_000_000));
   const minRank = RANK[o.minSeverity ?? "warning"] ?? RANK.warning;
-  let day = -1;
+  let day = "";
   let today = 0;
   let sent = 0;
   let skipped = 0;
@@ -109,7 +113,7 @@ export function createCloud(
     const { finding: f, state } = c;
     if (f.judgement === "noise" || f.hits <= 0) return false;
     if ((RANK[eventLevel(f)] ?? 0) < minRank) return false;
-    if (state.sentAt === undefined) return true;
+    if (!state.sentAt) return true;
     if (f.judgement === "back" && state.sentBack !== f.backCount) return true;
     if (f.judgement === "known") return false;
     return now - state.sentAt >= everyMs;
@@ -133,7 +137,7 @@ export function createCloud(
 
   return {
     select(candidates, now) {
-      const d = Math.floor(now / DAY_MS);
+      const d = utcDay(now);
       if (d !== day) {
         day = d;
         today = 0;
@@ -180,6 +184,17 @@ export function createCloud(
     },
 
     counters: () => ({ sent, skipped, today }),
+
+    state: () => ({ day, sent: today }),
+
+    restore(saved) {
+      const { day: d, sent: n } = (saved ?? {}) as { day?: string; sent?: number };
+      // A date orders like text, and a day that has not come yet is no day.
+      if (typeof d === "string" && d <= utcDay(Date.now()) && Number.isInteger(n) && (n as number) >= 0) {
+        day = d;
+        today = n as number;
+      }
+    },
 
     close() {
       try {

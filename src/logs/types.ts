@@ -133,6 +133,77 @@ export interface LogMonitorOptions {
   limits?: { groups?: number };
   onBatch?: (batch: LogBatch) => void;
   cloud?: boolean | CloudOptions;
+  /** Keeps the findings and marks across a restart: `load()` once when the monitor is made, `save()` at the end of every batch, on `mark()` and in `stop()`. `fileStore(path)` in `@codmir/sdk/logs/node` is one. */
+  store?: LogStore;
+}
+
+/** Where a monitor keeps its state between runs. Both calls are synchronous; a call that throws, or returns a promise, is counted in `stats().errors` and changes nothing else. */
+export interface LogStore {
+  /** The state `save()` was last given, as parsed JSON, or anything else (nothing, a broken file) for an empty start. Nothing in it is trusted. */
+  load(): unknown;
+  save(state: LogState): void;
+}
+
+/** What a monitor keeps, as plain JSON. Everything in it went through `redact`; nothing raw is ever in it. */
+export interface LogState {
+  version: 1;
+  /** ISO time of the save. */
+  savedAt: string;
+  /** The window the `counts` are in. */
+  batchMinutes: number;
+  /** The groups held. */
+  groups: LogStateGroup[];
+  marks: LogStateMark[];
+  /** The UTC day (`2026-11-24`) and how many findings were sent on it, for `cloud.perDay`. */
+  cloud: { day: string; sent: number };
+}
+
+export interface LogStateGroup {
+  /** The grouping key, `error|the folded message` or `GET|/users/:n|500`. What the group is (kind, level, title, method, path, status, noise) is read back from it, not from the fields next to it; a group whose `id` is not the id of its key is dropped. */
+  key: string;
+  id: string;
+  kind: "request" | "message";
+  title: string;
+  method?: string;
+  path?: string;
+  status?: number;
+  level?: LogLevel;
+  noise: boolean;
+  service?: string;
+  releases: string[];
+  sample: string;
+  /** Hits before the batch that was open when the state was saved. */
+  total: number;
+  /** Hits per batch, the last 96, oldest first. */
+  counts: number[];
+  /** Epoch milliseconds. */
+  firstMs: number;
+  lastMs: number;
+  backCount: number;
+  /** Marked fixed: the next hit is `back`. */
+  fixed: boolean;
+  known?: string;
+  /** User-agent family to count (request groups). */
+  families: Record<string, number>;
+  nonBot: number;
+  pathHits: number;
+  scannerHits: number;
+  durN: number;
+  durSum: number;
+  durMax: number;
+  /** The judgement of the last batch the group had hits in. */
+  last: Judgement;
+  /** Cloud: when the group was last sent (epoch ms, 0 if never), the `backCount` and the `total` it was sent at. */
+  sentAt: number;
+  sentBack: number;
+  sentTotal: number;
+}
+
+export interface LogStateMark {
+  /** A finding's `id`, or whatever `mark()` was given. */
+  id: string;
+  known?: string;
+  fixed?: boolean;
 }
 
 export interface MarkOptions {

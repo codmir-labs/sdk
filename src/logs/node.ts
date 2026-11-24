@@ -3,19 +3,20 @@
  *
  * ```ts
  * import { createLogMonitor } from "@codmir/sdk/logs";
- * import { captureConsole, captureProcess, fileSink, expressLogs } from "@codmir/sdk/logs/node";
+ * import { captureConsole, captureProcess, fileSink, fileStore, expressLogs } from "@codmir/sdk/logs/node";
  *
- * const logs = createLogMonitor({ onBatch: fileSink("./logs/findings.jsonl") });
+ * const logs = createLogMonitor({ onBatch: fileSink("./logs/findings.jsonl"), store: fileStore("./logs/state.json") });
  * captureConsole(logs);
  * captureProcess(logs);
  * app.use(expressLogs(logs));
  * ```
  */
-import { appendFileSync, chmodSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { appendFileSync, chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { format } from "node:util";
 import { objectText } from "./redact";
-import type { LogBatch, LogMonitor } from "./types";
+import type { LogBatch, LogMonitor, LogState, LogStore } from "./types";
 
 type Recorder = Pick<LogMonitor, "record">;
 type RequestRecorder = Pick<LogMonitor, "request">;
@@ -121,6 +122,59 @@ function rotate(path: string): void {
   if (existsSync(oldest)) unlinkSync(oldest);
   for (let i = SINK_KEEP - 1; i >= 1; i--) if (existsSync(`${path}.${i}`)) renameSync(`${path}.${i}`, `${path}.${i + 1}`);
   renameSync(path, `${path}.1`);
+}
+
+export const STORE_MAX_BYTES = 5 * 1024 * 1024;
+
+/**
+ * A `store` for `createLogMonitor` that keeps the state in one JSON file, so findings and marks survive a restart. A save
+ * writes a temporary file next to `path` (mode 0600, created exclusively, named for this process) and renames it over
+ * `path`: the file is always one whole state, a failed write leaves the old one and no temporary file, and a file
+ * with wider rights is replaced by one with 0600. The folder is made when missing. A load reads a regular file of at most
+ * 5 MB (a symbolic link, a folder or a device gives an empty start, and so does a file that is not a state). Two processes
+ * on one path: the last save wins; give each process its own file.
+ */
+export function fileStore(path: string): LogStore {
+  return {
+    load(): unknown {
+      let fd = -1;
+      try {
+        if (!lstatSync(path).isFile()) return undefined;
+        // O_NOFOLLOW and O_NONBLOCK: a link or a pipe swapped in after the check is not followed or waited on.
+        fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+        const info = fstatSync(fd);
+        if (!info.isFile() || info.size > STORE_MAX_BYTES) return undefined;
+        const buf = Buffer.alloc(info.size);
+        let read = 0;
+        while (read < buf.length) {
+          const n = readSync(fd, buf, read, buf.length - read, read);
+          if (n <= 0) break;
+          read += n;
+        }
+        return JSON.parse(buf.toString("utf8", 0, read));
+      } catch {
+        return undefined; // missing, unreadable or broken: an empty start
+      } finally {
+        if (fd >= 0) closeSync(fd);
+      }
+    },
+
+    save(state: LogState): void {
+      const tmp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+      try {
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(tmp, JSON.stringify(state), { mode: 0o600, flag: "wx" });
+        renameSync(tmp, path);
+      } catch (err) {
+        try {
+          unlinkSync(tmp);
+        } catch {
+          // it was never made
+        }
+        throw err;
+      }
+    },
+  };
 }
 
 const pathOnly = (url: string): string => {
