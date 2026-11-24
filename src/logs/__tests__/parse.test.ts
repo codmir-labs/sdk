@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { createLogMonitor } from "../monitor";
 import { MAX_LINE, parseLogLine, parseLogLines } from "../parse";
-import type { LogFormat, ParsedLine } from "../types";
+import type { LogFormat, LogMonitor, ParsedLine, RequestRecord } from "../types";
 
 // [group, case, format, line, exactly what is read]. The times are 2026-11-24 10:00:00 UTC unless the line says otherwise.
 const TABLE: Array<[string, string, LogFormat, string, ParsedLine[]]> = [
@@ -58,6 +59,53 @@ const TABLE: Array<[string, string, LogFormat, string, ParsedLine[]]> = [
   ["text", "no level is info", "text", "listening on port 3000", [{"record":{"level":"info","message":"listening on port 3000"}}]],
   ["text", "level word far away is not a level", "text", "this line has a long start that goes on and on for sixty characters and then the word ERROR at the end", [{"record":{"level":"info","message":"this line has a long start that goes on and on for sixty characters and then the word ERROR at the end"}}]],
   ["text", "stack frame is nothing", "text", "    at Object.<anonymous> (/srv/app.js:1:2)", []],
+  ["journald", "a line's own level and no stream's: stdout with ERROR", "journald", "{\"PRIORITY\":\"6\",\"MESSAGE\":\"2026-11-24 10:00:00 ERROR payment failed\",\"_SYSTEMD_UNIT\":\"app.service\",\"__REALTIME_TIMESTAMP\":\"1795514401000000\"}", [{"record":{"level":"error","message":"payment failed","time":1795514401000,"service":"app"}}]],
+  ["journald", "stderr with INFO first is info", "journald", "{\"PRIORITY\":\"3\",\"MESSAGE\":\"INFO listening\",\"_COMM\":\"app\"}", [{"record":{"level":"info","message":"listening","service":"app"}}]],
+  ["journald", "a level word in the middle never lowers the priority", "journald", "{\"PRIORITY\":\"3\",\"MESSAGE\":\"unit failed, see INFO page\"}", [{"record":{"level":"error","message":"unit failed, see  page"}}]],
+  ["journald", "an access log line is a request, with the journal's service and time", "journald", "{\"PRIORITY\":\"6\",\"MESSAGE\":\"203.0.113.9 - - [24/Nov/2026:10:00:00 +0000] \\\"GET /x HTTP/1.1\\\" 502 12 \\\"-\\\" \\\"curl/8\\\"\",\"_SYSTEMD_UNIT\":\"nginx.service\",\"__REALTIME_TIMESTAMP\":\"1795514401000000\"}", [{"request":{"method":"GET","path":"/x","status":502,"userAgent":"curl/8","time":1795514401000,"service":"nginx"}}]],
+  ["journald", "a stack frame is nothing", "journald", "{\"PRIORITY\":\"3\",\"MESSAGE\":\"    at run (/srv/app.js:1:2)\"}", []],
+  ["journald", "an error object without a level is an error at any priority", "journald", "{\"PRIORITY\":\"6\",\"MESSAGE\":\"{\\\"err\\\":{\\\"message\\\":\\\"boom\\\"}}\"}", [{"record":{"level":"error","message":"boom"}}]],
+  ["json", "a container's line: its own level and the container's time", "json", "{\"log\":\"ERROR payment failed\\n\",\"stream\":\"stderr\",\"time\":\"2026-11-24T10:00:00.000000000Z\"}", [{"record":{"level":"error","message":"payment failed","time":1795514400000}}]],
+  ["json", "a container's JSON line", "auto", "{\"log\":\"{\\\"level\\\":\\\"error\\\",\\\"msg\\\":\\\"inner\\\"}\\n\",\"stream\":\"stdout\",\"time\":\"2026-11-24T10:00:00Z\",\"kubernetes\":{\"container_name\":\"api\"}}", [{"record":{"level":"error","message":"inner","time":1795514400000,"service":"api"}}]],
+  ["railway", "a stdout line that says ERROR", "railway", "{\"timestamp\":\"2026-11-24T10:00:00Z\",\"severity\":\"info\",\"message\":\"ERROR payment failed\",\"attributes\":{}}", [{"record":{"level":"error","message":"payment failed","time":1795514400000}}]],
+  ["railway", "a stderr line that says INFO", "railway", "{\"timestamp\":\"2026-11-24T10:00:00Z\",\"severity\":\"error\",\"message\":\"INFO: listening\",\"attributes\":{}}", [{"record":{"level":"info","message":"listening","time":1795514400000}}]],
+  ["vercel", "cli log, the level of a JSON logger's line", "vercel", "{\"type\":\"log\",\"data\":{\"timestamp\":1795514400000,\"level\":\"info\",\"source\":\"lambda\",\"message\":\"{\\\"level\\\":50,\\\"msg\\\":\\\"db down\\\",\\\"version\\\":\\\"1.0.0\\\"}\",\"deploymentId\":\"dpl_1\"}}", [{"record":{"level":"error","message":"db down","time":1795514400000,"release":"dpl_1","service":"lambda"}}]],
+  ["vercel", "cli log, an exception printed with console.log", "vercel", "{\"type\":\"log\",\"data\":{\"timestamp\":1795514400000,\"level\":\"info\",\"message\":\"TypeError: x is undefined\\n    at run (/var/task/a.js:1:2)\"}}", [{"record":{"level":"error","message":"TypeError: x is undefined\n    at run (/var/task/a.js:1:2)","time":1795514400000}}]],
+  ["vercel", "cli log, a request logged by the app is not counted again", "vercel", "{\"type\":\"log\",\"data\":{\"timestamp\":1795514400000,\"level\":\"info\",\"message\":\"{\\\"level\\\":30,\\\"req\\\":{\\\"method\\\":\\\"GET\\\",\\\"url\\\":\\\"/x\\\"},\\\"res\\\":{\\\"statusCode\\\":502},\\\"msg\\\":\\\"request completed\\\"}\"}}", [{"record":{"level":"info","message":"request completed","time":1795514400000,"path":"/x"}}]],
+  ["json", "flat dotted keys", "json", "{\"log.level\":\"error\",\"@timestamp\":\"2026-11-24T10:00:00Z\",\"message\":\"payment failed\",\"service.name\":\"shop\",\"service.version\":\"1.2\"}", [{"record":{"level":"error","message":"payment failed","time":1795514400000,"service":"shop","release":"1.2"}}]],
+  ["json", "flat http keys", "json", "{\"http.request.method\":\"GET\",\"url.path\":\"/x\",\"http.response.status_code\":502,\"user_agent.original\":\"curl/8\"}", [{"request":{"method":"GET","path":"/x","status":502,"userAgent":"curl/8"}}]],
+  ["json", "nested http keys", "json", "{\"http\":{\"request\":{\"method\":\"GET\"},\"response\":{\"status_code\":502}},\"url\":{\"path\":\"/x\"}}", [{"request":{"method":"GET","path":"/x","status":502}}]],
+  ["json", "http.method, http.target and http.status_code", "json", "{\"http.method\":\"POST\",\"http.target\":\"/y?z=1\",\"http.status_code\":503}", [{"request":{"method":"POST","path":"/y","status":503}}]],
+  ["json", "request.uri and a header list", "json", "{\"level\":\"info\",\"ts\":1795514400.5,\"msg\":\"handled request\",\"request\":{\"method\":\"GET\",\"uri\":\"/x?y=1\",\"headers\":{\"User-Agent\":[\"curl/8\"]}},\"status\":502}", [{"request":{"method":"GET","path":"/x","status":502,"userAgent":"curl/8","time":1795514400500}}]],
+  ["json", "request_method, request_uri and a status in quotes", "json", "{\"request_method\":\"GET\",\"request_uri\":\"/x?y=1\",\"status\":\"502\",\"http_user_agent\":\"curl/8\"}", [{"request":{"method":"GET","path":"/x","status":502,"userAgent":"curl/8"}}]],
+  ["json", "levelname and asctime", "json", "{\"asctime\":\"2026-11-24 10:00:00,250\",\"levelname\":\"ERROR\",\"name\":\"app\",\"message\":\"boom\"}", [{"record":{"level":"error","message":"boom","time":1795514400250,"service":"app"}}]],
+  ["json", "a message that is an error object", "json", "{\"timestamp\":\"2026-11-24T10:00:00Z\",\"level\":\"ERROR\",\"message\":{\"errorType\":\"TypeError\",\"errorMessage\":\"x is undefined\"}}", [{"record":{"level":"error","message":"x is undefined","time":1795514400000}}]],
+  ["json", "colours in the level and the message", "json", "{\"level\":\"\\u001b[31merror\\u001b[39m\",\"message\":\"\\u001b[31mboom\\u001b[39m\"}", [{"record":{"level":"error","message":"boom"}}]],
+  ["json", "a level named constructor is no level", "json", "{\"level\":\"constructor\",\"msg\":\"m\"}", [{"record":{"level":"info","message":"m"}}]],
+  ["json", "a time without a zone is UTC", "json", "{\"level\":\"error\",\"msg\":\"m\",\"time\":\"2026-11-24T10:00:00\"}", [{"record":{"level":"error","message":"m","time":1795514400000}}]],
+  ["clf", "a host name first", "auto", "www.example.com:443 203.0.113.9 - - [24/Nov/2026:10:00:00 +0000] \"GET /x HTTP/1.1\" 502 12 \"-\" \"curl/8\"", [{"request":{"method":"GET","path":"/x","status":502,"userAgent":"curl/8","time":1795514400000}}]],
+  ["clf", "a zone of minus half an hour", "clf", "203.0.113.9 - - [24/Nov/2026:10:00:00 -0030] \"GET /x HTTP/1.1\" 502 12", [{"request":{"method":"GET","path":"/x","status":502,"time":1795516200000}}]],
+  ["text", "a container runtime's prefix", "text", "2026-11-24T10:00:00.000000000Z stderr F ERROR payment failed", [{"record":{"level":"error","message":"payment failed","time":1795514400000}}]],
+  ["text", "syslog, ISO time, with a process id", "text", "2026-11-24T10:00:00+00:00 host app[123]: ERROR payment failed", [{"record":{"level":"error","message":"payment failed","time":1795514400000,"service":"app"}}]],
+  ["text", "two words and a colon are no syslog host", "text", "2026-11-24T10:00:00Z payment failed: boom", [{"record":{"level":"info","message":"payment failed: boom","time":1795514400000}}]],
+  ["text", "nginx error log", "text", "2026/11/24 10:00:00 [error] 12#12: *3 connect() failed (111: Connection refused)", [{"record":{"level":"error","message":"12#12: *3 connect() failed (111: Connection refused)","time":1795514400000}}]],
+  ["text", "apache error log", "text", "[Tue Nov 24 10:00:00.123456 2026] [proxy:error] [pid 1:tid 2] AH01114: boom", [{"record":{"level":"error","message":"[pid 1:tid 2] AH01114: boom","time":1795514400123}}]],
+  ["text", "postgres", "text", "2026-11-24 10:00:00.123 UTC [1234] ERROR:  duplicate key value", [{"record":{"level":"error","message":"[1234]   duplicate key value","time":1795514400123}}]],
+  ["text", "a zone after a space", "text", "2026/11/24 03:00:00 -0700 ERROR boom", [{"record":{"level":"error","message":"boom","time":1795514400000}}]],
+  ["text", "a number after a time is no zone", "text", "2026-11-24 10:00:00 -12 items left", [{"record":{"level":"info","message":"12 items left","time":1795514400000}}]],
+  ["text", "nest", "text", "[Nest] 123  - 11/24/2026, 10:00:00 AM   ERROR [ExceptionsHandler] boom", [{"record":{"level":"error","message":"[ExceptionsHandler] boom","time":1795514400000}}]],
+  ["text", "nest, after noon", "text", "[Nest] 123  - 11/24/2026, 1:05:00 PM     LOG [App] up", [{"record":{"level":"info","message":"LOG [App] up","time":1795525500000}}]],
+  ["text", "an exception's name", "text", "TypeError: Cannot read properties of undefined", [{"record":{"level":"error","message":"TypeError: Cannot read properties of undefined"}}]],
+  ["text", "an exception's full name", "text", "java.lang.IllegalStateException: boom", [{"record":{"level":"error","message":"java.lang.IllegalStateException: boom"}}]],
+  ["text", "an error with a code", "text", "Error [ERR_HTTP_HEADERS_SENT]: Cannot set headers", [{"record":{"level":"error","message":"Error [ERR_HTTP_HEADERS_SENT]: Cannot set headers"}}]],
+  ["text", "an exception in a thread", "text", "Exception in thread \"main\" java.lang.RuntimeException: boom", [{"record":{"level":"error","message":"Exception in thread \"main\" java.lang.RuntimeException: boom"}}]],
+  ["text", "a panic", "text", "thread 'main' panicked at src/main.rs:2:5:", [{"record":{"level":"fatal","message":"thread 'main' panicked at src/main.rs:2:5:"}}]],
+  ["text", "an unhandled rejection", "text", "Unhandled Rejection at: Promise", [{"record":{"level":"error","message":"Unhandled Rejection at: Promise"}}]],
+  ["text", "an exception in the middle is not one", "text", "retrying after TypeError: x", [{"record":{"level":"info","message":"retrying after TypeError: x"}}]],
+  ["text", "a traceback's first line is nothing", "text", "Traceback (most recent call last):", []],
+  ["text", "colours around the level", "text", "\u001b[31mERROR\u001b[39m payment failed", [{"record":{"level":"error","message":"payment failed"}}]],
+  ["text", "a request in pairs", "text", "level=info method=GET path=\"/x?y=1\" status=502 duration=12ms", [{"request":{"method":"GET","path":"/x","status":502}}]],
+  ["text", "a router's line", "text", "2026-11-24T10:00:00.123456+00:00 heroku[router]: at=error code=H12 desc=\"Request timeout\" method=GET path=\"/x\" host=h.example status=503", [{"request":{"method":"GET","path":"/x","status":503,"time":1795514400123}}]],
   ["text", "caused by is nothing", "text", "Caused by: java.io.IOException: closed", []],
   ["text", "python frame is nothing", "text", "  File \"/srv/app.py\", line 12, in handler", []],
   ["text", "a prompt is nothing", "text", "user@host:~$", []],
@@ -114,12 +162,47 @@ describe("parseLogLine: the rules that matter", () => {
     expect(r.request.path).toBe("/a/b");
   });
 
-  it("redacts what a path segment holds: an address, a token, a long id", () => {
-    const at = (url: string): string => (parseLogLine(JSON.stringify({ method: "GET", url, status: 500 })) as { request: { path: string } }).request.path;
-    expect(at("/hosts/10.1.2.3/status")).toBe("/hosts/[ip]/status");
-    expect(at("/hosts/2001:db8::7/status")).toBe("/hosts/[ip]/status");
-    expect(at("/reset/abcDEF123456ghiJKL789mnopqrst/x")).not.toContain("abcDEF");
-    expect(at("/u/jane.doe@example.com")).toBe("/u/[email]");
+  it("hands a path on as it is, so a route is one finding whichever way its requests arrive", () => {
+    const paths = ["/orders/7", "/orders/42", "/orders/1234", "/orders/998877", "/hosts/10.1.2.3/x", "/hosts/10.1.2.4/x", "/hosts/2001:db8::7/x", "/u/jane.doe@example.com", "/reset/abcDEF123456ghiJKL789mnopqrst/x"];
+    const direct = createLogMonitor();
+    const lines = createLogMonitor();
+    for (const p of paths) {
+      direct.request({ method: "GET", path: p, status: 500 });
+      for (const l of [JSON.stringify({ method: "GET", url: p, status: 500 }), `203.0.113.9 - - [24/Nov/2026:10:00:00 +0000] "GET ${p} HTTP/1.1" 500 1`]) {
+        lines.request((parseLogLine(l) as { request: RequestRecord }).request);
+      }
+    }
+    const titles = (m: LogMonitor): string[] => m.findings().map((f) => f.title).sort();
+    expect(titles(lines)).toEqual(titles(direct));
+    expect(titles(direct)).toEqual(["GET /hosts/[ip]/x answers 500", "GET /orders/:n answers 500", "GET /orders/:n answers 500", "GET /reset/:token/x answers 500", "GET /u/:token answers 500"].filter((t, i, a) => a.indexOf(t) === i));
+    const all = JSON.stringify([lines.findings(), direct.findings()]);
+    expect(all).not.toMatch(/10\.1\.2|2001:db8|db8|jane|abcDEF/);
+    void direct.stop();
+    void lines.stop();
+  });
+
+  it("reads a BSD syslog line: the service, and the last year that does not put it into the future", () => {
+    const day = (ms: number): string => `${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][new Date(ms).getUTCMonth()]} ${String(new Date(ms).getUTCDate()).padStart(2, " ")}`;
+    const at = (ms: number): number => (parseLogLine(`${day(ms)} 10:00:00 host app[123]: ERROR payment failed`) as { record: { time: number } }).record.time;
+    const noon = (ms: number): number => Date.UTC(new Date(ms).getUTCFullYear(), new Date(ms).getUTCMonth(), new Date(ms).getUTCDate(), 10);
+    const yesterday = Date.now() - 86_400_000;
+    const inAWeek = Date.now() + 7 * 86_400_000;
+    expect(at(yesterday)).toBe(noon(yesterday));
+    expect(at(inAWeek)).toBe(Date.UTC(new Date(inAWeek).getUTCFullYear() - 1, new Date(inAWeek).getUTCMonth(), new Date(inAWeek).getUTCDate(), 10));
+    expect(parseLogLine("Nov 24 10:00:00 host app[123]: ERROR payment failed")).toMatchObject({ record: { level: "error", message: "payment failed", service: "app" } });
+    expect(parseLogLine("Nov  4 10:00:00 host kernel: Out of memory")).toMatchObject({ record: { level: "info", message: "Out of memory", service: "kernel" } });
+  });
+
+  it("looks into a line in a line three deep and no deeper, and never runs away", () => {
+    let line = '{"level":"error","msg":"deep"}';
+    const wrap = (s: string): string => JSON.stringify({ log: s });
+    for (let i = 0; i < 3; i++) line = wrap(line);
+    expect(parseLogLine(line)).toEqual({ record: { level: "error", message: "deep" } });
+    for (let i = 0; i < 4; i++) line = wrap(line);
+    expect(parseLogLine(line)).not.toBeNull();
+    let text = '{"level":"error","msg":"deep"}';
+    for (let i = 0; i < 6; i++) text = JSON.stringify({ log: `2026-11-24T10:00:00Z ${text}` });
+    expect(parseLogLine(text)).not.toBeNull();
   });
 
   it("is text for JSON nested 21 levels deep and JSON for 20", () => {
@@ -244,6 +327,22 @@ const HOSTILE: Array<[string, (n: number) => string, LogFormat]> = [
   ["journal message", (n) => `{"MESSAGE":"${rep("{", n)}"}`, "journald"],
   ["digit strings", (n) => `{"time":"${rep("1", n)}"}`, "json"],
   ["date strings", (n) => `{"time":"${rep("1-", n)}","msg":"m"}`, "json"],
+  ["dates in a row", (n) => rep("2026-11-24 10:00:00 ", n), "text"],
+  ["syslog host without an end", (n) => `Nov 24 10:00:00 ${rep("a", n)}`, "text"],
+  ["syslog tag without an end", (n) => `2026-11-24T10:00:00Z host ${rep("a", n)}`, "text"],
+  ["syslog words", (n) => `Nov 24 10:00:00 ${rep("a ", n)}`, "text"],
+  ["nest spaces", (n) => `[Nest] 1${rep(" ", n)}- 1`, "text"],
+  ["exception name", (n) => rep("a.", n), "text"],
+  ["exception names", (n) => rep("Error", n), "text"],
+  ["exception thread", (n) => `Exception in thread "${rep("a", n)}`, "text"],
+  ["panic thread", (n) => `thread '${rep("a", n)}`, "text"],
+  ["pairs", (n) => `method= status= ${rep("path=a ", n)}`, "text"],
+  ["pairs with an open quote", (n) => `method= status= ${rep(' path="a', n)}`, "text"],
+  ["pairs with backslashes", (n) => `method= status= path="${rep("\\\\", n)}`, "text"],
+  ["bracketed module", (n) => rep("[a:", n), "text"],
+  ["bracketed spaces", (n) => `[${rep(" ", n)}error`, "text"],
+  ["a line in a line", (n) => JSON.stringify({ log: JSON.stringify({ log: rep("{", n / 2) }) }), "json"],
+  ["a line in a journal entry", (n) => JSON.stringify({ PRIORITY: "6", MESSAGE: `2026-11-24T10:00:00Z ${rep("a=b ", n / 2)}` }), "journald"],
 ];
 
 describe("parseLogLine: 64 KB of each pattern's worst case, as a ratio", () => {

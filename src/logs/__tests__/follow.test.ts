@@ -1,10 +1,26 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { followFile, type Follower } from "../node";
 import type { LogRecord, RequestRecord } from "../types";
 import { bundle, scratch } from "./helpers";
+
+// What happens between two steps of a look: a hook runs once, right before the named call of the module under test.
+const before: { statSync?: () => void; openSync?: () => void } = {};
+vi.mock("node:fs", async (original) => {
+  const fs = await original<typeof import("node:fs")>();
+  const once = (name: "statSync" | "openSync"): void => {
+    const hook = before[name];
+    delete before[name];
+    hook?.();
+  };
+  return {
+    ...fs,
+    statSync: (...a: Parameters<typeof fs.statSync>) => (once("statSync"), fs.statSync(...a)),
+    openSync: (...a: Parameters<typeof fs.openSync>) => (once("openSync"), fs.openSync(...a)),
+  };
+});
 
 const dir = scratch("follow");
 let n = 0;
@@ -30,7 +46,39 @@ const until = async (cond: () => boolean, what: string, ms = 4000): Promise<void
 const quiet = (ms = 120): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 afterEach(async () => {
+  for (const k of Object.keys(before) as Array<keyof typeof before>) delete before[k];
   for (const f of live.splice(0)) await f.stop();
+});
+
+describe("followFile: what happens inside a look", () => {
+  it("reads what was written between its last read and the rotation", async () => {
+    const p = fresh();
+    writeFileSync(p, "ERROR one\n");
+    const s = sink();
+    const f = follow(p, s, "start");
+    await f.ready;
+    before.statSync = () => {
+      appendFileSync(p, "ERROR late\n");
+      renameSync(p, `${p}.1`);
+      writeFileSync(p, "ERROR new\n");
+    };
+    await until(() => s.messages.length === 3, "the late line and the new file");
+    expect(s.messages).toEqual(["one", "late", "new"]);
+  });
+
+  it("reads a file that was rotated in between stat and open once", async () => {
+    const p = fresh();
+    writeFileSync(p, "ERROR old\n");
+    const s = sink();
+    before.openSync = () => {
+      renameSync(p, `${p}.1`);
+      writeFileSync(p, "ERROR new\n");
+    };
+    const f = follow(p, s, "start");
+    await f.ready;
+    await quiet();
+    expect(s.messages).toEqual(["new"]);
+  });
 });
 
 describe("followFile", () => {

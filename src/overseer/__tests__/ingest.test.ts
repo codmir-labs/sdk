@@ -395,3 +395,53 @@ describe("default dsn (criterion 5)", () => {
     expect(calls[0].url).toBe("https://ingest.example.test/api/overseer/ingest");
   });
 });
+
+describe("onDropped: what the server did not take", () => {
+  const told: unknown[] = [];
+  const client = (onDropped?: (d: unknown) => void): OverseerClient => new OverseerClient({ clientKey: "osk_x", onDropped });
+  beforeEach(() => void told.splice(0));
+
+  it("is called with the status of a refused batch, and not for one that is tried again", async () => {
+    const c = client((d) => told.push(d));
+    respond = () => new Response("{}", { status: 401 });
+    c.captureException(nodeError("one"));
+    c.captureException(nodeError("two"));
+    expect(await c.flush()).toBe(true);
+    expect(told).toEqual([{ events: 2, status: 401 }]);
+    respond = () => new Response("{}", { status: 503 });
+    c.captureException(nodeError("three"));
+    expect(await c.flush()).toBe(false);
+    expect(told).toHaveLength(1);
+    c.close();
+  });
+
+  it("is called with the reason for events dropped behind a 200, and never for an answer that dropped none", async () => {
+    const c = client((d) => told.push(d));
+    respond = () => ok({ received: 1, dropped: 1, droppedEvents: [{ index: 0, reason: "payment_required", type: "error" }] });
+    c.captureException(nodeError("one"));
+    await c.flush();
+    expect(told).toEqual([{ events: 1, status: 200, reason: "payment_required" }]);
+    for (const body of [{ received: 1 }, { droppedEvents: [] }, { droppedEvents: "x" }, [], null]) {
+      respond = () => ok(body);
+      c.captureException(nodeError("again"));
+      await c.flush();
+    }
+    respond = () => new Response("not json", { status: 200 });
+    c.captureException(nodeError("again"));
+    await c.flush();
+    expect(told).toHaveLength(1);
+    c.close();
+  });
+
+  it("a hook that throws changes nothing, and neither does none", async () => {
+    for (const c of [client(() => { throw new Error("app"); }), client()]) {
+      respond = () => new Response("{}", { status: 400 });
+      c.captureException(nodeError("one"));
+      expect(await c.flush()).toBe(true);
+      respond = () => ok({ droppedEvents: [null] });
+      c.captureException(nodeError("two"));
+      expect(await c.flush()).toBe(true);
+      c.close();
+    }
+  });
+});

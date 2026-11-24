@@ -125,7 +125,8 @@ async function* chunksOf(source: string | AsyncIterable<Chunk>, onBytes: (n: num
   const it = (typeof source === "string" ? createReadStream(source, { highWaterMark: 64 * 1024 }) : source)[Symbol.asyncIterator]();
   // Not `Promise.race([it.next(), aborted])`: that hangs a reaction on `aborted` per chunk, and every chunk stays in memory.
   let wake: (() => void) | undefined;
-  signal?.addEventListener("abort", () => wake?.(), { once: true });
+  const onAbort = (): void => wake?.();
+  signal?.addEventListener("abort", onAbort, { once: true });
   const next = async (): Promise<IteratorResult<Chunk> | null> => {
     const r = await new Promise<IteratorResult<Chunk> | null>((resolve, reject) => {
       if (signal?.aborted) return resolve(null);
@@ -175,6 +176,7 @@ async function* chunksOf(source: string | AsyncIterable<Chunk>, onBytes: (n: num
     pipeline(Readable.from(rest, { objectMode: false }), gz, () => undefined);
     for await (const out of gz) yield out as Buffer;
   } finally {
+    signal?.removeEventListener("abort", onAbort);
     gz?.destroy();
     void Promise.resolve(it.return?.()).catch(() => undefined);
   }
@@ -247,10 +249,17 @@ export function followFile(path: string, monitor: Sink, options: FollowOptions =
   let stopped = false;
   let running: Promise<void> = Promise.resolve();
 
-  const attach = (st: Stats, at: number): void => {
-    fd = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
+  const attach = (from: "end" | "start"): void => {
+    const opened = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
+    // The file that was opened, not the one a `stat` saw before it: a rotation in between would be read twice.
+    const st = fstatSync(opened);
+    if (!st.isFile()) {
+      closeSync(opened);
+      throw new TypeError("followFile: not a regular file");
+    }
+    fd = opened;
     id = `${st.dev}:${st.ino}`;
-    pos = at;
+    pos = from === "end" ? st.size : 0;
     lines.reset();
   };
   const detach = (): void => {
@@ -277,12 +286,13 @@ export function followFile(path: string, monitor: Sink, options: FollowOptions =
       const st = tryStat(path);
       if (st && !st.isFile()) throw new TypeError("followFile: not a regular file");
       if (fd >= 0 && (!st || `${st.dev}:${st.ino}` !== id)) {
-        // Rotated away or gone: the old file was read to its end above; its last line, if it had no newline, is complete now.
+        // Rotated away or gone: what was written between the read above and the rotation, then its last line, which is complete now.
+        await drain();
         lines.end();
         detach();
       }
       if (fd < 0 && st && !stopped) {
-        attach(st, 0);
+        attach("start");
         await drain();
       }
     } catch (err) {
@@ -293,7 +303,7 @@ export function followFile(path: string, monitor: Sink, options: FollowOptions =
     running = running.then(look);
   };
 
-  if (first) attach(first, options.from === "start" ? 0 : first.size);
+  if (first) attach(options.from === "start" ? "start" : "end");
   tick();
   const ready = running;
   const timer = setInterval(tick, Math.max(10, options.intervalMs ?? 1000));

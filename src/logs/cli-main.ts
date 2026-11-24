@@ -3,7 +3,7 @@
  * (the network is only used with `--cloud`). Everything it prints went through {@link clean}: a log line can hold terminal
  * commands, and none of them reaches the screen.
  */
-import { closeSync, openSync, statSync } from "node:fs";
+import { closeSync, lstatSync, openSync, statSync } from "node:fs";
 import { createLogMonitor } from "./monitor";
 import { fileStore, followFile, readLog } from "./node";
 import type { Follower, ReadResult } from "./read";
@@ -51,7 +51,7 @@ Options
   --cloud            also send the findings to Codmir (needs CODMIR_CLIENT_KEY; nothing is sent without this flag)
   --help, --version
 
-Exit codes: 0 done, 1 --fail-on matched, 2 wrong call or unreadable file.
+Exit codes: 0 done, 1 --fail-on matched, 2 wrong call, unreadable file or (with --cloud) findings not taken.
 Colour only on a terminal and when NO_COLOR is unset.
 `;
 
@@ -172,9 +172,9 @@ function table(findings: Finding[], top: number, color: boolean): string[] {
   if (shown.length === 0) return [];
   const width = Math.min(72, Math.max(5, ...shown.map((f) => clean(f.title).length)));
   const paint = (j: string, s: string): string => (color && COLOR[j] ? `\x1b[${COLOR[j]}m${s}\x1b[0m` : s);
-  const rows = [`${pad("", 0)}${pad("JUDGED", 7)} ${"HITS".padStart(6)}  ${pad("TITLE", width)}  ${pad("FIRST SEEN", 19)}  LAST SEEN`];
+  const rows = [`${pad("JUDGED", 7)} ${"HITS".padStart(6)}  ${pad("ID", 8)}  ${pad("TITLE", width)}  ${pad("FIRST SEEN", 19)}  LAST SEEN`];
   for (const f of shown) {
-    rows.push(`${paint(f.judgement, pad(clean(f.judgement), 7))} ${String(f.hits).padStart(6)}  ${pad(cut(clean(f.title), width), width)}  ${when(f.firstSeen)}  ${when(f.lastSeen)}`);
+    rows.push(`${paint(f.judgement, pad(clean(f.judgement), 7))} ${String(f.hits).padStart(6)}  ${pad(clean(f.id), 8)}  ${pad(cut(clean(f.title), width), width)}  ${when(f.firstSeen)}  ${when(f.lastSeen)}`);
   }
   if (sorted.length > shown.length) rows.push(`… ${sorted.length - shown.length} more (--top ${sorted.length} shows all)`);
   return rows;
@@ -191,11 +191,29 @@ const matches = (rule: "new" | "alarm" | "any", findings: Finding[]): boolean =>
 
 const levelsFrom = (l: LogLevel): LogLevel[] => LEVELS.slice(LEVELS.indexOf(l));
 
+/** Why this path is not for a state, or undefined: a file that is something else (the log itself, a typing mistake) is never written over. */
+function notAState(path: string): string | undefined {
+  let st;
+  try {
+    st = lstatSync(path);
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT" ? undefined : `cannot use ${path} for the state: ${(err as NodeJS.ErrnoException).code ?? "error"}`;
+  }
+  if (!st.isFile()) return `cannot use ${path} for the state: it is not a file`;
+  if (st.size === 0) return undefined;
+  const state = fileStore(path).load() as { version?: unknown; groups?: unknown } | null | undefined;
+  return state && typeof state === "object" && state.version === 1 && Array.isArray(state.groups) ? undefined : `${path} is not a state of this version, and it is not written over. Move it away or name another --state file`;
+}
+
+const count = (n: number): string => `${n} finding${n === 1 ? "" : "s"}`;
+
 export interface Io {
   stdin: NodeJS.ReadableStream & { isTTY?: boolean };
   stdout: { write(s: string): unknown; isTTY?: boolean };
   stderr: { write(s: string): unknown };
   env: Record<string, string | undefined>;
+  /** Called when a send got no answer: the request may hold the process for minutes. */
+  endSoon?(): void;
 }
 
 /** Runs the command; resolves with its exit code. */
@@ -222,6 +240,8 @@ export async function main(argv: string[], io: Io = { stdin: process.stdin, stdo
   };
   const color = Boolean(io.stdout.isTTY) && io.env.NO_COLOR === undefined;
 
+  const wrongState = args.state ? notAState(args.state) : undefined;
+  if (wrongState) return fail(wrongState);
   const store = args.state ? fileStore(args.state) : undefined;
   const key = io.env.CODMIR_CLIENT_KEY;
   if (args.cloud && !key) return fail("--cloud needs the project key in CODMIR_CLIENT_KEY");
@@ -251,8 +271,9 @@ export async function main(argv: string[], io: Io = { stdin: process.stdin, stdo
   const monitor: LogMonitor = createLogMonitor(options);
 
   if (args.mark) {
+    // `mark` saves the state itself; `stop()` would also end a batch, a 0 in every finding's counts.
     const found = monitor.mark(args.mark.id, args.mark.known !== undefined ? { known: args.mark.known } : { fixed: true });
-    await monitor.stop();
+    if (monitor.stats().errors > 0) return fail("the state file could not be written");
     const id = clean(args.mark.id);
     io.stdout.write(args.mark.known !== undefined ? `marked ${id} as known\n` : `marked ${id} as fixed: its next hit is judged back\n`);
     if (!found) io.stderr.write("codmir-logs: no finding with that id in the state yet; the mark is kept for when it appears\n");
@@ -319,24 +340,30 @@ export async function main(argv: string[], io: Io = { stdin: process.stdin, stdo
       }
     } catch (err) {
       await monitor.stop();
-      const where = followers.length ? "" : "";
-      return fail(`cannot read the input${where}: ${(err as NodeJS.ErrnoException).code ?? (err as Error).message}`);
+      return fail(`cannot read the input: ${(err as NodeJS.ErrnoException).code ?? (err as Error).message}`);
     }
 
-    await monitor.flush();
+    await monitor.stop(); // ends the batch: one run is one batch, so nothing ends one before
     const findings = batchSeen?.findings ?? [];
-    if (args.cloud) await monitor.stop();
-    else await monitor.stop();
     const stats = monitor.stats();
     if (store && stats.errors > 0) io.stderr.write("codmir-logs: the state file could not be written\n");
     if (!args.follow) {
       if (args.json) {
-        io.stdout.write(`${JSON.stringify(deepClean({ findings, read: totals, ...(batchSeen ? { batch: { from: batchSeen.from, to: batchSeen.to, records: batchSeen.records } } : {}) }), null, 2)}\n`);
+        io.stdout.write(`${JSON.stringify(deepClean({ findings, read: totals, ...(batchSeen ? { batch: { from: batchSeen.from, to: batchSeen.to, records: batchSeen.records } } : {}), ...(args.cloud ? { cloud: stats.cloud } : {}) }), null, 2)}\n`);
       } else {
         io.stdout.write(`${[...table(findings, args.top, color), summary(findings, totals)].join("\n")}\n`);
       }
     }
-    if (args.cloud && !args.json) io.stdout.write(`sent ${stats.cloud.sent} finding${stats.cloud.sent === 1 ? "" : "s"} to Codmir\n`);
+    const { sent, skipped, refused, waiting, reason } = stats.cloud;
+    if (args.cloud) {
+      if (!args.json) io.stdout.write(`sent ${count(Math.max(0, sent - refused - waiting))} to Codmir${skipped > 0 ? `; ${skipped} over the limit of a run` : ""}\n`);
+      if (refused > 0) io.stderr.write(`codmir-logs: Codmir did not take ${count(refused)}: ${clean(reason)}\n`);
+      if (waiting > 0) {
+        io.stderr.write(`codmir-logs: no answer from Codmir for ${count(waiting)}\n`);
+        io.endSoon?.();
+      }
+      if (refused > 0 || waiting > 0) return 2;
+    }
     if (interrupted) return args.follow ? 0 : 130;
     const rule = args.failOn;
     const seen = args.follow ? all.flat() : findings;

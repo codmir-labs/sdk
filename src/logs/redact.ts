@@ -189,8 +189,9 @@ const SEG_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
 const SEG_HEX = /^[0-9a-f]{16,}$/i;
 const SEG_CUID = /^c[a-z0-9]{23,31}$/;
 const SEG_PREFIXED = /^[a-z]{2,6}[-_][A-Za-z0-9]{12,}$/;
+const CONTROL = /[\x00-\x1f\x7f-\x9f\u2028\u2029]/; // eslint-disable-line no-control-regex
 
-/** One path segment folded: numbers to `:n`, uuids to `:uuid`, id-like and hash-like names to `:id` and `:token`. */
+/** One path segment folded: numbers to `:n`, uuids to `:uuid`, id-like and hash-like names to `:id` and `:token`; what `redact` masks stays masked. */
 function foldSegment(seg: string): string {
   if (seg === "") return seg;
   let raw = seg;
@@ -200,13 +201,17 @@ function foldSegment(seg: string): string {
     // keep the segment as it is
   }
   if (raw.includes("@")) return ":token";
+  raw = raw.replace(/[?#][^]*$/, "") || ":token"; // an encoded query is a query
   if (/^\d+$/.test(raw)) return ":n";
   if (SEG_UUID.test(raw)) return ":uuid";
   if ((SEG_CUID.test(raw) || SEG_PREFIXED.test(raw)) && /\d/.test(raw)) return ":id";
   if (SEG_HEX.test(raw)) return ":token";
   if (raw.length >= 24 && /^[A-Za-z0-9_+=.-]+$/.test(raw) && (/\d/.test(raw) || mixedCase(raw))) return ":token";
   if (raw.length > 48) return ":token";
-  return raw.replace(/\b[0-9a-f]{8,}\b/gi, ":token").replace(/\d{4,}/g, ":n");
+  // Before the numbers are folded: `2001:db8::7` with its first number gone is no address to any later check.
+  const out = redact(`/${raw}`).slice(1).replace(/\b[0-9a-f]{8,}\b/gi, ":token").replace(/\d{4,}/g, ":n");
+  // The decoding above can make an escape sequence live, and what is left can read as a secret (`:token-:n`).
+  return CONTROL.test(out) || redact(out) !== out ? ":token" : out;
 }
 
 /** A path as a pattern: no origin, query or fragment, ids folded, `_next/static` one entry, at most 90 characters. */
@@ -220,8 +225,13 @@ export function pathPattern(path: unknown): string {
   const segs = s.split("/").slice(1);
   while (segs.length > 1 && segs[segs.length - 1] === "") segs.pop();
   if (segs[0] === "_next" && segs[1] === "static") return "/_next/static/*";
-  const out = `/${segs.map(foldSegment).join("/")}`;
-  return out.length > MAX_PATH ? `${out.slice(0, MAX_PATH - 3)}...` : out;
+  // Once more for the whole path: a name in one segment can make the next one a secret (`/token:/…`).
+  let out = redact(`/${segs.map(foldSegment).join("/")}`);
+  // Cut between two segments: half a mask (`token=[sec`) would read as a secret the next time.
+  if (out.length > MAX_PATH) out = `${out.slice(0, Math.max(0, out.lastIndexOf("/", MAX_PATH - 4)))}/...`;
+  // A key must be what `redact` leaves as it is, or the group is dropped at a restart; `/token:` in front of `|500` is not.
+  const key = `GET|${out}|500`;
+  return redact(key) === key ? out : "/:token";
 }
 
 const DATE_TIME = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/g;

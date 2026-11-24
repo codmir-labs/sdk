@@ -11,8 +11,8 @@ npx codmir-logs logs/app.log
 ```
 
 ```
-JUDGED    HITS  TITLE                                                         FIRST SEEN           LAST SEEN
-new          5  report failed for user #: upstream rejected api_key=[secret]  2026-11-24 10:01:00  2026-11-24 10:01:40
+JUDGED    HITS  ID        TITLE                                                         FIRST SEEN           LAST SEEN
+new          5  3b39957f  report failed for user #: upstream rejected api_key=[secret]  2026-11-24 10:01:00  2026-11-24 10:01:40
 read 8 lines (662 B): 7 records, 0 requests, 1 skipped. 1 finding: 1 new.
 ```
 

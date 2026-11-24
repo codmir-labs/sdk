@@ -22,6 +22,21 @@ const LINES = Array.from({ length: 40 }, (_, i) =>
 );
 const FILE = Buffer.from(LINES.map((l, i) => l + (i % 2 ? "\r\n" : "\n")).join(""));
 
+describe("readLog: the signal", () => {
+  it("is left as it was: no listener stays on it, whatever the source or the end", async () => {
+    const on: string[] = [];
+    const signal = new AbortController().signal;
+    const add = signal.addEventListener.bind(signal);
+    const remove = signal.removeEventListener.bind(signal);
+    signal.addEventListener = ((...a: Parameters<typeof add>) => (on.push("on"), add(...a))) as typeof signal.addEventListener;
+    signal.removeEventListener = ((...a: Parameters<typeof remove>) => (on.pop(), remove(...a))) as typeof signal.removeEventListener;
+    for (let i = 0; i < 12; i++) await readLog(Readable.from([FILE], { objectMode: false }), sink(), { signal });
+    await readLog(Readable.from([gzipSync(FILE)], { objectMode: false }), sink(), { signal });
+    await expect(readLog(join(dir, "not-there.log"), sink(), { signal })).rejects.toThrow(/ENOENT/);
+    expect(on).toEqual([]);
+  });
+});
+
 describe("readLog: lines across chunk borders", () => {
   it("is the same as one chunk when the file is cut at every byte", async () => {
     expect(FILE.length).toBeGreaterThan(2500);

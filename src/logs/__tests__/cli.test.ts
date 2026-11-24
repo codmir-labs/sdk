@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
@@ -124,8 +124,8 @@ describe.skipIf(!hasDist)("codmir-logs (the built file)", () => {
     it("prints the short table and a summary line", () => {
       const r = run({ args: [join(example, "app.log")] });
       const lines = r.stdout.trimEnd().split("\n");
-      expect(lines[0]).toMatch(/^JUDGED\s+HITS\s+TITLE\s+FIRST SEEN\s+LAST SEEN$/);
-      expect(lines[1]).toMatch(/^new\s+5\s+report failed for user #: upstream rejected api_key=\[secret\]\s+2026-11-24 10:01:00\s+2026-11-24 10:01:40$/);
+      expect(lines[0]).toMatch(/^JUDGED\s+HITS\s+ID\s+TITLE\s+FIRST SEEN\s+LAST SEEN$/);
+      expect(lines[1]).toMatch(/^new\s+5\s+[0-9a-f]{8}\s+report failed for user #: upstream rejected api_key=\[secret\]\s+2026-11-24 10:01:00\s+2026-11-24 10:01:40$/);
       expect(lines[2]).toBe("read 8 lines (662 B): 7 records, 0 requests, 1 skipped. 1 finding: 1 new.");
       expect(r.stdout).not.toContain("\u001b");
     });
@@ -261,12 +261,57 @@ describe.skipIf(!hasDist)("codmir-logs (the built file)", () => {
       expect(JSON.parse(readFileSync(state, "utf8")).marks).toEqual([{ id: "deadbeef", known: "later" }]);
     });
 
-    it("a state that cannot be written is said, not hidden", () => {
+    it("the id mark takes is the one the table prints", () => {
+      const state = join(dir, "table-id.json");
+      const id = /^new\s+5\s+([0-9a-f]{8})\s/m.exec(run({ args: [f, "--state", state] }).stdout)?.[1] ?? "";
+      expect(run({ args: ["mark", id, "--known", "x", "--state", state] })).toMatchObject({ status: 0, stderr: "" });
+      expect(findings(run({ args: [f, "--state", state, "--json"] }))[0]).toMatchObject({ id, judgement: "known" });
+    });
+
+    it("a run is one batch and a mark is none: one entry in the counts per run", () => {
+      const state = join(dir, "batches.json");
+      const { id } = judged(state);
+      const counts = (): number[] => JSON.parse(readFileSync(state, "utf8")).groups[0].counts;
+      expect(counts()).toEqual([5]);
+      expect(run({ args: ["mark", id, "--known", "x", "--state", state] }).status).toBe(0);
+      expect(counts()).toEqual([5]);
+      judged(state);
+      expect(counts()).toEqual([5, 5]);
+    });
+
+    it("a state that cannot be written is said, not hidden: 2 for a mark, which is nothing else", () => {
       const r = run({ args: [f, "--state", join(dir, "missing-dir", "a", "s.json", "x", "y")] });
       expect(r.status).toBe(0);
       const blocked = file("blocked.txt", "i am a file");
-      const r2 = run({ args: [f, "--state", join(blocked, "s.json")] });
-      expect(r2.stderr).toContain("state file could not be written");
+      expect(run({ args: [f, "--state", join(blocked, "s.json")] })).toMatchObject({ status: 2, stdout: "", stderr: expect.stringContaining("ENOTDIR") });
+      if (process.getuid?.() === 0) return; // root writes anywhere
+      const readOnly = join(dir, "read-only");
+      mkdirSync(readOnly);
+      chmodSync(readOnly, 0o555);
+      const run1 = run({ args: [f, "--state", join(readOnly, "s.json")] });
+      expect(run1).toMatchObject({ status: 0, stderr: expect.stringContaining("state file could not be written") });
+      const mark = run({ args: ["mark", "deadbeef", "--fixed", "--state", join(readOnly, "s.json")] });
+      expect(mark).toMatchObject({ status: 2, stdout: "", stderr: expect.stringContaining("state file could not be written") });
+      chmodSync(readOnly, 0o755);
+    });
+
+    it("never writes over a file that is not a state: the log itself, other JSON, a link, a state of a later version", () => {
+      const log = file("my.log", "2026-11-24T10:00:00Z ERROR boom\n");
+      const json = file("package.json", '{"name":"shop","version":"1.0.0"}');
+      const later = file("later.json", '{"version":2,"groups":[]}');
+      const link = join(dir, "link.json");
+      symlinkSync(json, link);
+      for (const [args, path] of [[[log, "--state", log], log], [[log, "--state", json], json], [[log, "--state", link], json], [[log, "--state", later], later], [["mark", "deadbeef", "--fixed", "--state", json], json], [[log, "--state", dir], log]] as Array<[string[], string]>) {
+        const was = readFileSync(path, "utf8");
+        const r = run({ args });
+        expect(r.status, args.join(" ")).toBe(2);
+        expect(r.stdout).toBe("");
+        expect(r.stderr).toMatch(/not written over|is not a file/);
+        expect(readFileSync(path, "utf8")).toBe(was);
+      }
+      const empty = file("empty.json", "");
+      expect(run({ args: [log, "--state", empty] }).status).toBe(0);
+      expect(JSON.parse(readFileSync(empty, "utf8"))).toMatchObject({ version: 1 });
     });
   });
 
@@ -292,14 +337,17 @@ describe.skipIf(!hasDist)("codmir-logs (the built file)", () => {
     let server: Server;
     let hits: string[] = [];
     let dsn = "";
+    let answer: number | "none" = 200;
+    let body = "{}";
     beforeAll(async () => {
       server = createServer((req, res) => {
         let raw = "";
         req.on("data", (c) => (raw += c));
         req.on("end", () => {
           hits.push(raw);
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end("{}");
+          if (answer === "none") return;
+          res.writeHead(answer, { "content-type": "application/json" });
+          res.end(body);
         });
       });
       await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -329,6 +377,42 @@ describe.skipIf(!hasDist)("codmir-logs (the built file)", () => {
       const body = JSON.parse(hits[0]) as { events: Array<{ event: { message?: string } }> };
       expect(JSON.stringify(body)).toContain("report failed for user");
       expect(hits[0]).not.toContain("sk_live");
+    });
+
+    const send = (args: string[], to = dsn): ReturnType<typeof runAsync> => runAsync([...args, "--cloud"], { CODMIR_CLIENT_KEY: "osk_testkey0123456789", CODMIR_DSN: to });
+    const bug = join(example, "app.json.jsonl");
+
+    it("says what Codmir did not take, with the reason, and exits 2", async () => {
+      try {
+        answer = 401;
+        expect(await send([bug])).toMatchObject({ status: 2, stdout: expect.stringContaining("sent 0 findings to Codmir\n"), stderr: "codmir-logs: Codmir did not take 1 finding: status 401\n" });
+        answer = 200;
+        body = JSON.stringify({ droppedEvents: [{ index: 0, reason: "payment_required\u001b[31m" }] });
+        expect(await send([bug])).toMatchObject({ status: 2, stdout: expect.stringContaining("sent 0 findings to Codmir\n"), stderr: "codmir-logs: Codmir did not take 1 finding: payment_required\n" });
+        const json = await send([bug, "--json"]);
+        expect(json.status).toBe(2);
+        expect(JSON.parse(json.stdout).cloud).toMatchObject({ sent: 1, refused: 1, waiting: 0 });
+      } finally {
+        answer = 200;
+        body = "{}";
+      }
+    });
+
+    it("says that nobody answered, and does not wait for minutes for it", async () => {
+      expect(await send([bug], "http://127.0.0.1:1/api/overseer")).toMatchObject({ status: 2, stderr: "codmir-logs: no answer from Codmir for 1 finding\n" });
+      try {
+        answer = "none";
+        const t0 = Date.now();
+        expect(await send([bug])).toMatchObject({ status: 2, stdout: expect.stringContaining("sent 0 findings to Codmir\n"), stderr: "codmir-logs: no answer from Codmir for 1 finding\n" });
+        expect(Date.now() - t0).toBeLessThan(15_000);
+      } finally {
+        answer = 200;
+      }
+    }, 30_000);
+
+    it("says how many findings were over the limit of a run", async () => {
+      const many = file("over.log", Array.from({ length: 55 }, (_, i) => `2026-11-24T10:00:00Z ERROR failure of kind ${"abcdefghijklmnopqrstuvwxyz"[i % 26]}${"xyz"[Math.floor(i / 26)]}`).join("\n"));
+      expect((await send([many])).stdout).toContain("sent 50 findings to Codmir; 5 over the limit of a run\n");
     });
   });
 

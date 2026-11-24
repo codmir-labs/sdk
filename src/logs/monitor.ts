@@ -387,7 +387,7 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
   const stats = (): MonitorStats => ({
     ...counters,
     groups: groups.size,
-    cloud: cloud ? cloud.counters() : { sent: 0, skipped: 0, today: 0 },
+    cloud: cloud ? cloud.counters() : { sent: 0, skipped: 0, today: 0, refused: 0, waiting: 0 },
   });
 
   return { record, request, findings, mark, flush, stop, stats };

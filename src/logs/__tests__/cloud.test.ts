@@ -18,6 +18,7 @@ interface Hit {
 let server: Server;
 let hits: Hit[] = [];
 let answer = 200;
+let body = "{}";
 let url = "";
 let monitors: LogMonitor[] = [];
 
@@ -26,6 +27,7 @@ beforeEach(async () => {
   vi.setSystemTime(T0);
   hits = [];
   answer = 200;
+  body = "{}";
   server = createServer((req: IncomingMessage, res) => {
     let raw = "";
     req.on("data", (c) => (raw += c));
@@ -38,7 +40,7 @@ beforeEach(async () => {
       }
       hits.push({ url: req.url ?? "", key: req.headers["x-overseer-key"] as string | undefined, raw, events });
       res.writeHead(answer, { "content-type": "application/json" });
-      res.end("{}");
+      res.end(body);
     });
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -205,13 +207,40 @@ describe("it never hurts the app", () => {
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   });
 
+  it("says what the server did not take: refused with the reason, waiting when there was no answer", async () => {
+    answer = 401;
+    const wrongKey = make();
+    fail(wrongKey);
+    await wrongKey.flush();
+    expect(wrongKey.stats().cloud).toEqual({ sent: 1, skipped: 0, today: 1, refused: 1, waiting: 0, reason: "status 401" });
+
+    answer = 200;
+    body = JSON.stringify({ received: 0, dropped: 1, droppedEvents: [{ index: 0, reason: "payment_required" }] });
+    const noCard = make();
+    fail(noCard);
+    await noCard.flush();
+    expect(noCard.stats().cloud).toMatchObject({ sent: 1, refused: 1, waiting: 0, reason: "payment_required" });
+
+    body = "{}";
+    answer = 503;
+    const down = make();
+    fail(down);
+    await down.flush();
+    expect(down.stats().cloud).toMatchObject({ sent: 1, refused: 0, waiting: 1 });
+    answer = 200; // the client still holds it, and sends it along with the next one
+    fail(down, "another failure");
+    await down.flush();
+    expect(down.stats().cloud).toMatchObject({ sent: 2, refused: 0, waiting: 0 });
+    expect(hits.at(-1)!.events).toHaveLength(2);
+  });
+
   it("is off by default: nothing is sent, nothing is loaded", async () => {
     const m = createLogMonitor();
     monitors.push(m);
     fail(m);
     await m.flush();
     expect(hits).toHaveLength(0);
-    expect(m.stats().cloud).toEqual({ sent: 0, skipped: 0, today: 0 });
+    expect(m.stats().cloud).toEqual({ sent: 0, skipped: 0, today: 0, refused: 0, waiting: 0 });
   });
 
   it("cloud: true uses the client init() made, and does nothing without one", async () => {

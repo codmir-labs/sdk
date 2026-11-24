@@ -86,6 +86,11 @@ export interface OverseerConfig {
   service?: string;
   /** Hook to modify/filter events before sending */
   beforeSend?: (event: OverseerEvent) => OverseerEvent | null;
+  /**
+   * Called when the server did not take events: a batch it refused (`status` 401 for a wrong key, say), or events it
+   * dropped out of a batch it answered 200 to (`reason`, such as `payment_required`). They are not sent again.
+   */
+  onDropped?: (dropped: { events: number; status: number; reason?: string }) => void;
   /** Initial user context */
   initialUser?: UserContext;
   /** Initial tags */
@@ -170,8 +175,9 @@ export type SeverityLevel = "fatal" | "error" | "warning" | "info" | "debug";
 // Core Client
 // =============================================================================
 
-type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'selfHealing' | 'apiKey' | 'includeSourceContext'> & {
+type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'selfHealing' | 'apiKey' | 'includeSourceContext' | 'onDropped'> & {
   initialUser?: UserContext;
+  onDropped?: OverseerConfig["onDropped"];
   selfHealing?: SelfHealingConfig;
   includeSourceContext: boolean;
   tracePropagationTargets: Array<string | RegExp>;
@@ -230,6 +236,7 @@ class OverseerClient {
       replaysSessionSampleRate: config.replaysSessionSampleRate ?? 0,
       replaysOnErrorSampleRate: config.replaysOnErrorSampleRate ?? 1.0,
       beforeSend: config.beforeSend || ((e) => e),
+      onDropped: config.onDropped,
       initialUser: config.initialUser,
       initialTags: config.initialTags || {},
       selfHealing: config.selfHealing,
@@ -603,6 +610,14 @@ class OverseerClient {
     });
   }
 
+  private tellDropped(events: number, status: number, reason?: unknown): void {
+    try {
+      this.config.onDropped?.({ events, status, ...(typeof reason === "string" ? { reason } : {}) });
+    } catch {
+      // the app's hook never breaks the sending
+    }
+  }
+
   private async sendBatch(
     events: QueuedEvent[],
   ): Promise<{ kind: "ok" } | { kind: "drop" } | { kind: "retry"; retryAfterMs?: number }> {
@@ -624,15 +639,19 @@ class OverseerClient {
     }
 
     if (res.ok) {
-      if (this.config.debug) {
+      if (this.config.debug || this.config.onDropped) {
         const dropped = await readDroppedEvents(res);
-        if (dropped.length > 0) this.log("Server dropped events:", dropped);
+        if (dropped.length > 0) {
+          this.log("Server dropped events:", dropped);
+          this.tellDropped(dropped.length, res.status, dropped[0]?.reason);
+        }
       }
       return { kind: "ok" };
     }
 
     if (!isRetryableStatus(res.status)) {
       this.log(`Server rejected a batch of ${events.length} event(s) with ${res.status}; not retrying`);
+      this.tellDropped(events.length, res.status);
       return { kind: "drop" };
     }
     const retryAfter = Number(res.headers?.get?.("retry-after"));

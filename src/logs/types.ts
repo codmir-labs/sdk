@@ -100,7 +100,19 @@ export interface MonitorStats {
   reentrant: number;
   /** Errors thrown by `onBatch` or by an internal step, swallowed. */
   errors: number;
-  cloud: { sent: number; skipped: number; today: number };
+  cloud: {
+    /** Findings handed to the client that sends them. */
+    sent: number;
+    /** Over the limit of a batch or a day. */
+    skipped: number;
+    /** Sent this UTC day, for `perDay`. */
+    today: number;
+    /** Of `sent`, the ones the server did not take, and the reason it gave last (`payment_required`, `status 401`). Known only with `cloud.apiKey`. */
+    refused: number;
+    reason?: string;
+    /** Of `sent`, the ones no answer came for: the client tries again while the process lives. */
+    waiting: number;
+  };
 }
 
 export interface CloudOptions {

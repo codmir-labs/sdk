@@ -7,7 +7,7 @@ import type { OverseerEvent } from "../overseer/index";
 import { SDK_VERSION } from "../version";
 import { num } from "./num";
 import { redact } from "./redact";
-import type { CloudOptions, Finding, LogLevel } from "./types";
+import type { CloudOptions, Finding, LogLevel, MonitorStats } from "./types";
 
 /** What the monitor keeps per group so a finding is not sent twice in an hour, and every hit is sent once. */
 export interface SendState {
@@ -87,7 +87,7 @@ export interface Cloud {
   select(candidates: Candidate[], now: number): Candidate[];
   /** Hands the events to the client and waits for its flush, at most 5 s. Never throws. */
   send(events: OverseerEvent[]): Promise<boolean>;
-  counters(): { sent: number; skipped: number; today: number };
+  counters(): MonitorStats["cloud"];
   /** The UTC day (`2026-11-24`) the per-day count is for, and the count; what a restart takes up again. */
   state(): { day: string; sent: number };
   restore(saved: unknown): void;
@@ -107,6 +107,9 @@ export function createCloud(
   let today = 0;
   let sent = 0;
   let skipped = 0;
+  let refused = 0;
+  let waiting = 0;
+  let reason: string | undefined;
   let own: SdkClient | null = null;
 
   const wants = (c: Candidate, now: number): boolean => {
@@ -129,6 +132,10 @@ export function createCloud(
         service: base.service,
         release: base.release,
         environment: o.environment ?? base.environment,
+        onDropped: (d) => {
+          refused += d.events;
+          reason = cut(d.reason ?? `status ${d.status}`, 64);
+        },
       }) as SdkClient;
       own.init();
     }
@@ -166,7 +173,10 @@ export function createCloud(
         if (!c) return false;
         for (const e of events) {
           try {
-            if (c.captureEvent(e)) sent += 1;
+            if (c.captureEvent(e)) {
+              sent += 1;
+              waiting += 1;
+            }
           } catch {
             // one bad event never stops the others
           }
@@ -175,7 +185,9 @@ export function createCloud(
           timer = setTimeout(() => resolve(false), SEND_TIMEOUT_MS);
           (timer as { unref?: () => void }).unref?.();
         });
-        return await Promise.race([c.flush(), deadline]);
+        const answered = await Promise.race([c.flush(), deadline]);
+        if (answered) waiting = 0; // the client's queue is empty: what an earlier call left in it went out too
+        return answered;
       } catch {
         return false;
       } finally {
@@ -183,7 +195,7 @@ export function createCloud(
       }
     },
 
-    counters: () => ({ sent, skipped, today }),
+    counters: () => ({ sent, skipped, today, refused, waiting, ...(reason ? { reason } : {}) }),
 
     state: () => ({ day, sent: today }),
 

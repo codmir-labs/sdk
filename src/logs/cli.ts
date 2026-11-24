@@ -7,7 +7,9 @@ process.stdout.on("error", (err: NodeJS.ErrnoException) => {
   throw err;
 });
 
-main(process.argv.slice(2)).then(
+const endSoon = (): void => void setTimeout(() => process.exit(), 2000).unref();
+
+main(process.argv.slice(2), { stdin: process.stdin, stdout: process.stdout, stderr: process.stderr, env: process.env, endSoon }).then(
   (code) => {
     process.exitCode = code;
   },
