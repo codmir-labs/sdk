@@ -29,6 +29,7 @@
 
 import { generateId } from "../id";
 import { getClient } from "../overseer/index";
+import { dropPageQuery } from "./page-query";
 import {
   resolvePrivacy,
   toRrwebPrivacy,
@@ -78,7 +79,10 @@ export interface ReplaySegment {
   startTime: number;
   /** Epoch milliseconds of the last event. */
   endTime: number;
-  /** rrweb events. Empty on the copies kept in `ReplaySession.segments`. */
+  /**
+   * rrweb events. A link or source that rrweb resolved to the page itself, such as `href="#top"`, keeps the page's
+   * origin and path and its own fragment, never the page's query. Empty on the copies kept in `ReplaySession.segments`.
+   */
   events: RrwebEvent[];
   /** Ids of the errors captured while this segment recorded. */
   errorIds?: string[];
@@ -408,7 +412,10 @@ export class ReplayRecorder {
       this.record = record;
       const rrwebPrivacy = toRrwebPrivacy(this.config.privacy);
       this.stopRrweb = record({
-        emit: (event, isCheckout) => this.onEvent(event as unknown as RrwebEvent, isCheckout === true),
+        // rrweb resolved this event's links against the page's address of this moment, and a pushState changes that
+        // address without a Meta event, so the page's query is cut out of them here, the one place that still knows it.
+        emit: (event, isCheckout) =>
+          this.onEvent(dropPageQuery(event as unknown as RrwebEvent, window.location.href), isCheckout === true),
         ...rrwebPrivacy,
         // On-error mode needs a full snapshot at the start of whatever window is uploaded.
         ...(this.mode === "buffer" ? { checkoutEveryNms: Math.max(1000, Math.floor(this.config.bufferDuration / 2)) } : {}),
