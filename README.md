@@ -226,6 +226,8 @@ Each import is its own bundle, so a page that only reports errors never loads th
 | `@codmir/sdk/browser` | `init` with global handlers, click and request breadcrumbs, `fetch` and XHR spans, `startBrowserTracing` | Browser |
 | `@codmir/sdk/replay` | `startReplay`, `stopReplay`, `ReplayRecorder`, `DEFAULT_PRIVACY` | Browser |
 | `@codmir/sdk/tracing` | `startSpan`, `startTransaction`, `startChildSpan`, `traceparent` helpers, `instrumentFetch`, `instrumentXhr` | Anywhere |
+| `@codmir/sdk/logs` | `createLogMonitor`, `redact`, `pathPattern`, `messageKey`: findings from an app's own logs, local first | Anywhere |
+| `@codmir/sdk/logs/node` | `captureConsole`, `captureProcess`, `fileSink`, `expressLogs`, `honoLogs` | Node.js |
 | `@codmir/sdk/nextjs` | Next.js `init`, `captureRouterError`, `captureRequestError`, route-change breadcrumbs | Browser and server |
 | `@codmir/sdk/nextjs/server` | `withCodmirTracing`, `withCodmirMiddleware` | Node.js runtime |
 | `@codmir/sdk/express` | `init`, `requestHandler`, `tracingHandler`, `errorHandler` | Node.js |
@@ -938,6 +940,158 @@ when `upload.debug` is on), and the rest of its list still applies.
 
 </details>
 
+## Log findings
+
+`@codmir/sdk/logs` reads what your app logs and the requests it serves, groups them, and every 15 minutes tells you what
+is new, what is on fire and what came back. It runs on your machine: no account, no key, no network. Add `cloud` and
+the findings also arrive in your Codmir project as issues.
+
+```ts
+import { createLogMonitor } from '@codmir/sdk/logs';
+
+const logs = createLogMonitor({
+  onBatch: (batch) => {
+    for (const f of batch.findings) console.log(`${f.judgement} ${f.hits}x ${f.title}`);
+  },
+});
+logs.record({ level: 'error', message: 'payment failed for order 8812' });
+logs.request({ method: 'GET', path: '/users/42', status: 500, durationMs: 31 });
+await logs.flush(); // a batch ends every 15 minutes; flush() ends the open one now
+await logs.stop();
+```
+
+```mermaid
+flowchart LR
+    subgraph feed["Feed"]
+        direction TB
+        F1["record()<br/>request()"]
+        F2["captureConsole()<br/>captureProcess()"]
+        F3["expressLogs()<br/>honoLogs()"]
+    end
+    subgraph keep["Kept in memory"]
+        direction TB
+        K1["redact()<br/>nothing raw is kept"]
+        K2["Group by key<br/>at most 500"]
+        K3["Counts<br/>the last 96 batches"]
+    end
+    subgraph judge["Every 15 minutes"]
+        direction TB
+        J1["Judge each group<br/>new, alarm, back, known, noise"]
+        J2["onBatch()<br/>fileSink()"]
+    end
+    subgraph cloud["Cloud mode, off by default"]
+        direction TB
+        C1["Which findings<br/>once an hour, caps"]
+        C2["Overseer client<br/>queue, retry"]
+    end
+    API[("Codmir API")]
+
+    F1 & F2 & F3 --> K1 --> K2 --> K3 --> J1 --> J2
+    J1 -.-> C1 --> C2 --> API
+```
+
+Only `warning`, `error` and `fatal` lines and requests with status 400 and above become findings. Everything else is only
+counted in `stats()`. A log line is grouped by its text with numbers, ids, hashes, dates and quoted values folded; a
+request by method, path pattern (`/users/:n`) and status.
+
+| Judgement | When |
+| --- | --- |
+| `new` | The group was never seen before |
+| `alarm` | A request of status 500 or above, or a `fatal` line, with 3 hits or more in the batch; or any group at 10 times its usual |
+| `back` | Seen again after 24 quiet hours, or after `logs.mark(id, { fixed: true })` |
+| `known` | You marked it: `logs.mark(id, { known: 'https://example.com/issue/12' })` |
+| `noise` | Scanner probes (`wp-`, `.env`, `.git`, `.php` and the like), bots on a 404, or your own `noise` patterns |
+| `seen` | An ordinary repeat |
+
+Each finding carries its hit count per batch (the last 96), first and last seen, the releases it was seen in and one
+redacted sample. `logs.findings()` returns them at any time.
+
+### On a Node server
+
+`@codmir/sdk/logs/node` adds what only Node can do. Nothing here changes what your app or Node does: `console` still
+prints, a crash still prints its stack and exits with code 1.
+
+```ts
+import { createLogMonitor } from '@codmir/sdk/logs';
+import { captureConsole, captureProcess, fileSink, expressLogs } from '@codmir/sdk/logs/node';
+import express from 'express';
+
+const logs = createLogMonitor({
+  service: 'billing',
+  release: process.env.APP_VERSION,
+  onBatch: fileSink('./logs/findings.jsonl'), // one JSON line per batch, mode 0600, rotates at 5 MB, keeps 2
+});
+captureConsole(logs, ['error', 'warn']); // returns a function that puts the originals back
+captureProcess(logs); // uncaught exceptions and unhandled rejections, recorded as fatal
+
+const app = express();
+app.use(expressLogs(logs)); // status and duration of every answered request, the route or the path without its query
+```
+
+For Hono, `app.use(honoLogs(logs))` does the same. `captureProcess` adds no `unhandledRejection` listener, because that
+would change what Node does with one.
+
+### Send the findings to Codmir
+
+```ts
+import { createLogMonitor } from '@codmir/sdk/logs';
+
+const logs = createLogMonitor({
+  release: process.env.APP_VERSION,
+  cloud: { apiKey: process.env.CODMIR_CLIENT_KEY }, // or `cloud: true` to use the client init() made
+});
+```
+
+One finding is one issue: its fingerprint is the group, and a repeat counts up. A finding is sent the first time it
+matters, then at most once per `everyMinutes` while it has hits, and at once when it is `back`. `noise` is never sent and
+`known` only the first time, with its note. Delivery is the SDK's own client: its queue, its batching and its retry. A
+refusal or a network failure never throws and never blocks your app.
+
+| What is sent | What is never sent |
+| --- | --- |
+| The issue title (`GET /orders/:n answers 500`, or the folded log line), level and the group as its fingerprint | The raw log line, or any text that was not redacted |
+| Method, path pattern, status, user-agent family, hits per batch, first and last seen, releases | Query strings, headers, cookies, request bodies |
+| One sample, redacted, quoted values folded, at most 300 characters | Emails, IP addresses, tokens, JWTs, `token=` values, card numbers, long ids and secrets |
+
+Redaction runs before anything is kept, and again on the event. It is stable: `redact(redact(x)) === redact(x)`. Add
+your own patterns with `redact: [/ORDER-\d{6}/]`; every match becomes `[redacted]`.
+
+<details>
+<summary><b>Log monitor options, limits and cost</b></summary>
+
+| Option (`createLogMonitor`) | Default | Meaning |
+| --- | --- | --- |
+| `batchMinutes` | 15 | Minutes between batches; the timer never keeps the process alive |
+| `include.levels` | `['warning', 'error', 'fatal']` | Levels that become findings |
+| `include.minStatus` | 400 | Lowest status that becomes a finding |
+| `noise` | `[]` | Your own noise: a string (substring) or a RegExp, tested against `GET /path 404` or `ERROR the folded message` |
+| `redact` | `[]` | Your own redaction patterns |
+| `limits.groups` | 500 | Groups held; the quietest is dropped and counted in `stats().dropped` |
+| `onBatch` | none | Called with `{ from, to, records, findings, alarms }`; an error it throws never reaches your app |
+| `service`, `release` | none | Attached to findings; a record can carry its own |
+| `cloud` | off | `true`, or `{ apiKey, dsn, minSeverity: 'warning', everyMinutes: 60, perBatch: 50, perDay: 1000 }` |
+
+| Limit | Value |
+| --- | --- |
+| Group key | 200 characters |
+| Text looked at per record | 1,000 characters; the rest is cut before any pattern runs |
+| Counts per group | The last 96 batches |
+| Time per record | About 10 microseconds; 100,000 records of 1,000 shapes take about 1 s and about 1 MB of memory |
+| Cloud: per batch / per day | 50 / 1,000 findings, most serious first |
+| Cloud: repeat | Once per 60 minutes while a finding has hits |
+
+Codmir bills stored events. In cloud mode each finding sent is one event, so `perDay` is your ceiling: 1,000 findings a
+day at most, and far fewer in practice, because a finding is sent once an hour and `noise` and `known` are not sent at all.
+Local mode costs nothing.
+
+`logs.flush()` ends the open batch now; `logs.stop()` does that once more, stops the timer and ignores later records. A call
+made while a batch is being delivered (an app that logs inside `onBatch`) is skipped, never recursed into.
+
+</details>
+
+To turn it off: do not create a monitor, or call `await logs.stop()`; `captureConsole` and `captureProcess` return a function
+that undoes them. Cloud mode is off unless you pass `cloud`.
+
 ## Privacy and safety
 
 > [!IMPORTANT]
@@ -1174,6 +1328,19 @@ Each framework's `init()` takes the core options plus its own:
 | Source context | 3 frames, 5 lines each side, 240 characters per line, files up to 1 MB | `addSourceContext()` |
 | Replay request | About 1.8 MB and 10,000 events; the newest 500 error ids per segment | `chunkEvents()`, `buildSegmentBody()` |
 
+### Log monitor options
+
+`createLogMonitor()` from `@codmir/sdk/logs` is configured on its own, not through `init()`; the options are in
+[Log findings](#log-findings). With `cloud: true` it sends through the client `init()` made; with `cloud: { apiKey }` it
+makes its own, with the same queue and retry.
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `batchMinutes` | 15 | Minutes between batches |
+| `include` | warning, error, fatal; status 400+ | What becomes a finding |
+| `limits.groups` | 500 | Groups held at once |
+| `cloud` | off | `true`, or `{ apiKey, dsn, minSeverity, everyMinutes: 60, perBatch: 50, perDay: 1000 }` |
+
 ## Verify your setup
 
 After installing, send your project a test message:
@@ -1385,8 +1552,11 @@ is tree-shaken, then compressed with gzip level 9. Importing less can only make 
 | `@codmir/sdk/tracing` | 28.3 kB | 9.9 kB |
 | `@codmir/sdk/browser` | 34.0 kB | 11.9 kB |
 | `@codmir/sdk/replay` | 29.8 kB, plus 75.7 kB for rrweb | 10.4 kB, plus 23.4 kB for rrweb |
+| `@codmir/sdk/logs` | 15.4 kB | 6.8 kB |
+| `@codmir/sdk/logs/node` | 2.2 kB | 1.1 kB |
 
-rrweb is a separate chunk that loads only when `startReplay()` decides to record.
+rrweb is a separate chunk that loads only when `startReplay()` decides to record. The log monitor loads the error client
+only when `cloud` is on.
 
 ## Requirements
 
