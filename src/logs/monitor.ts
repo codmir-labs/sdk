@@ -7,15 +7,13 @@
 import { createCloud, findingEvent, type Candidate, type Cloud, type SendState } from "./cloud";
 import { num } from "./num";
 import { MAX_KEY, MAX_SAMPLE, compileExtra, isScannerPath, lineText, messageKey, pathPattern, redact, shortId, uaFamily } from "./redact";
+import { COUNT_BATCHES, FORGET_MS, MAX_MARKS, MAX_RELEASES, exportState, loadState, seedOf } from "./state";
 import type { Finding, Judgement, LogBatch, LogLevel, LogMonitor, LogMonitorOptions, LogRecord, MarkOptions, MonitorStats, RequestRecord, TimeInput } from "./types";
 
-export const COUNT_BATCHES = 96;
+export { COUNT_BATCHES };
 export const QUIET_MS = 24 * 3_600_000;
-const FORGET_MS = 30 * 24 * 3_600_000;
 const ALARM_HITS = 3;
 const GROWTH_FACTOR = 10;
-const MAX_RELEASES = 8;
-const MAX_MARKS = 500;
 /** A week: past 24.8 days a timer overflows and fires at once, again and again. */
 const MAX_BATCH_MINUTES = 7 * 24 * 60;
 const DEFAULT_LEVELS: LogLevel[] = ["warning", "error", "fatal"];
@@ -33,9 +31,7 @@ export function normalizeLevel(level: unknown): LogLevel {
   return (typeof level === "string" && LEVELS[level.toLowerCase()]) || "info";
 }
 
-type Seed = Pick<Group, "kind" | "title" | "noise" | "sample"> & Partial<Pick<Group, "method" | "path" | "status" | "level">>;
-
-interface Group extends SendState {
+export interface Group extends SendState {
   key: string;
   id: string;
   kind: "request" | "message";
@@ -101,6 +97,7 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
   const maxGroups = Math.floor(num(opts.limits?.groups, 500, 1, 100_000));
   const batchMs = num(opts.batchMinutes, 15, 1, MAX_BATCH_MINUTES) * 60_000;
   const noiseTests = (opts.noise ?? []).map((n) => (typeof n === "string" ? (label: string) => label.toLowerCase().includes(n.toLowerCase()) : (label: string) => new RegExp(n.source, n.flags.replace(/[gy]/g, "")).test(label)));
+  const store = opts.store;
   const cloud: Cloud | null = opts.cloud ? createCloud(opts.cloud, { service: opts.service, release: opts.release, environment: typeof opts.cloud === "object" ? opts.cloud.environment : undefined }) : null;
 
   const groups = new Map<string, Group>();
@@ -124,13 +121,14 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
     }
   };
 
-  const open = (key: string, make: () => Seed, ms: number): Group => {
+  /** The group of a key, made at its first hit: what it is comes from the key itself (the same read a restart makes), its sample from `sample`. */
+  const open = (key: string, sample: () => string, ms: number): Group => {
     const hit = groups.get(key);
     if (hit) return hit;
     if (groups.size >= maxGroups) evict();
     const id = shortId(key);
     const g: Group = {
-      ...make(), key, id, releases: [], total: 0, hits: 0, counts: [], backCount: 0, fixed: false, entering: "new", families: {},
+      ...(seedOf(key, isNoise) as NonNullable<ReturnType<typeof seedOf>>), sample: sample(), key, id, releases: [], total: 0, hits: 0, counts: [], backCount: 0, fixed: false, entering: "new", families: {},
       nonBot: 0, pathHits: 0, scannerHits: 0, durN: 0, durSum: 0, durMax: 0, last: "new", sentBack: 0, firstMs: ms, lastMs: ms,
     };
     const earlier = marks.get(id) ?? marks.get(key);
@@ -228,11 +226,7 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
       const key = `${level}|${messageKey(text, extra)}`.slice(0, MAX_KEY);
       let g = groups.get(key);
       if (!g) {
-        g = open(key, () => {
-          const title = key.slice(level.length + 1);
-          const label = `${level.toUpperCase()} ${title}`;
-          return { kind: "message" as const, title: title.slice(0, 200), level, noise: isNoise(label), sample: sampleOf(text, extra) };
-        }, ms);
+        g = open(key, () => sampleOf(text, extra), ms);
       }
       touch(g, ms, rec.release, rec.service);
       if (typeof rec.path === "string" && rec.path) {
@@ -264,10 +258,7 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
       const key = `${method}|${path}|${status}`.slice(0, MAX_KEY);
       let g = groups.get(key);
       if (!g) {
-        g = open(key, () => {
-          const noise = (isScannerPath(path) && status < 500) || isNoise(`${method} ${path} ${status}`);
-          return { kind: "request" as const, title: `${method} ${path} answers ${status}`.slice(0, 200), method, path, status, noise, sample: clip(`${method} ${typeof req.path === "string" ? req.path : ""}`, MAX_SAMPLE) };
-        }, ms);
+        g = open(key, () => clip(`${method} ${typeof req.path === "string" ? req.path : ""}`, MAX_SAMPLE), ms);
       }
       touch(g, ms, req.release, req.service);
       const fam = uaFamily(req.userAgent);
@@ -289,22 +280,26 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
         .map((g) => (g.hits > 0 ? snapshot(g, g.hits, judge(g, g.hits)) : snapshot(g, 0, g.last))),
     ) ?? [];
 
-  const mark = (id: string, m: MarkOptions): boolean =>
+  const mark = (id: string, m: MarkOptions): boolean => {
+    const found = markNow(id, m);
+    persist();
+    return found;
+  };
+
+  const markNow = (id: string, m: MarkOptions): boolean =>
     guard(() => {
       const g = [...groups.values()].find((x) => x.id === id || x.key === id);
-      const cur = { ...(marks.get(g?.id ?? id) ?? {}) };
+      const at = g?.id ?? id;
+      const cur = { ...marks.get(at) };
       if (m && "known" in m) {
         if (typeof m.known === "string") cur.known = m.known.slice(0, 200);
         else delete cur.known;
       }
       if (m?.fixed) cur.fixed = true;
-      if (!marks.has(g?.id ?? id) && marks.size >= MAX_MARKS) marks.delete(marks.keys().next().value as string);
-      marks.set(g?.id ?? id, cur);
+      if (!marks.has(at) && marks.size >= MAX_MARKS) marks.delete(marks.keys().next().value as string);
+      marks.set(at, cur);
       if (g) {
-        if (m && "known" in m) {
-          if (typeof m.known === "string") g.known = m.known.slice(0, 200);
-          else delete g.known;
-        }
+        if (m && "known" in m) g.known = cur.known as string | undefined;
         if (m?.fixed) g.fixed = true;
         return true;
       }
@@ -318,7 +313,7 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
   };
 
   /** Ends the open window. */
-  const runBatch = (): void => {
+  const endBatch = (): void => {
     if (busy) return;
     const now = Date.now();
     const out: Finding[] = [];
@@ -360,11 +355,27 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
     if (p) track(p.catch(() => false));
   };
 
+  const runBatch = (): void => {
+    endBatch();
+    persist(); // after `onBatch` and the cloud decision, so `sentAt` and `sentTotal` are in it
+  };
+
   const startTimer = (): void => {
     timer = setInterval(() => void guard(runBatch), batchMs);
     (timer as { unref?: () => void }).unref?.();
   };
   guard(startTimer); // a runtime that refuses timers here (a worker's module scope) still gets `flush()`
+
+  /** A store call that answered with a promise is a store that is not synchronous: counted, never awaited. */
+  const sync = (v: unknown): unknown => (typeof (v as PromiseLike<unknown>)?.then === "function" ? void (Promise.resolve(v).catch(() => 0), (counters.errors += 1)) : v);
+
+  /** Writes the state to the store: after a batch, a mark and `stop()`. */
+  const persist = (): void => void (store && guard(() => sync(store.save(exportState(groups.values(), marks, Date.now(), batchMs / 60_000, cloud?.state())))));
+
+  const loaded = store && guard(() => loadState(sync(store.load()), Date.now(), maxGroups, isNoise));
+  for (const g of loaded?.groups ?? []) groups.set(g.key, g);
+  for (const [id, m] of loaded?.marks ?? []) marks.set(id, m);
+  cloud?.restore(loaded?.cloud);
 
   const flush = async (): Promise<void> => {
     try {
@@ -379,6 +390,7 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
     if (stopped) return;
     await flush();
     stopped = true;
+    persist();
     if (timer) clearInterval(timer);
     timer = null;
     cloud?.close();
