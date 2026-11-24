@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Releases are manual: a maintainer runs this workflow on main from the Actions tab.
+  workflow_dispatch:
 
 jobs:
   build:
@@ -46,7 +48,8 @@ jobs:
 
   release:
     needs: [build]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # Only a manual run on main releases; a push or a pull request never does.
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
