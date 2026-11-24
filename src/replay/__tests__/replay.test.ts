@@ -297,6 +297,177 @@ describe("hidden and file inputs", () => {
   });
 });
 
+describe("an invalid privacy selector", () => {
+  // `p:has-text(x)` is a test-runner pseudo-class, not CSS: no DOM parses it. `[data-x` parses alone (the DOM closes the
+  // bracket at the end of the string) but breaks the list it is joined into. rrweb gets each list as one selector and
+  // swallows the error, so either one used to switch its whole list off, the defaults with it.
+  const INVALID = ["p:has-text(x)", "[data-x"];
+
+  it.each(INVALID)("%s in maskSelectors costs only itself: the defaults and a custom selector still mask", async (invalid) => {
+    useFakeClock();
+    document.body.innerHTML = `
+      <p data-private>ssn-123-45-6789</p>
+      <p class="private">card-4242-4242</p>
+      <p class="customer-name">customer-jane-doe</p>
+      <p>public-visible-text</p>`;
+    const { replay } = await load({ replaysSessionSampleRate: 1 });
+    expect(replay.startReplay({ privacy: { maskSelectors: ["[data-private]", ".private", invalid, ".customer-name"] } })).toBeTruthy();
+    await settle();
+    // Added after the full snapshot, so these go out in a mutation.
+    document.body.insertAdjacentHTML("beforeend", `<p class="customer-name">customer-added-later</p><p>public-added-later</p>`);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    const text = allReplayText();
+    expect(["ssn-123-45-6789", "card-4242-4242", "customer-jane-doe", "customer-added-later"].filter((t) => text.includes(t))).toEqual([]);
+    expect(text).toContain("public-visible-text");
+    expect(text).toContain("public-added-later");
+  });
+
+  it.each(INVALID)("%s in blockSelectors costs only itself: the defaults and a custom selector still block", async (invalid) => {
+    useFakeClock();
+    document.body.innerHTML = `
+      <div data-codmir-block><span>block-secret-subtree</span></div>
+      <div data-block-replay><span>legacy-block-secret</span></div>
+      <section id="card-form"><span>card-form-secret</span></section>
+      <p>public-visible-text</p>`;
+    const { replay } = await load({ replaysSessionSampleRate: 1 });
+    const blockSelectors = ["[data-codmir-block]", "[data-block-replay]", invalid, "#card-form"];
+    expect(replay.startReplay({ privacy: { blockSelectors } })).toBeTruthy();
+    await settle();
+    document.getElementById("card-form")?.insertAdjacentHTML("beforeend", "<span>card-form-added-later</span>");
+    document.body.insertAdjacentHTML("beforeend", "<p>public-added-later</p>");
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    const text = allReplayText();
+    expect(["block-secret-subtree", "legacy-block-secret", "card-form-secret", "card-form-added-later"].filter((t) => text.includes(t))).toEqual([]);
+    // A blocked element records as a same-size placeholder: one for each of the three.
+    expect(text.match(/"rr_width"/g)).toHaveLength(3);
+    expect(text).toContain("public-visible-text");
+    expect(text).toContain("public-added-later");
+  });
+
+  it.each(INVALID)("%s in ignoreSelectors costs only itself: a custom selector still ignores, and other inputs record", async (invalid) => {
+    useFakeClock();
+    document.body.innerHTML = `<input id="search" type="text" data-no-record><input id="name" type="text">`;
+    const { replay } = await load({ replaysSessionSampleRate: 1 });
+    // Inputs unmasked, so a typed value reaches the upload unless its input events are ignored.
+    const privacy = { maskAllInputs: false, maskInputTypes: [], ignoreSelectors: [invalid, "[data-no-record]"] };
+    expect(replay.startReplay({ privacy })).toBeTruthy();
+    await settle();
+
+    type(document.getElementById("search") as HTMLInputElement, "ignored-typed-text");
+    type(document.getElementById("name") as HTMLInputElement, "recorded-typed-text");
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    const text = allReplayText();
+    expect(text).not.toContain("ignored-typed-text");
+    // With the list broken, rrweb's input handler threw on every event, so nothing typed recorded at all.
+    expect(text).toContain("recorded-typed-text");
+  });
+
+  it("hands rrweb the valid selectors in their order and reports each one it leaves out, with its list", async () => {
+    const { DEFAULT_PRIVACY, toRrwebPrivacy } = await import("../privacy");
+    const dropped: string[][] = [];
+    const out = toRrwebPrivacy(
+      {
+        ...DEFAULT_PRIVACY,
+        maskSelectors: [" [data-private] ", "p:has-text(x)", ".private", "", "[data-x", ".customer-name"],
+        blockSelectors: ["[data-codmir-block]", '[title="a', "[data-block-replay]", "#card-form"],
+        ignoreSelectors: ["div:has-text(x)", "  "],
+      },
+      (selector, list) => dropped.push([list, selector]),
+    );
+    expect(out.maskTextSelector).toBe("[data-private], .private, .customer-name");
+    expect(out.blockSelector).toBe("[data-codmir-block], [data-block-replay], #card-form");
+    expect(out.ignoreSelector).toBeUndefined();
+    expect(dropped).toEqual([
+      ["maskSelectors", "p:has-text(x)"],
+      ["maskSelectors", "[data-x"],
+      ["blockSelectors", '[title="a'],
+      ["ignoreSelectors", "div:has-text(x)"],
+    ]);
+  });
+
+  it("keeps lists of valid selectors as they are and empty lists undefined, reporting nothing", async () => {
+    const { DEFAULT_PRIVACY, toRrwebPrivacy } = await import("../privacy");
+    const dropped: string[] = [];
+    const report = (selector: string) => dropped.push(selector);
+    const defaults = toRrwebPrivacy(DEFAULT_PRIVACY, report);
+    expect([defaults.maskTextSelector, defaults.blockSelector, defaults.ignoreSelector]).toEqual([
+      "[data-private], .private",
+      "[data-codmir-block], [data-block-replay]",
+      undefined,
+    ]);
+    // Brackets, quotes, parentheses and escapes, each closed again before the selector ends.
+    const closed = ['input[type="password"]', '[data-x="a)b"]', '[data-x="]"]', ".a\\)", ":is(.a, .b)", "div:not([data-x])", "li:nth-child(2n+1)", "p, .q"];
+    expect(toRrwebPrivacy({ ...DEFAULT_PRIVACY, maskSelectors: closed }, report).maskTextSelector).toBe(closed.join(", "));
+    const empty = toRrwebPrivacy({ ...DEFAULT_PRIVACY, maskSelectors: [], blockSelectors: ["", "  "], ignoreSelectors: [] }, report);
+    expect([empty.maskTextSelector, empty.blockSelector, empty.ignoreSelector]).toEqual([undefined, undefined, undefined]);
+    expect(dropped).toEqual([]);
+  });
+
+  it("leaves out a selector that parses alone but ends open, which broke or swallowed the selectors after it", async () => {
+    const { DEFAULT_PRIVACY, toRrwebPrivacy } = await import("../privacy");
+    const open = ["[data-x", '[title="a', "p\\", ":not(.a", "p:nth-child(2", ":not([data-x"];
+    const el = document.createElement("p");
+    el.className = "private";
+    const matches = (selector: string) => {
+      try {
+        return el.matches(selector);
+      } catch {
+        return "throws";
+      }
+    };
+    // The precondition: alone each one parses here; joined, the list throws or `.private` stops matching.
+    expect(open.filter((s) => matches(s) === "throws")).toEqual([]);
+    expect(open.filter((s) => matches(`[data-private], ${s}, .private`) === true)).toEqual([]);
+
+    const dropped: string[] = [];
+    const out = toRrwebPrivacy({ ...DEFAULT_PRIVACY, maskSelectors: ["[data-private]", ...open, ".private"] }, (s) => dropped.push(s));
+    expect(out.maskTextSelector).toBe("[data-private], .private");
+    expect(dropped).toEqual(open);
+    expect(el.matches(out.maskTextSelector as string)).toBe(true);
+  });
+
+  it("joins the lists as they are where there is no DOM to check them against", async () => {
+    const { DEFAULT_PRIVACY, toRrwebPrivacy } = await import("../privacy");
+    vi.stubGlobal("document", undefined);
+    const dropped: string[] = [];
+    const out = toRrwebPrivacy({ ...DEFAULT_PRIVACY, maskSelectors: ["[data-private]", "p:has-text(x)"] }, (s) => dropped.push(s));
+    vi.unstubAllGlobals();
+    expect(out.maskTextSelector).toBe("[data-private], p:has-text(x)");
+    expect(dropped).toEqual([]);
+  });
+
+  it("logs each skipped selector once, with its list, and only with upload.debug on", async () => {
+    useFakeClock();
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { replay } = await load();
+    const privacy = {
+      maskSelectors: ["[data-private]", "p:has-text(x)"],
+      blockSelectors: ["[data-x", "[data-codmir-block]"],
+      ignoreSelectors: ["div:has-text(x)"],
+    };
+    const run = async (debug: boolean) => {
+      const recorder = replay.createReplayRecorder({ sessionSampleRate: 1, privacy, upload: { url: REPLAY_URL, key: "osk_test", debug } });
+      expect(recorder.start()).toBeTruthy();
+      await settle();
+      recorder.stop();
+      await vi.advanceTimersByTimeAsync(0);
+    };
+
+    await run(false);
+    expect(log).not.toHaveBeenCalled();
+    await run(true);
+    expect(log.mock.calls).toEqual([
+      ['[Overseer replay] privacy.maskSelectors: skipped invalid selector "p:has-text(x)"'],
+      ['[Overseer replay] privacy.blockSelectors: skipped invalid selector "[data-x"'],
+      ['[Overseer replay] privacy.ignoreSelectors: skipped invalid selector "div:has-text(x)"'],
+    ]);
+    expect(replayCalls()).toHaveLength(2);
+  });
+});
+
 describe("sampling", () => {
   it("records and uploads nothing, and never loads rrweb, when both rates are 0", async () => {
     useFakeClock();

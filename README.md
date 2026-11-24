@@ -922,6 +922,9 @@ stopReplay();
 | `privacy.blockSelectors` | `['[data-codmir-block]', '[data-block-replay]']` | Matching subtrees are not recorded |
 | `privacy.ignoreSelectors` | `[]` | Input events on matching elements are not recorded |
 
+A selector the browser rejects, or one left unclosed such as `[data-x`, is skipped (with an `[Overseer replay]` message
+when `upload.debug` is on), and the rest of its list still applies.
+
 - **Session mode** (session rate hit): records and uploads a segment every 30 s or 5,000 events.
 - **On-error mode** (only the error rate hit): keeps the last 30 to 60 s in memory, uploads it when `captureException`
   runs, keeps recording for 30 s more, uploads that, then goes back to buffering under a new replay id.
