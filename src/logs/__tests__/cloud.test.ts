@@ -50,8 +50,15 @@ afterEach(async () => {
   monitors = [];
   closeOverseer();
   vi.useRealTimers();
-  await new Promise<void>((r) => server.close(() => r()));
+  await closeServer();
 });
+
+/** Closes the server and what is still connected to it: Node 18 waits for kept-alive connections, later versions end them. */
+const closeServer = (): Promise<void> =>
+  new Promise<void>((r) => {
+    server.close(() => r());
+    server.closeAllConnections();
+  });
 
 const make = (cloud: Partial<CloudOptions> | true = {}): LogMonitor => {
   const m = createLogMonitor({ release: "1.2.3", cloud: cloud === true ? true : { apiKey: "osk_testkey0123456789", dsn: url, ...cloud } });
@@ -173,7 +180,7 @@ describe("it never hurts the app", () => {
       await m.stop();
     }
     expect(hits.length).toBeGreaterThan(0);
-    await new Promise<void>((r) => server.close(() => r()));
+    await closeServer();
     const m = make({ dsn: "http://127.0.0.1:1/api/overseer" });
     fail(m);
     await expect(m.flush()).resolves.toBeUndefined();

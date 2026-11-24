@@ -1077,7 +1077,7 @@ your own patterns with `redact: [/ORDER-\d{6}/]`; every match becomes `[redacted
 | Group key | 200 characters |
 | Text looked at per record | 1,000 characters; the rest is cut before any pattern runs |
 | Counts per group | The last 96 batches |
-| Time per record | About 10 microseconds; 100,000 records of 1,000 shapes take about 1 s and about 1 MB of memory |
+| Time per record | About 10 microseconds on Node.js 22 and 30 on 18 and 20, measured on a desktop; 100,000 records of 1,000 shapes take 1 to 3 s and about 2 MB of memory |
 | Cloud: per batch / per day | 50 / 1,000 findings, most serious first |
 | Cloud: repeat | Once per 60 minutes while a finding has hits |
 
