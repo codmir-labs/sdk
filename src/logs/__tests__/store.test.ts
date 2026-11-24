@@ -822,6 +822,21 @@ describe("in cloud mode", () => {
     expect(events()[1].tags).toMatchObject({ hits: "6", total: "7", judgement: "seen" });
   });
 
+  it("never sends a negative count when the file says more was sent than was seen", async () => {
+    const store = new MemStore();
+    const first = make(store, { cloud: cloud() });
+    err(first);
+    await first.flush();
+    await first.stop();
+    (store.state as LogState).groups[0].sentTotal = 1000;
+    at(61 * MIN);
+    const second = make(store, { cloud: cloud() });
+    err(second);
+    err(second);
+    await second.flush();
+    expect(events()[1].tags).toMatchObject({ hits: "2", total: "3" });
+  });
+
   it("sends a finding again at once after a restart when it is `back` and was not sent for that return", async () => {
     const store = new MemStore();
     const first = make(store, { cloud: cloud() });
