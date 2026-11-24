@@ -35,6 +35,9 @@ jobs:
       - run: npx vitest run src/__tests__/root-entry.test.ts
       # rrweb must stay out of every bundle but /replay; skips without a build too (CSL-5612).
       - run: npx vitest run src/replay/__tests__/dist-bundles.test.ts
+      # Every entry but the four Node-only ones must bundle for the browser with esbuild and vite: no Node built-in in
+      # it or any chunk it loads. Skips without a build too.
+      - run: npx vitest run src/__tests__/browser-bundle.test.ts
       # The sample app against a local capture server: an error, a 3-span trace and a masked replay (CSL-5588).
       # Headed Chrome under Xvfb, never headless. The runner image has google-chrome and xvfb-run; Node 20 only.
       - name: Example smoke (examples/fullstack-basic)
@@ -43,6 +46,18 @@ jobs:
         working-directory: examples/fullstack-basic
         run: |
           # No lockfile: a `file:../..` dependency does not round-trip through `npm ci` on a clean checkout.
+          npm install --no-audit --no-fund
+          npm run smoke
+      # next build of a client component, app/error.tsx, pages/_app.tsx and an instrumentation.ts next to a middleware,
+      # each importing @codmir/sdk/nextjs, then a check that the SDK is in each bundle. Node 20 only.
+      - name: Next.js build smoke (examples/nextjs-build)
+        if: matrix.node-version == 20
+        timeout-minutes: 5
+        working-directory: examples/nextjs-build
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+        run: |
+          # No lockfile, for the same reason as above.
           npm install --no-audit --no-fund
           npm run smoke
 

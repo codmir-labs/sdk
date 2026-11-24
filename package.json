@@ -208,10 +208,7 @@
     "url": "https://github.com/codmir-labs/sdk/issues"
   },
   "homepage": "https://codmir.com/docs/sdk",
-  "sideEffects": [
-    "dist/chunk-*.js",
-    "dist/chunk-*.cjs"
-  ],
+  "sideEffects": false,
   "dependencies": {
     "@rrweb/record": "2.2.0",
     "zod": "^3.23.8"
@@ -255,6 +252,7 @@
     "tsup": "^8.3.0",
     "typescript": "^5.4.5",
     "typescript-eslint": "8.72.1",
+    "vite": "^5.4.21",
     "vitest": "^1.6.0"
   },
   "engines": {

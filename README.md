@@ -1555,10 +1555,11 @@ To [`packages/agent-kit`](packages/agent-kit), a private workspace in this repo 
 | [`src/client.ts`](src/client.ts), [`src/types.ts`](src/types.ts) | The API client, its types and Zod schemas |
 | [`examples/fullstack-basic/`](examples/fullstack-basic) | An Express app and a page that send an error, a 3-span trace and a masked replay to a local capture server, checked against the platform's schemas |
 | [`examples/node-smoke/`](examples/node-smoke) | A Node smoke test: one error, one trace and one replay segment, each checked as accepted |
+| [`examples/nextjs-build/`](examples/nextjs-build) | A Next.js app that imports `@codmir/sdk/nextjs` in a client component, `app/error.tsx`, `pages/_app.tsx` and an `instrumentation.ts` next to a middleware, and must build |
 | [`packages/agent-kit/`](packages/agent-kit) | `@codmir/agent-kit`: agent runtime, council, serverless, task-runner protocol, AI-call monitoring, MCP client and framework task helpers; private, never published |
 | [`scripts/`](scripts) | `check-dist-types.mjs` (every export target exists after a build) and `publish.sh` (manual publish) |
 | [`docs/assets/`](docs/assets) | This page's hero and icons |
-| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Typecheck, lint, tests, build and dist checks on Node 18, 20 and 22 and the example smoke on Node 20, on every push and pull request to `main`; the release job, with semantic-release, runs only when a maintainer dispatches the workflow by hand ([Releasing](#releasing)) |
+| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Typecheck, lint, tests, build and dist checks on Node 18, 20 and 22, and the example smoke and the Next.js build smoke on Node 20, on every push and pull request to `main`; the release job, with semantic-release, runs only when a maintainer dispatches the workflow by hand ([Releasing](#releasing)) |
 | [`.github/release/`](.github/release) | `no-downgrade.cjs`, the semantic-release plugin that refuses a version not above npm `latest`, and the tests of it and of the release job |
 | [CHANGELOG.md](CHANGELOG.md) | Released and unreleased changes |
 | [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) | Migrating from the older agent SDK API |
