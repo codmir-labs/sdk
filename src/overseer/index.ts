@@ -201,6 +201,8 @@ class OverseerClient {
   private patchRuntime: PatchRuntime | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryAttempt = 0;
+  // CSL-7688: once closed, the client never schedules a retry.
+  private closed = false;
   private flushing: Promise<boolean> | null = null;
   private onPageHide = (): void => this.flushOnHide();
   private onVisibilityChange = (): void => {
@@ -461,6 +463,7 @@ class OverseerClient {
   }
 
   close(): void {
+    this.closed = true;
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
@@ -557,6 +560,8 @@ class OverseerClient {
   }
 
   private scheduleRetry(retryAfterMs?: number): void {
+    // close() makes one last attempt; a failure then is final, or a closed client would keep posting with backoff.
+    if (this.closed) return;
     const delay = Math.min(RETRY_MAX_MS, Math.max(retryDelayMs(this.retryAttempt), retryAfterMs ?? 0));
     this.retryAttempt++;
     this.log(`Send failed; retrying in ${delay}ms (attempt ${this.retryAttempt})`);
@@ -679,6 +684,8 @@ class OverseerClient {
 let client: OverseerClient | null = null;
 
 export function init(config: OverseerConfig = {}): void {
+  // The client being replaced stops here: its timers, retries, listeners and runtime patches (CSL-7688).
+  client?.close();
   client = new OverseerClient(config);
   client.init();
 }
