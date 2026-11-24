@@ -410,7 +410,10 @@ export class ReplayRecorder {
       if (generation !== this.generation) return;
       const record = mod.record;
       this.record = record;
-      const rrwebPrivacy = toRrwebPrivacy(this.config.privacy);
+      const rrwebPrivacy = toRrwebPrivacy(this.config.privacy, (selector, list) => {
+        if (!this.config.upload?.debug) return;
+        console.log(`[Overseer replay] privacy.${list}: skipped invalid selector ${JSON.stringify(selector)}`);
+      });
       this.stopRrweb = record({
         // rrweb resolved this event's links against the page's address of this moment, and a pushState changes that
         // address without a Meta event, so the page's query is cut out of them here, the one place that still knows it.
