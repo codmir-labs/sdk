@@ -32,7 +32,7 @@ const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.ur
 };
 
 // Node only by design: they need node:async_hooks. Every other export, including any added later, must bundle for a browser.
-const NODE_ONLY = ["./nextjs/server", "./express", "./hono", "./remix/server"];
+const NODE_ONLY = ["./nextjs/server", "./express", "./hono", "./remix/server", "./logs/node"];
 
 interface Entry {
   name: string;
@@ -47,7 +47,9 @@ const entriesOf = (subpaths: string[], condition: "import" | "require"): Entry[]
     });
 const browserSubpaths = Object.keys(pkg.exports).filter((subpath) => !NODE_ONLY.includes(subpath));
 const browserEntries = [...entriesOf(browserSubpaths, "import"), ...entriesOf(browserSubpaths, "require")];
-const nodeEntries = entriesOf(NODE_ONLY, "import");
+// logs/node needs node:fs instead (the file sink); every other one needs node:async_hooks.
+const nodeEntries = entriesOf(NODE_ONLY.filter((subpath) => subpath !== "./logs/node"), "import");
+const logsNodeEntries = entriesOf(["./logs/node"], "import");
 // Skips before a build; after one, an entry whose file is missing fails rather than skipping.
 const hasDist = existsSync(`${root}dist/index.js`);
 
@@ -119,6 +121,17 @@ describe.skipIf(!hasDist)("esbuild bundles every browser entry for the browser (
       const asyncHooks = problems.filter((p) => /reaches the Node built-in "(node:)?async_hooks": dist\/\S+:\d+, from src\/tracing\/server\.ts$/.test(p));
       expect(asyncHooks, problems.join("\n")).toHaveLength(1);
       expect(asyncHooks[0].startsWith(entry.name)).toBe(true);
+    });
+  }
+});
+
+describe.skipIf(!hasDist)("the log monitor's Node entry", () => {
+  for (const entry of logsNodeEntries) {
+    it(`${entry.name} is Node only: the check names its node:fs import`, async () => {
+      const problems = await browserProblems(entry);
+      const fs = problems.filter((p) => /reaches the Node built-in "(node:)?fs": dist\/\S+:\d+, from src\/logs\/node\.ts$/.test(p));
+      expect(fs, problems.join("\n")).toHaveLength(1);
+      expect(fs[0].startsWith(entry.name)).toBe(true);
     });
   }
 });

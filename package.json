@@ -107,6 +107,26 @@
         "default": "./dist/replay/index.cjs"
       }
     },
+    "./logs": {
+      "import": {
+        "types": "./dist/logs/index.d.ts",
+        "default": "./dist/logs/index.js"
+      },
+      "require": {
+        "types": "./dist/logs/index.d.cts",
+        "default": "./dist/logs/index.cjs"
+      }
+    },
+    "./logs/node": {
+      "import": {
+        "types": "./dist/logs/node.d.ts",
+        "default": "./dist/logs/node.js"
+      },
+      "require": {
+        "types": "./dist/logs/node.d.cts",
+        "default": "./dist/logs/node.cjs"
+      }
+    },
     "./express": {
       "import": {
         "types": "./dist/express/index.d.ts",
@@ -174,8 +194,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup src/index.ts src/client.ts src/types.ts src/overseer/index.ts src/tracing/index.ts src/nextjs/index.ts src/nextjs/server.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/express/index.ts src/hono/index.ts src/remix/index.ts src/remix/server.ts src/verify/index.ts src/report/index.ts --format cjs,esm --clean --dts",
-    "dev": "tsup src/index.ts src/client.ts src/types.ts src/overseer/index.ts src/tracing/index.ts src/nextjs/index.ts src/nextjs/server.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/express/index.ts src/hono/index.ts src/remix/index.ts src/remix/server.ts src/verify/index.ts src/report/index.ts --format cjs,esm --dts --watch",
+    "build": "tsup src/index.ts src/client.ts src/types.ts src/overseer/index.ts src/tracing/index.ts src/nextjs/index.ts src/nextjs/server.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/logs/index.ts src/logs/node.ts src/express/index.ts src/hono/index.ts src/remix/index.ts src/remix/server.ts src/verify/index.ts src/report/index.ts --format cjs,esm --clean --dts",
+    "dev": "tsup src/index.ts src/client.ts src/types.ts src/overseer/index.ts src/tracing/index.ts src/nextjs/index.ts src/nextjs/server.ts src/react-native/index.ts src/browser/index.ts src/replay/index.ts src/logs/index.ts src/logs/node.ts src/express/index.ts src/hono/index.ts src/remix/index.ts src/remix/server.ts src/verify/index.ts src/report/index.ts --format cjs,esm --dts --watch",
     "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -196,7 +216,8 @@
     "tasks",
     "error-tracking",
     "tracing",
-    "session-replay"
+    "session-replay",
+    "log-analysis"
   ],
   "author": "Codmir <hello@codmir.com>",
   "license": "Apache-2.0",

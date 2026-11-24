@@ -1,0 +1,13 @@
+{
+  "name": "codmir-example-log-findings",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "A tiny server with a planted bug, and the log monitor finding it on this machine: no account, no network",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "@codmir/sdk": "file:../.."
+  }
+}

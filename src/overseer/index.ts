@@ -341,6 +341,16 @@ class OverseerClient {
     return eventId;
   }
 
+  /**
+   * Queues an event another part of the SDK built (the log monitor's findings), on the same transport as errors:
+   * batching, retry and `beforeSend` apply, `sampleRate` does not. Returns the event id, or "" when the SDK is off.
+   */
+  captureEvent(event: OverseerEvent): string {
+    if (!this.config.enabled) return "";
+    this.sendEvent({ ...event, environment: event.environment ?? this.config.environment });
+    return event.id;
+  }
+
   /** Set by `startReplay()` in `@codmir/sdk/replay`; null unlinks. Not part of the stable API. */
   setReplayHook(hook: ReplayHook | null): void {
     this.replayHook = hook;
@@ -683,11 +693,17 @@ class OverseerClient {
 
 let client: OverseerClient | null = null;
 
+/** Where `init()` leaves the client for another copy of this module: `getClient()` of a sibling entry. */
+const CLIENT_SLOT = Symbol.for("codmir.overseer.client");
+
 export function init(config: OverseerConfig = {}): void {
   // The client being replaced stops here: its timers, retries, listeners and runtime patches (CSL-7688).
   client?.close();
   client = new OverseerClient(config);
   client.init();
+  // A CommonJS build bundles each entry with its own copy of this module, so `@codmir/sdk/logs` could not see the client
+  // `@codmir/sdk` made; the slot is how it finds it.
+  (globalThis as Record<symbol, unknown>)[CLIENT_SLOT] = client;
 }
 
 export function getClient(): OverseerClient | null {
