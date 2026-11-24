@@ -106,8 +106,25 @@ describe("what is sent, and when", () => {
     fail(m);
     await m.flush();
     expect(events()).toHaveLength(2);
-    expect(events()[1].event.tags).toMatchObject({ hits: "2", total: "7", judgement: "seen" });
+    // 4 hits in the batches that were not sent, and 2 in this one.
+    expect(events()[1].event.tags).toMatchObject({ hits: "6", total: "7", judgement: "seen" });
     expect(events()[1].group.fingerprint).toEqual(events()[0].group.fingerprint); // the same issue: the server counts it up
+  });
+
+  it("says the hits since the last send, so the sum of what was sent is every hit", async () => {
+    const m = make({ perBatch: 1 });
+    const sums = { a: 0, b: 0 };
+    for (let batch = 0; batch < 30; batch++) {
+      at(batch * 15 * 60_000);
+      for (let i = 0; i < 5; i++) fail(m, "queue alpha stalled");
+      for (let i = 0; i < 3; i++) fail(m, "queue beta stalled");
+      await m.flush();
+    }
+    for (const e of events()) sums[e.event.message.includes("alpha") ? "a" : "b"] += Number(e.event.tags.hits);
+    const last = (word: string): number => Math.max(...events().filter((e) => e.event.message.includes(word)).map((e) => Number(e.event.tags.total)));
+    expect(sums).toEqual({ a: last("alpha"), b: last("beta") });
+    expect(sums.a).toBeGreaterThan(100);
+    expect(sums.b).toBeGreaterThan(60);
   });
 
   it("sends a finding that came back at once, whatever the hour", async () => {

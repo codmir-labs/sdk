@@ -1051,7 +1051,7 @@ refusal or a network failure never throws and never blocks your app.
 | What is sent | What is never sent |
 | --- | --- |
 | The issue title (`GET /orders/:n answers 500`, or the folded log line), level and the group as its fingerprint | The raw log line, or any text that was not redacted |
-| Method, path pattern, status, user-agent family, hits per batch, first and last seen, releases | Query strings, headers, cookies, request bodies |
+| Method, path pattern, status, user-agent family, the hits since the last send, the last 8 batch counts, first and last seen, releases | Query strings, headers, cookies, request bodies |
 | One sample, redacted, quoted values folded, at most 300 characters | Emails, IP addresses, tokens, JWTs, `token=` values, card numbers, long ids and secrets |
 
 Redaction runs before anything is kept, and again on the event. It is stable: `redact(redact(x)) === redact(x)`. Add

@@ -9,15 +9,19 @@ import { num } from "./num";
 import { redact } from "./redact";
 import type { CloudOptions, Finding, LogLevel } from "./types";
 
-/** What the monitor keeps per group so a finding is not sent twice in an hour. */
+/** What the monitor keeps per group so a finding is not sent twice in an hour, and every hit is sent once. */
 export interface SendState {
   sentAt?: number;
   sentBack: number;
+  /** The group's total when it was last sent. */
+  sentTotal?: number;
 }
 
 export interface Candidate {
   finding: Finding;
   state: SendState;
+  /** Hits since the group was last sent (all of them, the first time); set when it is chosen. */
+  sinceSent?: number;
 }
 
 export const CLOUD_DEFAULTS = { everyMinutes: 60, perBatch: 50, perDay: 1000 } as const;
@@ -35,7 +39,7 @@ export function eventLevel(f: Finding): LogLevel {
 const cut = (s: unknown, n: number): string => redact(s).slice(0, n);
 
 /** The flat error event of a finding. `fingerprint` is the group, so one finding is one issue and a repeat counts up. */
-export function findingEvent(f: Finding, meta: { environment?: string; release?: string }): OverseerEvent {
+export function findingEvent(f: Finding, meta: { environment?: string; release?: string; hits?: number }): OverseerEvent {
   const title = cut(f.title, 200);
   const level = eventLevel(f);
   const tags: Record<string, string> = {
@@ -43,7 +47,7 @@ export function findingEvent(f: Finding, meta: { environment?: string; release?:
     finding: f.id,
     kind: f.kind,
     judgement: f.judgement,
-    hits: String(f.hits),
+    hits: String(meta.hits ?? f.hits),
     total: String(f.total),
   };
   if (f.method) tags.method = cut(f.method, 16);
@@ -143,6 +147,8 @@ export function createCloud(
       for (const c of chosen) {
         c.state.sentAt = now;
         c.state.sentBack = c.finding.backCount;
+        c.sinceSent = c.finding.total - (c.state.sentTotal ?? 0);
+        c.state.sentTotal = c.finding.total;
       }
       today += chosen.length;
       return chosen;

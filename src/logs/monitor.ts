@@ -355,7 +355,7 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
     if (!cloud) return;
     const p = guard(() => {
       const chosen = cloud.select(candidates, now);
-      return cloud.send(chosen.map((c) => findingEvent(c.finding, { environment: undefined, release: opts.release })));
+      return cloud.send(chosen.map((c) => findingEvent(c.finding, { environment: undefined, release: opts.release, hits: c.sinceSent })));
     });
     if (p) track(p.catch(() => false));
   };
