@@ -35,6 +35,9 @@ export interface RrwebPrivacyOptions {
   maskInputFn: (text: string) => string;
 }
 
+/** What every masked, non-empty input value is recorded as, whatever its length. */
+const INPUT_MASK = "*".repeat(8);
+
 const join = (selectors: string[]): string | undefined => {
   const parts = selectors.map((s) => s.trim()).filter(Boolean);
   return parts.length > 0 ? parts.join(", ") : undefined;
@@ -57,7 +60,8 @@ export function toRrwebPrivacy(privacy: ReplayPrivacyConfig): RrwebPrivacyOption
     maskTextSelector: join(privacy.maskSelectors),
     blockSelector: join(privacy.blockSelectors),
     ignoreSelector: join(privacy.ignoreSelectors),
-    // rrweb calls this only for a value it has decided to mask; a fixed length leaks nothing about the secret.
-    maskInputFn: (text) => "*".repeat(Math.min(text.length, 16)),
+    // rrweb calls this only for a value it has decided to mask; a fixed length leaks nothing about the secret, not even
+    // its length. An empty value stays empty.
+    maskInputFn: (text) => (text ? INPUT_MASK : ""),
   };
 }

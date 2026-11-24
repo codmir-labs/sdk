@@ -950,8 +950,9 @@ stopReplay();
   like a request (it has `headers` and a `method` or `url`).
 - **URLs keep origin and path only.** `fetch` and XHR breadcrumbs, navigation breadcrumbs, transactions and
   `request.url` drop the query string and fragment, so an `?access_token=` or an OAuth `#access_token=` in a URL does
-  not ride along with your errors. Session replay is the exception: rrweb records the page's full address
-  (`window.location.href`) in its meta events, so keep tokens out of the URLs of pages you record.
+  not ride along with your errors. Session replay's meta events carry the page's address as origin and path too, but
+  the recorded page is content: rrweb stores a fragment-only link or source such as `href="#top"` resolved against the
+  page's full address, query included, so still keep tokens out of the URLs of pages you record.
 - **Replay masks by default.** Every input value is masked, password fields always, and you choose what else is masked
   or not recorded at all ([selectors](#session-replay)).
 - **Browser input breadcrumbs** (`trackInputs`, off by default) record the element and its type, never the value.

@@ -3,7 +3,11 @@
  * `@codmir/types` (CSL-5611), mirrored in `__tests__/helpers.ts`. Nothing here throws into the page.
  */
 
+import { scrubUrl } from "../overseer/url-scrub";
 import { SDK_INFO } from "../version";
+
+/** rrweb's Meta event: `data.href` is the page's address (`window.location.href`), then its width and height. */
+export const RRWEB_META = 4;
 
 /** The server rejects a body over 2 MB with 413. */
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
@@ -53,6 +57,24 @@ export function replayEndpoint(dsn: string): string {
   return base.endsWith("/ingest") ? `${base.slice(0, -"/ingest".length)}/replay` : `${base}/replay`;
 }
 
+/**
+ * The page's address keeps origin and path only, as breadcrumb and transaction URLs do (`scrubUrl`), so a token in its
+ * query or fragment stays in the page. A Meta event is copied with the scrubbed `href`; the caller's events are never
+ * mutated, since the recorder and its on-error buffer still hold them.
+ */
+function scrubPageUrls(events: RrwebEvent[]): RrwebEvent[] {
+  return events.map((event) => {
+    if (event.type !== RRWEB_META || typeof event.data !== "object" || event.data === null) return event;
+    const data = event.data as { href?: unknown };
+    if (data.href === undefined || data.href === null) return event;
+    return { ...event, data: { ...data, href: scrubUrl(data.href) } };
+  });
+}
+
+/**
+ * The body of one segment upload. Every send path builds it here, so every Meta event goes out with the page's address
+ * cut to origin and path; the events passed in are left as they were.
+ */
 export function buildSegmentBody(
   target: Pick<UploadTarget, "environment" | "release">,
   segment: { replayId: string; sequenceNumber: number; events: RrwebEvent[]; errorIds: string[] },
@@ -66,7 +88,7 @@ export function buildSegmentBody(
     ended_at: new Date(Math.max(first, last)).toISOString(),
     error_event_ids: segment.errorIds.slice(-MAX_ERROR_EVENT_IDS),
     sdk: { ...SDK_INFO },
-    events: segment.events,
+    events: scrubPageUrls(segment.events),
   };
   if (target.environment) body.environment = target.environment.slice(0, 32);
   if (target.release && target.release !== "unknown") body.release = target.release.slice(0, 64);
