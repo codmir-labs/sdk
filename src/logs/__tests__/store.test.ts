@@ -692,14 +692,13 @@ describe("nothing raw is in what is saved", () => {
     for (const s of secrets) expect(JSON.stringify(again.findings())).not.toContain(s);
   });
 
-  it("does not keep a group whose key redact would change, such as a path with an address in it", async () => {
+  it("keeps a path with an address in it, masked: its key is the same after a restart", async () => {
     const store = new MemStore();
     const m = make(store);
-    m.request({ method: "GET", path: "/hosts/10.0.0.1/status", status: 500 });
-    m.request({ method: "GET", path: "/hosts/ok/status", status: 500 });
+    for (const path of ["/hosts/10.0.0.1/status", "/hosts/2001:db8::7/status", "/hosts/ok/status", "/a-deadbeef12-1234/b"]) m.request({ method: "GET", path, status: 500 });
     await m.stop();
-    expect(JSON.stringify(store.saves.at(-1))).not.toContain("10.0.0.1");
-    expect(make(store).findings().map((f) => f.title)).toEqual(["GET /hosts/ok/status answers 500"]);
+    expect(JSON.stringify(store.saves.at(-1))).not.toMatch(/10\.0\.0\.1|2001|db8/);
+    expect(make(store).findings().map((f) => `${f.title} ${f.total}`).sort()).toEqual(["GET /:token/b answers 500 1", "GET /hosts/[ip]/status answers 500 2", "GET /hosts/ok/status answers 500 1"]);
   });
 });
 

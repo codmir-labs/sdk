@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 const root = new URL("../", import.meta.url);
 const pkg = JSON.parse(readFileSync(new URL("package.json", root), "utf8"));
 
-const targets = [pkg.main, pkg.module, pkg.types];
+const targets = [pkg.main, pkg.module, pkg.types, ...Object.values(pkg.bin ?? {})];
 const walk = (node) => {
   if (typeof node === "string") targets.push(node);
   else if (node && typeof node === "object") Object.values(node).forEach(walk);

@@ -100,7 +100,19 @@ export interface MonitorStats {
   reentrant: number;
   /** Errors thrown by `onBatch` or by an internal step, swallowed. */
   errors: number;
-  cloud: { sent: number; skipped: number; today: number };
+  cloud: {
+    /** Findings handed to the client that sends them. */
+    sent: number;
+    /** Over the limit of a batch or a day. */
+    skipped: number;
+    /** Sent this UTC day, for `perDay`. */
+    today: number;
+    /** Of `sent`, the ones the server did not take, and the reason it gave last (`payment_required`, `status 401`). Known only with `cloud.apiKey`. */
+    refused: number;
+    reason?: string;
+    /** Of `sent`, the ones no answer came for: the client tries again while the process lives. */
+    waiting: number;
+  };
 }
 
 export interface CloudOptions {
@@ -226,3 +238,9 @@ export interface LogMonitor {
   stop(): Promise<void>;
   stats(): MonitorStats;
 }
+
+/** What `parseLogLine` reads: `auto` decides per line; the others read a line as that format when it fits and as plain text when it does not. */
+export type LogFormat = "auto" | "json" | "vercel" | "railway" | "journald" | "pino" | "clf" | "text";
+
+/** One line of an existing log, as the monitor takes it in: a log record or a served request. */
+export type ParsedLine = { record: LogRecord } | { request: RequestRecord };

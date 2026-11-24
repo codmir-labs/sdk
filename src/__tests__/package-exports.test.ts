@@ -27,6 +27,7 @@ const CORE_SUBPATHS = [
   "./replay",
   "./logs",
   "./logs/node",
+  "./logs/parse",
   "./express",
   "./hono",
   "./remix",

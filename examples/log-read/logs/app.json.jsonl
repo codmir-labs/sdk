@@ -1,0 +1,11 @@
+{"level":"info","time":"2026-11-24T10:00:00Z","msg":"server started","service":"shop"}
+{"level":"info","time":"2026-11-24T10:00:05Z","method":"GET","path":"/","status":200,"durationMs":11,"service":"shop"}
+{"level":"info","time":"2026-11-24T10:00:06Z","method":"GET","path":"/orders/1042","status":200,"durationMs":23,"service":"shop"}
+{"level":"info","time":"2026-11-24T10:00:07Z","method":"POST","path":"/cart","status":201,"durationMs":31,"service":"shop"}
+{"level":"info","time":"2026-11-24T10:00:08Z","method":"GET","path":"/orders/1043","status":200,"durationMs":19,"service":"shop"}
+{"level":"error","time":"2026-11-24T10:01:00Z","msg":"report failed for user 4821: upstream rejected api_key=sk_live_abcdefghijklmnop","service":"shop"}
+{"level":"error","time":"2026-11-24T10:01:10Z","msg":"report failed for user 1307: upstream rejected api_key=sk_live_abcdefghijklmnop","service":"shop"}
+{"level":"error","time":"2026-11-24T10:01:20Z","msg":"report failed for user 9954: upstream rejected api_key=sk_live_abcdefghijklmnop","service":"shop"}
+{"level":"error","time":"2026-11-24T10:01:30Z","msg":"report failed for user 2216: upstream rejected api_key=sk_live_abcdefghijklmnop","service":"shop"}
+{"level":"error","time":"2026-11-24T10:01:40Z","msg":"report failed for user 7740: upstream rejected api_key=sk_live_abcdefghijklmnop","service":"shop"}
+{"level":"info","time":"2026-11-24T10:02:00Z","msg":"order 1044 shipped","service":"shop"}

@@ -140,6 +140,33 @@ describe("keys", () => {
     expect(pathPattern(undefined)).toBe("/");
   });
 
+  it("masks what a path segment holds: an address, a secret, a query behind an encoded question mark", () => {
+    expect(pathPattern("/hosts/10.1.2.3/x")).toBe("/hosts/[ip]/x");
+    expect(pathPattern("/hosts/10.1.2.3:8080/x")).toBe("/hosts/[ip]::n/x");
+    for (const p of ["/api/2001:db8::7/x", "/api/%5B2001%3Adb8%3A%3A7%5D/x", "/api/2001%3Adb8%3A%3A7/x"]) expect(pathPattern(p)).not.toMatch(/2001|db8/i);
+    expect(pathPattern("/hosts/10.1.2.3%zz/x")).not.toContain("10.1.2.3"); // a segment that cannot be decoded
+    expect(pathPattern("/a;token=abcdefgh/x")).toBe("/a;token=[secret]/x");
+    expect(pathPattern("/token:/abcdefgh")).not.toContain("abcdefgh");
+    expect(pathPattern("/search%3Fq=jane/x")).toBe("/search/x");
+    expect(pathPattern("/x/%23jane")).toBe("/x/:token");
+    expect(pathPattern("/v1/2.10.3/x")).toBe("/v1/2.10.3/x"); // a version is no address
+  });
+
+  it("never makes an encoded control character live: a title can be printed", () => {
+    for (const p of ["/%1b%5B2J%1b%5B31mowned", "/a%0Ab", "/a%C2%9B31m", "/a%E2%80%A8b", "/%00"]) expect(pathPattern(p)).toBe("/:token");
+  });
+
+  it("gives a key that stays the same when it is redacted: a restart drops a group whose key does not", () => {
+    const r = rng(20261124);
+    const atoms = ["a", "users", "c", "token", "secret", "session", "sig", ":", "=", "-", "_", ".", "/", "//", "%2F", "%3A", "%3D", "%3F", "%20", "%", "@", ";", ",", "1", "42", "1234", "99999999", "deadbeef", "10.1.2.3", "2001:db8::7", "::1", "fe80:", "bearer ", "basic", "sk_live_abcdefghij", "cabcdefghijklmnopqrstuvwxyz", "123e4567-e89b-12d3-a456-426614174000", "abcDEF123456ghiJKL789mnopqrst", "[ip]", ":n", ":token", "[secret]", "cookie", "é"];
+    for (let i = 0; i < 20_000; i++) {
+      const p = `/${Array.from({ length: 1 + Math.floor(r() * 12) }, () => atoms[Math.floor(r() * atoms.length)]).join("")}`;
+      const out = pathPattern(p);
+      expect(out.length, p).toBeLessThanOrEqual(90);
+      expect(redact(`GET|${out}|500`), p).toBe(`GET|${out}|500`);
+    }
+  });
+
   it("reduces a user agent to a family", () => {
     expect(uaFamily("Mozilla/5.0 (X11; Linux) Chrome/120.0 Safari/537.36")).toBe("browser");
     expect(uaFamily("curl/8.4.0")).toBe("curl");

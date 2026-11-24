@@ -5,31 +5,19 @@
  * (texts are cut before any pattern runs) and a call made while a batch is being delivered is skipped.
  */
 import { createCloud, findingEvent, type Candidate, type Cloud, type SendState } from "./cloud";
+import { normalizeLevel } from "./level";
 import { num } from "./num";
 import { MAX_KEY, MAX_SAMPLE, compileExtra, isScannerPath, lineText, messageKey, pathPattern, redact, shortId, uaFamily } from "./redact";
 import { COUNT_BATCHES, FORGET_MS, MAX_MARKS, MAX_RELEASES, exportState, loadState, seedOf } from "./state";
 import type { Finding, Judgement, LogBatch, LogLevel, LogMonitor, LogMonitorOptions, LogRecord, MarkOptions, MonitorStats, RequestRecord, TimeInput } from "./types";
 
-export { COUNT_BATCHES };
+export { COUNT_BATCHES, normalizeLevel };
 export const QUIET_MS = 24 * 3_600_000;
 const ALARM_HITS = 3;
 const GROWTH_FACTOR = 10;
 /** A week: past 24.8 days a timer overflows and fires at once, again and again. */
 const MAX_BATCH_MINUTES = 7 * 24 * 60;
 const DEFAULT_LEVELS: LogLevel[] = ["warning", "error", "fatal"];
-
-const LEVELS: Record<string, LogLevel> = {
-  debug: "debug", trace: "debug", verbose: "debug", silly: "debug",
-  info: "info", log: "info", notice: "info",
-  warn: "warning", warning: "warning",
-  error: "error", err: "error",
-  fatal: "fatal", critical: "fatal", crit: "fatal", alert: "fatal", emerg: "fatal", panic: "fatal",
-};
-
-/** A level name as one of the five; anything unknown is `info`. */
-export function normalizeLevel(level: unknown): LogLevel {
-  return (typeof level === "string" && LEVELS[level.toLowerCase()]) || "info";
-}
 
 export interface Group extends SendState {
   key: string;
@@ -399,7 +387,7 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
   const stats = (): MonitorStats => ({
     ...counters,
     groups: groups.size,
-    cloud: cloud ? cloud.counters() : { sent: 0, skipped: 0, today: 0 },
+    cloud: cloud ? cloud.counters() : { sent: 0, skipped: 0, today: 0, refused: 0, waiting: 0 },
   });
 
   return { record, request, findings, mark, flush, stop, stats };

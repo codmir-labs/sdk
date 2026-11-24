@@ -1,0 +1,7 @@
+{"__REALTIME_TIMESTAMP":"1795514460000000","PRIORITY":"6","MESSAGE":"Started shop.service","_SYSTEMD_UNIT":"shop.service","SYSLOG_IDENTIFIER":"shop"}
+{"__REALTIME_TIMESTAMP":"1795514460000000","PRIORITY":"3","MESSAGE":"report failed for user 4821: upstream rejected api_key=sk_live_abcdefghijklmnop","_SYSTEMD_UNIT":"shop.service","SYSLOG_IDENTIFIER":"shop"}
+{"__REALTIME_TIMESTAMP":"1795514470000000","PRIORITY":"3","MESSAGE":"report failed for user 1307: upstream rejected api_key=sk_live_abcdefghijklmnop","_SYSTEMD_UNIT":"shop.service","SYSLOG_IDENTIFIER":"shop"}
+{"__REALTIME_TIMESTAMP":"1795514480000000","PRIORITY":"3","MESSAGE":"report failed for user 9954: upstream rejected api_key=sk_live_abcdefghijklmnop","_SYSTEMD_UNIT":"shop.service","SYSLOG_IDENTIFIER":"shop"}
+{"__REALTIME_TIMESTAMP":"1795514490000000","PRIORITY":"3","MESSAGE":"report failed for user 2216: upstream rejected api_key=sk_live_abcdefghijklmnop","_SYSTEMD_UNIT":"shop.service","SYSLOG_IDENTIFIER":"shop"}
+{"__REALTIME_TIMESTAMP":"1795514500000000","PRIORITY":"3","MESSAGE":"report failed for user 7740: upstream rejected api_key=sk_live_abcdefghijklmnop","_SYSTEMD_UNIT":"shop.service","SYSLOG_IDENTIFIER":"shop"}
+{"__REALTIME_TIMESTAMP":"1795514515000000","PRIORITY":"6","MESSAGE":"order 1044 shipped","_SYSTEMD_UNIT":"shop.service","SYSLOG_IDENTIFIER":"shop"}

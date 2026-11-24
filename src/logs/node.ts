@@ -18,6 +18,9 @@ import { format } from "node:util";
 import { objectText } from "./redact";
 import type { LogBatch, LogMonitor, LogState, LogStore } from "./types";
 
+export { followFile, readLog } from "./read";
+export type { Follower, FollowOptions, ReadOptions, ReadResult } from "./read";
+
 type Recorder = Pick<LogMonitor, "record">;
 type RequestRecorder = Pick<LogMonitor, "request">;
 type ConsoleMethod = "error" | "warn" | "info" | "log" | "debug";
