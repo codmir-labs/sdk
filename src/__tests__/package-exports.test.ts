@@ -25,6 +25,8 @@ const CORE_SUBPATHS = [
   "./react-native",
   "./browser",
   "./replay",
+  "./logs",
+  "./logs/node",
   "./express",
   "./hono",
   "./remix",
