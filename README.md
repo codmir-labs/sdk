@@ -1754,7 +1754,7 @@ import { feedbackStatus, answerFeedback, listFeedback } from '@codmir/sdk/feedba
 for (const { id } of listFeedback().slice(0, 3)) {
   const s = await feedbackStatus(id);
   if (s.ok && s.state === 'fixed') {
-    note.textContent = `Fixed in ${s.release}.`;
+    note.textContent = s.release ? `Fixed in ${s.release}.` : 'Fixed.';
     reply.textContent = s.reply ?? '';          // text, never HTML
   }
 }
