@@ -122,6 +122,17 @@ describe("/browser", () => {
   });
 });
 
+describe("close ends the core client", () => {
+  it.each(["browser", "nextjs", "remix"] as const)("/%s", async (entry) => {
+    const mod = entry === "browser" ? await import("../browser/index") : entry === "nextjs" ? await import("../nextjs/index") : await import("../remix/index");
+    const { getClient } = await import("../overseer/index");
+    mod.init({ dsn: `${server.url}/p1`, clientKey: "osk_1" });
+    const closed = vi.spyOn(getClient()!, "close");
+    mod.close();
+    expect(closed).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("two copies of the SDK on one page", () => {
   const loadTwo = async () => {
     const first = await import("../browser/index");

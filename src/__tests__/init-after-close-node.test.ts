@@ -49,6 +49,17 @@ describe("/express", () => {
   });
 });
 
+describe("close ends the core client", () => {
+  it.each(["express", "react-native"] as const)("/%s", async (entry) => {
+    const mod = entry === "express" ? await import("../express/index") : await import("../react-native/index");
+    const { getClient } = await import("../overseer/index");
+    mod.init({ dsn: `${server.url}/p1`, clientKey: "osk_1" });
+    const closed = vi.spyOn(getClient()!, "close");
+    mod.close();
+    expect(closed).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("/react-native", () => {
   const utils = () => {
     const state = { handler: vi.fn() as (error: Error, fatal?: boolean) => void };
@@ -110,6 +121,22 @@ describe("/react-native", () => {
     expect(app).toHaveBeenCalledTimes(1);
     await settle();
     expect(server.errors("/p1")).toHaveLength(0);
+  });
+
+  it("after close and a new init an error under another copy's handler is captured once, by the new handler", async () => {
+    const rn = await import("../react-native/index");
+    const state = utils();
+    rn.init({ dsn: `${server.url}/p1`, clientKey: "osk_1" });
+    const ours = state.handler;
+    state.handler = (error, fatal) => ours(error, fatal);
+    rn.close();
+    rn.init({ dsn: `${server.url}/p2`, clientKey: "osk_2" });
+    state.handler(new Error("once"), true);
+    expect(await rn.flush()).toBe(true);
+    await until(() => server.errors("/p2").length > 0, "the error");
+    await settle();
+    expect(server.errors("/p2").map((e) => e.message)).toEqual(["once"]);
+    rn.close();
   });
 
   it("runs without ErrorUtils", async () => {

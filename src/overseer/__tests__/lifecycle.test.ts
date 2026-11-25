@@ -4,7 +4,7 @@
  * another library) stays in the chain, passes every call on, and no longer records anything.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listen, patch, Stops } from "../lifecycle";
+import { isLive, listen, patch, Stops } from "../lifecycle";
 
 describe("Stops", () => {
   it("runs the undo functions last first, once, and a throwing one does not stop the rest", () => {
@@ -64,6 +64,18 @@ describe("patch", () => {
   it("does nothing for a missing target or method", () => {
     expect(() => patch(undefined, "x" as never, (o) => o)()).not.toThrow();
     expect(() => patch({} as { f?: () => void }, "f", (o) => o)()).not.toThrow();
+  });
+});
+
+describe("isLive", () => {
+  it("is true for a working patch and for the mark of an older version (the original function), false for a closed one and for none", () => {
+    const key = Symbol("patched");
+    const marked = (mark?: unknown) => Object.assign(() => {}, mark === undefined ? {} : { [key]: mark });
+    expect(isLive(marked({ active: true }), key)).toBe(true);
+    expect(isLive(marked(() => {}), key)).toBe(true);
+    expect(isLive(marked({ active: false }), key)).toBe(false);
+    expect(isLive(marked(), key)).toBe(false);
+    expect(isLive(undefined, key)).toBe(false);
   });
 });
 
