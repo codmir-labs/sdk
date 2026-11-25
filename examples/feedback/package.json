@@ -1,0 +1,14 @@
+{
+  "name": "codmir-example-feedback",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "A page with a plain form that sends what a visitor says with @codmir/sdk/feedback, against a local stand-in for the server",
+  "scripts": {
+    "start": "node server.mjs",
+    "smoke": "node smoke.mjs"
+  },
+  "dependencies": {
+    "@codmir/sdk": "file:../.."
+  }
+}

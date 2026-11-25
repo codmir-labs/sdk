@@ -106,6 +106,11 @@ describe.skipIf(!hasDist)("esbuild bundles every browser entry for the browser (
     expect(browserSubpaths.length).toBeGreaterThan(0);
   });
 
+  // The feedback entry is for a page's own form: it must be in the browser list, and so checked below.
+  it("includes @codmir/sdk/feedback", () => {
+    expect(browserSubpaths).toContain("./feedback");
+  });
+
   for (const entry of browserEntries) {
     it(`${entry.name} reaches no Node built-in`, async () => {
       const problems = await browserProblems(entry);

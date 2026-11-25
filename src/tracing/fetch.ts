@@ -1,6 +1,9 @@
 import { addBreadcrumb, getClient } from "../overseer/index";
 import { scrubUrl } from "../overseer/url-scrub";
 import { getActiveSpan } from "./context";
+import { resolveUrl, shouldPropagate } from "./url-match";
+
+export { resolveUrl, shouldPropagate };
 
 export interface InstrumentFetchOptions {
   /** Record each request as a `fetch` breadcrumb, as the browser integration always did. Default true. */
@@ -10,27 +13,15 @@ export interface InstrumentFetchOptions {
 const INSTALLED = Symbol.for("@codmir/sdk.fetch-instrumented");
 type PatchedFetch = typeof fetch & { [INSTALLED]?: typeof fetch };
 
-export function resolveUrl(raw: string): URL | null {
-  try {
-    const base = (globalThis as { location?: { href?: string } }).location?.href;
-    return new URL(raw, base);
-  } catch {
-    return null;
-  }
-}
-
-/** Same origin as the page, or a match for `tracePropagationTargets`. Relative URLs only resolve in a browser. */
-export function shouldPropagate(url: URL, targets: Array<string | RegExp>): boolean {
-  const origin = (globalThis as { location?: { origin?: string } }).location?.origin;
-  if (origin && url.origin === origin) return true;
-  return targets.some((t) => (typeof t === "string" ? url.href.includes(t) : t.test(url.href)));
-}
-
+/** The ingest URL, and the feedback door next to it (`<base>/feedback`): requests the SDK makes itself are left alone. */
 export function isIngestUrl(url: URL): boolean {
   const ingest = getClient()?.getIngestUrl();
   if (!ingest) return false;
   const target = resolveUrl(ingest);
-  return !!target && url.origin === target.origin && url.pathname === target.pathname;
+  if (!target || url.origin !== target.origin) return false;
+  if (url.pathname === target.pathname) return true;
+  const feedback = `${target.pathname.replace(/\/ingest$/, "")}/feedback`;
+  return url.pathname === feedback || url.pathname.startsWith(`${feedback}/`);
 }
 
 /**

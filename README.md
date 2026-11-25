@@ -65,6 +65,7 @@ npm install @codmir/sdk
 - [Configuration](#configuration): [core options](#core-options), [integration options](#integration-options), [delivery and limits](#delivery-and-limits)
 - [Verify your setup](#verify-your-setup)
 - [Bug reporting](#bug-reporting)
+- [Feedback](#feedback): [what is sent](#what-is-sent), [the results](#the-results), [deleting](#deleting-and-listing)
 - [API client](#api-client)
 - [TypeScript](#typescript)
 - [Bundle size](#bundle-size)
@@ -239,6 +240,7 @@ Each import is its own bundle, so a page that only reports errors never loads th
 | `@codmir/sdk/react-native` | `init` with a global JS error handler, `createErrorBoundary`, screen and app-state breadcrumbs | React Native |
 | `@codmir/sdk/verify` | `verify`, `quickVerify`, `printVerifyResult` | Anywhere |
 | `@codmir/sdk/report` | `Codmir.reportBug`, `searchBugs`, `upvote`, `captureException` | Anywhere |
+| `@codmir/sdk/feedback` | `sendFeedback`, `deleteFeedback`, `listFeedback`: what a visitor says, sent with the replay, the error and the failed request of their session | Anywhere (a browser, React Native, a worker, Node 18+) |
 | `@codmir/sdk/client` | `CodmirClient` | Server side (it holds an API key) |
 | `@codmir/sdk/types` | API types, `CodmirApiError`, `CreateTicketSchema`, `CreateAgentTaskSchema` | Anywhere |
 
@@ -1569,6 +1571,94 @@ await Codmir.upvote(results.reports[0]?.id ?? 'report-id');
 with the stack in the description and the runtime (`browser`, `node`, `os`) as its environment. Severities are `LOW`,
 `MEDIUM`, `HIGH` and `CRITICAL`.
 
+## Feedback
+
+An app sends what its visitors say ("the save button does nothing") with one call. Codmir stores the words masked and ties
+them to the error or the log finding they are about, when the session, the error event or the failed request is the
+same. The SDK knows all three, so you do not pass them. There is no component to install: the form is yours.
+
+```ts
+import { init } from '@codmir/sdk/browser';
+import { sendFeedback } from '@codmir/sdk/feedback';
+
+init({ clientKey: 'your-project-key' });
+
+form.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const result = await sendFeedback({ text: box.value, replyWhenFixed: wantsReply.checked });
+  note.textContent = result.ok ? 'Thank you.' : `Not sent: ${result.reason}`;
+});
+```
+
+`sendFeedback` never throws and never rejects: read `ok`. It needs the client `init()` made, in any entry
+(`@codmir/sdk`, `/overseer`, `/browser`, `/nextjs`, `/react-native`), and sends nothing until the page calls it.
+`sendFeedback('text')` is the same as `sendFeedback({ text: 'text' })`.
+
+### What is sent
+
+The body is built from a fixed list of keys. What you pass wins, and `false` switches one off; a value that does not fit
+the server's limits is left out, and the words are never cut: more than 2,000 characters is refused as `too_long`.
+
+| Key | Where it comes from |
+| --- | --- |
+| `text` | What the person typed, trimmed. 1 to 2,000 characters |
+| `replyWhenFixed` | `replyWhenFixed`, when it is a boolean. A wish only: the server keeps it, and nothing is sent back yet |
+| `replayId` | The id the running [replay](#session-replay) reports, when it is a uuid. `replayId` overrides it, `replayId: false` leaves it out |
+| `eventId` | The id of the last **error** the SDK queued in the last 10 minutes (not one that was sampled out, dropped by `beforeSend` or captured while `enabled` is false, and not a message). `eventId` overrides it, `eventId: false` leaves it out |
+| `failed` | `{ method, path, status, at }` of the newest `fetch` or XHR breadcrumb of the last 5 minutes with a status of 400 or more, to the page's own origin or a `tracePropagationTargets` match, and not one of the SDK's own requests. A request that failed without an answer is not one. `failedRequest` overrides it, `failedRequest: false` leaves it out |
+| `pagePath` | `location.pathname`. `pagePath` overrides it, `pagePath: false` leaves it out |
+| `environment`, `release` | The client's. A release that is the default `unknown` is left out |
+| `userId` | `user.id` from `setUser`. `userId` overrides it, `userId: false` leaves it out. The server stores only a hash of it |
+| `at`, `sdk` | The time, and `@codmir/sdk` with its version |
+
+**Never sent:** a query string or a fragment (a path is only a path, also what you pass), an origin, a user's email, name
+or IP address, a header, a cookie, a third party's address, a request body. Its own request has no cookies
+(`credentials: "omit"`), no `keepalive`, no `traceparent`, and makes no breadcrumb and no span. There is no retry: after a
+lost answer nobody knows whether it was stored. Two calls with the same text while the first is in flight are one request
+and the same result. The timeout is 10 seconds (`timeoutMs`, 1,000 to 60,000).
+
+**On a server** (no `document`, and not React Native) one client serves every visitor, so its last error, its last failed
+request, its replay and its user may be somebody else's. There, only the environment, the release and the SDK come from the
+client: pass what you know about this visitor (`replayId`, `eventId`, `failedRequest`, `pagePath`, `userId`). Nothing is
+kept, calls are never merged, and the `reporterToken` in the result is yours to hand to the visitor.
+
+### The results
+
+| `reason` | When | `status` | Do |
+| --- | --- | --- | --- |
+| `not_configured` | No `init()`, `enabled: false`, no DSN or no key. No network at all | none | Nothing: the feature is off |
+| `empty` | No text, or only spaces. No network | none | Ask for words |
+| `too_long` | More than 2,000 characters. No network | none | Ask for fewer |
+| `unauthorized` | The key is missing, unknown or inactive | 401 | Check `clientKey` |
+| `payment_required` | The project's owner has no card on file (feedback itself costs nothing) | 402 | Nothing for the visitor |
+| `rate_limited` | Too many calls | 429, and `retryAfterMs` from `Retry-After` when it is a number of seconds or a date | Offer a retry after that |
+| `refused` | Any other 4xx, `400` and `413` included | the status | A bug in the call: see `status` |
+| `unavailable` | 5xx, 404, a network error, the timeout, or an answer that is not the door's | the status, when there was one | Offer a retry |
+
+On success `result` is `{ ok: true, id, reporterToken, known }`. `known` says that it was tied to an error or a log finding
+the project already has.
+
+### Deleting and listing
+
+The receipt (the id, the `reporterToken` and the time, **never the text**) is kept on the visitor's device: in
+`localStorage` under `codmir:feedback`, the newest 20 per project key, none older than 365 days, other projects' entries
+left as they are. What is read back is checked field by field, because any script on the page can write there. Without
+`localStorage` (React Native, private mode, a full disk) it is kept in memory. `storage` takes your own
+`{ getItem, setItem, removeItem }`, synchronous or not (it is where that call's receipt goes, and `deleteFeedback` and
+`listFeedback` read `localStorage`, so pass `deleteFeedback` the token), and `storage: false` keeps nothing.
+
+```ts
+import { deleteFeedback, listFeedback } from '@codmir/sdk/feedback';
+
+listFeedback();                       // [{ id, at }], newest first, from this device; [] on a server
+await deleteFeedback(id);             // the stored token; or deleteFeedback(id, reporterToken)
+// { ok: true }, or { ok: false, reason: 'not_found' | 'unavailable' | 'not_configured' }
+```
+
+`204` and `404` both forget the stored receipt (the server says `404` for every reason, so `not_found` can mean it is
+already gone). A network error keeps it for another try. See [`examples/feedback`](examples/feedback) for a page with a
+plain form that shows every result in words.
+
 ## API client
 
 ```ts
@@ -1679,15 +1769,16 @@ is tree-shaken, then compressed with gzip level 9. Importing less can only make 
 
 | Entry | Minified | Minified + gzip |
 | --- | --- | --- |
-| `@codmir/sdk/overseer` | 21.2 kB | 7.6 kB |
+| `@codmir/sdk/overseer` | 21.7 kB | 7.7 kB |
 | `@codmir/sdk/react-native` | 22.5 kB | 8.1 kB |
 | `@codmir/sdk/nextjs` | 23.6 kB | 8.4 kB |
 | `@codmir/sdk/tracing` | 28.8 kB | 10.1 kB |
-| `@codmir/sdk/browser` | 34.5 kB | 12.1 kB |
+| `@codmir/sdk/browser` | 35.1 kB | 12.3 kB |
 | `@codmir/sdk/replay` | 29.8 kB, plus 75.7 kB for rrweb | 10.4 kB, plus 23.4 kB for rrweb |
 | `@codmir/sdk/logs` | 19.3 kB | 8.4 kB |
 | `@codmir/sdk/logs/node` | 19.6 kB | 8.6 kB, with the line parsers and the redaction they use |
 | `@codmir/sdk/logs/parse` | 12.2 kB | 5.4 kB |
+| `@codmir/sdk/feedback` | 5.4 kB | 2.6 kB, with the URL helpers it shares with tracing and the SDK version |
 | `codmir-logs` (the command, a Node program, not a page's bundle) | 46.6 kB | 19.5 kB |
 
 rrweb is a separate chunk that loads only when `startReplay()` decides to record. The log monitor loads the error client
@@ -1856,10 +1947,12 @@ To [`packages/agent-kit`](packages/agent-kit), a private workspace in this repo 
 | [`src/replay/`](src/replay) | The rrweb recorder, privacy mapping and segment upload |
 | [`src/browser/`](src/browser), [`src/nextjs/`](src/nextjs), [`src/express/`](src/express), [`src/hono/`](src/hono), [`src/remix/`](src/remix), [`src/react-native/`](src/react-native) | Framework integrations |
 | [`src/report/`](src/report) | The bug reporting client |
+| [`src/feedback/`](src/feedback) | `sendFeedback`, `deleteFeedback`, `listFeedback`: what a visitor says, with the session it is about |
 | [`src/verify/`](src/verify) | The setup check |
 | [`src/client.ts`](src/client.ts), [`src/types.ts`](src/types.ts) | The API client, its types and Zod schemas |
 | [`examples/fullstack-basic/`](examples/fullstack-basic) | An Express app and a page that send an error, a 3-span trace and a masked replay to a local capture server, checked against the platform's schemas |
 | [`examples/node-smoke/`](examples/node-smoke) | A Node smoke test: one error, one trace and one replay segment, each checked as accepted |
+| [`examples/feedback/`](examples/feedback) | A page with a plain form that sends feedback to a local stand-in for the server and shows each result in words |
 | [`examples/log-read/`](examples/log-read) | Nine small logs (JSON lines, pino, Vercel, Railway, the journal, an access log, text, a container's output) with one planted bug, and `codmir-logs` finding it with the network refused |
 | [`examples/nextjs-build/`](examples/nextjs-build) | A Next.js app that imports `@codmir/sdk/nextjs` in a client component, `app/error.tsx`, `pages/_app.tsx` and an `instrumentation.ts` next to a middleware, and must build |
 | [`packages/agent-kit/`](packages/agent-kit) | `@codmir/agent-kit`: agent runtime, council, serverless, task-runner protocol, AI-call monitoring, MCP client and framework task helpers; private, never published |
