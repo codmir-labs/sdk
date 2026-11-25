@@ -34,6 +34,7 @@ const CORE_SUBPATHS = [
   "./remix/server",
   "./verify",
   "./report",
+  "./feedback",
 ];
 
 describe("@codmir/sdk package exports", () => {

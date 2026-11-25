@@ -193,7 +193,23 @@ export interface ReplayHook {
   onError(eventId: string): void;
 }
 
+/** What `@codmir/sdk/feedback` reads from the client. Not part of the stable API. */
+export interface FeedbackContext {
+  enabled: boolean;
+  dsn: string;
+  key: string;
+  environment: string;
+  release: string;
+  userId: unknown;
+  replayId: string | null;
+  /** The last error event that was really queued: not one sampled out, dropped by `beforeSend` or captured while disabled. */
+  lastError: { id: string; at: number } | null;
+  breadcrumbs: readonly Breadcrumb[];
+  tracePropagationTargets: Array<string | RegExp>;
+}
+
 class OverseerClient {
+  private lastError: { id: string; at: number } | null = null;
   private config: ResolvedConfig;
   private replayHook: ReplayHook | null = null;
   private user: UserContext | null = null;
@@ -363,6 +379,35 @@ class OverseerClient {
     this.replayHook = hook;
   }
 
+  /** What `sendFeedback()` in `@codmir/sdk/feedback` adds to a visitor's words. Not part of the stable API. */
+  feedbackContext(): FeedbackContext {
+    let replayId: string | null = null;
+    let userId: unknown;
+    try {
+      replayId = this.replayHook?.getReplayId() ?? null;
+    } catch {
+      // a failing replay hook never breaks feedback
+    }
+    try {
+      userId = this.user?.id;
+    } catch {
+      // a user object with a throwing getter has no id
+    }
+    const { enabled, dsn, environment, release, tracePropagationTargets } = this.config;
+    return {
+      enabled,
+      dsn,
+      key: this.getOverseerKey(),
+      environment,
+      release,
+      userId,
+      replayId,
+      lastError: this.lastError,
+      breadcrumbs: this.breadcrumbs,
+      tracePropagationTargets,
+    };
+  }
+
   getReplaySampleRates(): { session: number; onError: number } {
     return { session: this.config.replaysSessionSampleRate, onError: this.config.replaysOnErrorSampleRate };
   }
@@ -522,6 +567,7 @@ class OverseerClient {
   private sendEvent(event: OverseerEvent): void {
     const processed = this.config.beforeSend(event);
     if (!processed) return;
+    if (processed.type === "error") this.lastError = { id: processed.id, at: Date.now() };
     this.enqueue(processed);
   }
 
