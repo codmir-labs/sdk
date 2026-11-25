@@ -264,17 +264,22 @@ describe("parseLogLine: random lines", () => {
 
     it(`${format}: takes linear time in the number of lines`, () => {
       const r = rng(31 + format.length);
-      const lines = Array.from({ length: 8000 }, () => randomLine(r));
-      const time = (n: number): number => {
+      const lines = Array.from({ length: 1000 }, () => randomLine(r));
+      const time = (): number => {
         const t0 = performance.now();
-        for (let i = 0; i < n; i++) parseLogLines(lines[i], format);
+        for (const line of lines) parseLogLines(line, format);
         return performance.now() - t0;
       };
-      time(1000); // warm up
-      const small = Math.min(time(2000), time(2000), time(2000));
-      const large = Math.min(time(8000), time(8000));
-      // 4 times the lines: linear is 4 times the time; a cost that grows with the count would be far above 16.
-      expect(large / Math.max(small, 0.5)).toBeLessThan(14);
+      const best = (): number => Math.min(time(), time(), time(), time(), time());
+      time(); // warm up
+      const early = best();
+      for (let i = 0; i < 30; i++) time();
+      // The 36,000th line costs what the 1,000th did. A cost that grows with the count is many times that in every run; a
+      // busy machine is not, so a slow measurement is taken again before it counts.
+      const bound = 6 * Math.max(early, 0.25);
+      let late = best();
+      for (let again = 0; again < 4 && late >= bound; again++) late = Math.min(late, best());
+      expect(late).toBeLessThan(bound);
     });
   }
 });
