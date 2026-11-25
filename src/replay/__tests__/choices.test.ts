@@ -317,6 +317,24 @@ describe("the limit of ids", () => {
     expect(f.apply(attrs(10, { checked: "", title: "t" }) as never)).toMatchObject({ data: { attributes: [{ id: 10, attributes: { title: "t" } }] } });
   });
 
+  it("takes an event and an attribute of a node it never saw for a choice when only a choice has them", async () => {
+    const f = await filter();
+    f.apply(snapshot(3) as never);
+    const event = (extra: object) => ({ type: 3, timestamp: 3, data: { source: 5, id: 777_777, text: "x", ...extra } });
+    expect(f.apply(event({ isChecked: true }) as never)).toBeNull();
+    expect(f.apply(event({ isChecked: false }) as never)).not.toBeNull();
+    const changed = f.apply(attrs(777_777, { checked: "", selected: "", title: "t" }) as never);
+    expect((changed?.data as { attributes: unknown }).attributes).toEqual([{ id: 777_777, attributes: { title: "t" } }]);
+  });
+
+  it("leaves no item behind for a change of nothing but the choice: the item would name the node", async () => {
+    const f = await filter();
+    f.apply(snapshot(3) as never);
+    f.apply(addRadio(900_000, 2) as never);
+    const changed = f.apply(attrs(900_000, { checked: "" }) as never);
+    expect((changed?.data as { attributes: unknown }).attributes).toEqual([]);
+  });
+
   it("forgets a removed subtree when the map is full, so a page that renders and removes forever never reaches the limit", async () => {
     const f = await filter(1000);
     f.apply(snapshot(10) as never);
