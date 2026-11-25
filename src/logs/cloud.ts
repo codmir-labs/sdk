@@ -11,7 +11,7 @@ import type { CloudOptions, Finding, LogLevel, MonitorStats } from "./types";
 
 /** What the monitor keeps per group so a finding is not sent twice in an hour, and every hit is sent once. */
 export interface SendState {
-  /** When the group was last sent; none, or 0 after a restart that had none, if it never was. */
+  /** When the group was last sent; none, or 0, if it never was or the server did not take the last one. */
   sentAt?: number;
   sentBack: number;
   /** The group's total when it was last sent. */
@@ -23,15 +23,15 @@ export interface Candidate {
   state: SendState;
   /** Hits since the group was last sent (all of them, the first time); set when it is chosen. */
   sinceSent?: number;
-  /** The marks the group had before it was chosen, and which choice this was; set when it is chosen. */
-  before?: Pick<SendState, "sentAt" | "sentBack" | "sentTotal">;
+  /** Which choice this was; set when it is chosen. */
   seq?: number;
 }
 
-/** What is kept of an event the client has not answered for: enough to put the group's marks back. */
+/** What is kept of an event the client has not answered for: enough to owe its hits again. */
 interface Waiting {
   state: SendState;
-  before: NonNullable<Candidate["before"]>;
+  /** The hits it carried. */
+  hits: number;
   seq: number;
   /** The call of `send` it went out in, the `now` of its `select` and the UTC day it was counted on. */
   call: number;
@@ -142,7 +142,7 @@ export function createCloud(
   let lastStrike = 0;
   let pausedUntil = 0;
 
-  /** The server did not take these events: their groups get their marks back (unless sent again since), the day its places, and nothing is chosen for a while. */
+  /** The server did not take these events: their hits are owed again, the day gets its places back, and nothing is chosen for a while. */
   const refuse = (ids: readonly string[]): void => {
     let strike = ids.length === 0 || ids.every((id) => !waitingFor.has(id));
     let at = lastNow;
@@ -155,12 +155,10 @@ export function createCloud(
       strike = true;
       at = w.now;
       call = w.call;
-      if (lastChoice.get(w.state) === w.seq) {
-        w.state.sentAt = w.before.sentAt;
-        w.state.sentBack = w.before.sentBack;
-        w.state.sentTotal = w.before.sentTotal;
-        changed = true;
-      }
+      // The hits it carried are owed again, also when the group was sent since; else it goes out at the next chance.
+      w.state.sentTotal = Math.max(0, (w.state.sentTotal ?? 0) - w.hits);
+      if (lastChoice.get(w.state) === w.seq) w.state.sentAt = 0;
+      changed = true;
       if (w.day === day && today > 0) today -= 1;
     }
     if (strike && call > lastStrike) {
@@ -223,7 +221,6 @@ export function createCloud(
       const chosen = eligible.slice(0, room);
       skipped += eligible.length - chosen.length;
       for (const c of chosen) {
-        c.before = { sentAt: c.state.sentAt, sentBack: c.state.sentBack, sentTotal: c.state.sentTotal };
         c.seq = ++seq;
         lastChoice.set(c.state, c.seq);
         c.state.sentAt = now;
@@ -250,9 +247,9 @@ export function createCloud(
               sent += 1;
               waiting += 1;
               const k = chosen?.[i];
-              if (o.apiKey && k?.before && k.seq !== undefined) {
+              if (o.apiKey && k?.seq !== undefined) {
                 if (waitingFor.size >= MAX_WAITING) waitingFor.delete(waitingFor.keys().next().value as string);
-                waitingFor.set(id, { state: k.state, before: k.before, seq: k.seq, call, now: lastNow, day });
+                waitingFor.set(id, { state: k.state, hits: k.sinceSent ?? 0, seq: k.seq, call, now: lastNow, day });
               }
             }
           } catch {
@@ -267,7 +264,7 @@ export function createCloud(
         if (answered) {
           // The client's queue is empty: what an earlier call left in it went out too, and what nobody named was taken.
           waiting = 0;
-          waitingFor.clear();
+          for (const [id, w] of waitingFor) if (w.call <= call) waitingFor.delete(id);
           if (lastStrike === strikesBefore) {
             strikes = 0;
             pausedUntil = 0;

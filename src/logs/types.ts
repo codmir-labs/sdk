@@ -209,7 +209,7 @@ export interface LogStateGroup {
   durMax: number;
   /** The judgement of the last batch the group had hits in. */
   last: Judgement;
-  /** Cloud: when the group was last sent (epoch ms, 0 if never), the `backCount` and the `total` it was sent at. */
+  /** Cloud: when the group was last sent (epoch ms, 0 if never or if the server did not take the last one), the `backCount` and the `total` it was sent at. */
   sentAt: number;
   sentBack: number;
   sentTotal: number;

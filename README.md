@@ -1178,8 +1178,8 @@ matters, then at most once per `everyMinutes` while it has hits, and at once whe
 refusal or a network failure never throws and never blocks your app.
 
 With `cloud.apiKey`, a finding the server did not take (a wrong key, no card, a limit, or a queue that gave up on it) is not
-counted as sent: it goes back to what it was, so the next send carries all its hits, a restart too, and its place in
-`perDay` is given back. After a refusal nothing is sent for 1 minute, doubled per refusal in a row up to 60, and
+counted as sent: it goes out again with its next hit, all its hits with it, a restart too, and its place in `perDay` is
+given back. After a refusal nothing is sent for 1 minute, doubled per refusal in a row up to 60, and
 `stats().cloud.pausedUntil` says until when; a send that is taken ends it. With `cloud: true` (the client your app made)
 nobody tells the monitor what happened, so nothing is taken back.
 

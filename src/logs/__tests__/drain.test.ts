@@ -47,6 +47,8 @@ const ROWS: Array<{ name: string; records: Array<Record<string, unknown>>; finds
   { name: "A3 an id of 128 characters is one", records: [rec({ statusCode: 500, requestId: "x".repeat(128), proxy: px() }), rec({ statusCode: 500, requestId: "x".repeat(128), proxy: px() })], finds: ["GET /p answers 500|1"], records_: 1 },
   { name: "A3 a worse status later is the request, once", records: [rec({ statusCode: 200, requestId: "r5", proxy: px() }), rec({ statusCode: 500, requestId: "r5", proxy: px() })], finds: ["GET /p answers 500|1"], records_: 1, ignored: 0 },
   { name: "A3 a 404 and then a crash is the crash, once", records: [rec({ statusCode: 404, requestId: "r6", proxy: px() }), rec({ statusCode: -1, requestId: "r6", proxy: px() })], finds: ["GET /p answers 500|1"], records_: 1 },
+  { name: "A3 the same worse status twice is one", records: [200, 500, 500].map((statusCode) => rec({ statusCode, requestId: "r11", proxy: px() })), finds: ["GET /p answers 500|1"], records_: 1, ignored: 0 },
+  { name: "A3 worse and worse is the worst, once", records: [200, 404, 500].map((statusCode) => rec({ statusCode, requestId: "r12", proxy: px() })), finds: ["GET /p answers 500|1"], records_: 1, ignored: 0 },
   { name: "A3 a lesser status later changes nothing", records: [rec({ statusCode: 500, requestId: "r7", proxy: px() }), rec({ statusCode: 200, requestId: "r7", proxy: px() })], finds: ["GET /p answers 500|1"], records_: 1 },
   { name: "A4 proxy.path before path, proxy.method first, no query", records: [rec({ statusCode: 500, path: "/api/index", requestId: "r8", proxy: px({ method: "post", path: "/pay/9?token=abc" }) }), rec({ statusCode: 500, path: "/[slug]", method: "PUT" })], finds: ["POST /pay/:n answers 500|1", "PUT /[slug] answers 500|1"], records_: 2 },
   { name: "A5 firewall counts nothing", records: [ERR("blocked by rule", { source: "firewall", statusCode: 403, proxy: px({ statusCode: 403 }) })], finds: [], records_: 0 },
@@ -85,6 +87,35 @@ describe("a drain's records: every rule, fed three ways", () => {
     for (let i = 0; i < 3; i++) await readLog((async function* () { yield line; })(), m);
     expect(m.findings().map((f) => f.hits)).toEqual([1]);
     await m.stop();
+  });
+
+  it("the hit that goes takes its caller along: what is left is a bot's, so noise", async () => {
+    const m = createLogMonitor({ batchMinutes: 10_000 });
+    const chrome = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+    m.request({ method: "GET", path: "/p", status: 404, userAgent: "Googlebot/2.1 (+http://www.google.com/bot.html)" });
+    m.request({ method: "GET", path: "/p", status: 404, userAgent: chrome });
+    expect(m.findings()).toMatchObject([{ hits: 2, judgement: "new", families: { bot: 1, browser: 1 } }]);
+    m.request({ method: "GET", path: "/p", status: 500, userAgent: chrome, replaces: 404 });
+    const by = new Map(m.findings().map((f) => [f.status, f]));
+    expect(by.get(404)).toMatchObject({ hits: 1, total: 1, judgement: "noise" });
+    expect(by.get(404)!.families!.browser ?? 0).toBe(0);
+    expect(by.get(500)).toMatchObject({ hits: 1, total: 1 });
+    // A lesser status never takes a worse one back.
+    m.request({ method: "GET", path: "/p", status: 404, userAgent: chrome, replaces: 500 });
+    expect(m.findings().find((f) => f.status === 500)).toMatchObject({ hits: 1, total: 1 });
+    await m.stop();
+  });
+
+  it("without the ids each call stands alone", () => {
+    const line = JSON.stringify(rec({ statusCode: 500, requestId: "r13", proxy: px() }));
+    expect(parseLogLines(line)).toHaveLength(1);
+    expect(parseLogLines(line)).toHaveLength(1);
+    expect(parseLogLines(`[${line},${line}]`)).toHaveLength(1);
+  });
+
+  it("the time of the proxy when the record has none, and the level of a fatal line that says none", () => {
+    expect(parseLogLines(JSON.stringify(rec({ timestamp: undefined, statusCode: 500, proxy: px() })))).toMatchObject([{ request: { time: 1795514399000 } }]);
+    expect(parseLogLines(JSON.stringify(rec({ type: "fatal", level: undefined, message: "the worker is gone" })))).toMatchObject([{ record: { level: "fatal", message: "the worker is gone" } }]);
   });
 
   it("the CLI's own lines read as before", () => {

@@ -433,6 +433,18 @@ describe("onDropped: what the server did not take", () => {
     c.close();
   });
 
+  it("is told what a full queue pushed out, oldest first, by id", async () => {
+    const c = client((d) => told.push(d));
+    const ids: unknown[] = [];
+    (globalThis.fetch as any).mockRejectedValueOnce(new TypeError("offline"));
+    for (let i = 0; i < MAX_QUEUE_SIZE + 3; i++) ids.push(c.captureException(nodeError(`e${i}`)));
+    await c.flush();
+    const lost = told as Array<{ events: number; status: number; reason: string; eventIds: string[] }>;
+    expect(lost.every((d) => d.status === 0 && d.reason === "queue_full" && d.eventIds.length === d.events)).toBe(true);
+    expect(lost.flatMap((d) => d.eventIds)).toEqual(ids.slice(0, 3));
+    c.close();
+  });
+
   it("a hook that throws changes nothing, and neither does none", async () => {
     for (const c of [client(() => { throw new Error("app"); }), client()]) {
       respond = () => new Response("{}", { status: 400 });

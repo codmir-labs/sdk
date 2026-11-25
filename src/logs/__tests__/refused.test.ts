@@ -144,7 +144,7 @@ describe("a refused finding is sent again", () => {
     expect(sentEvents()[2].event.tags).toMatchObject({ hits: "2", total: "2" });
   });
 
-  it("a refusal that comes after the group was sent again does not undo the later marks", async () => {
+  it("a refusal that comes after the group was sent again does not undo the later marks, and its hits go out with the next send", async () => {
     respond = () => ({ status: 503 });
     const m = make();
     fail(m, undefined, 3);
@@ -157,7 +157,84 @@ describe("a refused finding is sent again", () => {
     expect(hits).toHaveLength(2);
     expect(hits[1].events).toHaveLength(2); // the old one, still queued, and the new one
     expect(m.stats().cloud.refused).toBe(1);
-    expect(group(states.at(-1))).toMatchObject({ sentAt: T0 + 61 * MIN, sentTotal: 5 });
+    expect(sentEvents().slice(1).map((e) => tag(e, "hits"))).toEqual(["3", "2"]);
+    expect(group(states.at(-1))).toMatchObject({ sentAt: T0 + 61 * MIN, sentTotal: 2 }); // the later send's time; the 3 refused hits are owed
+    at(122 * MIN);
+    fail(m);
+    await m.flush();
+    expect(tag(sentEvents().at(-1)!, "hits")).toBe("4"); // 3 refused and 1 new
+    expect(group(states.at(-1))).toMatchObject({ sentAt: T0 + 122 * MIN, sentTotal: 6 });
+  });
+
+  it("two sends of one group refused together: the next one carries the hits of both", async () => {
+    respond = () => ({ status: 503 });
+    const m = make();
+    fail(m, undefined, 3);
+    await m.flush();
+    at(61 * MIN);
+    fail(m, undefined, 2);
+    respond = (n) => (n === 2 ? { status: 401 } : { status: 200 });
+    await m.flush();
+    expect(m.stats().cloud).toMatchObject({ refused: 2, today: 0 });
+    expect(group(states.at(-1))).toMatchObject({ sentTotal: 0 });
+    at(130 * MIN);
+    fail(m);
+    await m.flush();
+    expect(tag(sentEvents().at(-1)!, "hits")).toBe("6");
+    expect(m.stats().cloud.today).toBe(1);
+  });
+
+  it("a finding that came back and was refused goes out as soon as the pause ends, whatever the hour", async () => {
+    const m = make();
+    fail(m);
+    await m.flush();
+    m.mark(m.findings()[0].id, { fixed: true });
+    respond = (n) => ({ status: n === 2 ? 402 : 200 });
+    at(1 * MIN);
+    fail(m, undefined, 2);
+    await m.flush();
+    expect(tag(sentEvents()[1], "judgement")).toBe("back");
+    at(3 * MIN);
+    fail(m);
+    await m.flush();
+    expect(sentEvents().map((e) => tag(e, "hits"))).toEqual(["1", "2", "3"]);
+    at(4 * MIN);
+    fail(m);
+    await m.flush();
+    expect(hits).toHaveLength(3); // taken now: quiet for an hour
+  });
+
+  it("a refusal that names nobody pauses the sending and undoes nothing", async () => {
+    respond = (n) => (n === 1 ? { status: 200, body: { droppedEvents: [{ reason: "payment_required" }] } } : { status: 200 });
+    const m = make();
+    fail(m, undefined, 3);
+    await m.flush();
+    expect(m.stats().cloud).toMatchObject({ refused: 1, today: 1, pausedUntil: new Date(T0 + MIN).toISOString() });
+    expect(group(states.at(-1))).toMatchObject({ sentAt: T0, sentTotal: 3 });
+  });
+
+  it("a send in several batches that are all refused is one refusal", async () => {
+    respond = () => ({ status: 401 });
+    const m = make(undefined, { perBatch: 300 });
+    const word = (i: number): string => [...String(i).padStart(3, "0")].map((d) => "abcdefghij"[+d]).join("");
+    for (let i = 0; i < 150; i++) fail(m, `the ${word(i)} part is broken`);
+    await m.flush();
+    expect(hits.map((h) => h.events.length)).toEqual([100, 50]);
+    expect(m.stats().cloud).toMatchObject({ refused: 150, today: 0, pausedUntil: new Date(T0 + MIN).toISOString() });
+    expect(states.at(-1)!.groups.every((g) => g.sentAt === 0 && g.sentTotal === 0)).toBe(true);
+  });
+
+  it("a refusal after midnight takes nothing off the new day", async () => {
+    respond = () => ({ status: 503 });
+    const m = make();
+    fail(m, undefined, 3);
+    await m.flush(); // counted on the 24th
+    at(16 * 60 * MIN); // 01:00 on the 25th
+    fail(m, undefined, 2);
+    respond = (n) => (n === 2 ? { status: 200, body: { droppedEvents: [{ index: 0, reason: "unparseable" }] } } : { status: 200 });
+    await m.flush();
+    expect(hits[1].events).toHaveLength(2);
+    expect(m.stats().cloud).toMatchObject({ refused: 1, today: 1 });
   });
 
   it("the per-day place is given back once, however often the event is named", async () => {
