@@ -517,13 +517,21 @@ class OverseerClient {
     }
   }
 
-  /** Sends everything queued. Resolves false when a batch failed and was re-queued for a retry. */
-  flush(_timeout?: number): Promise<boolean> {
-    if (this.flushing) return this.flushing;
-    this.flushing = this.drain().finally(() => {
-      this.flushing = null;
+  /** Sends everything queued: true when all of it was sent or refused, false when a batch is put back for a retry or `timeout` ms ran out first. */
+  flush(timeout?: number): Promise<boolean> {
+    if (!this.flushing) {
+      this.flushing = this.drain().finally(() => {
+        this.flushing = null;
+      });
+    }
+    const sending = this.flushing;
+    if (typeof timeout !== "number" || !(timeout < Infinity)) return sending;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<boolean>((resolve) => {
+      timer = setTimeout(resolve, Math.max(0, timeout), false);
+      (timer as { unref?: () => void }).unref?.();
     });
-    return this.flushing;
+    return Promise.race([sending, late]).finally(() => clearTimeout(timer));
   }
 
   close(): void {

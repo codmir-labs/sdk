@@ -136,7 +136,7 @@ File, search and upvote bug reports against any vendor; an existing match is upv
 <td width="33%" valign="top">
 <img src="docs/assets/icons/verify.svg" width="40" height="40" alt=""><br>
 <b>Setup check</b><br>
-<code>verify()</code> initialises, sends a test message and flushes it, reporting each step as it goes.
+<code>verify()</code> sends a test message with a client of its own and reports whether the server took it, step by step.
 </td>
 <td width="33%" valign="top">
 <img src="docs/assets/icons/api-client.svg" width="40" height="40" alt=""><br>
@@ -1401,7 +1401,7 @@ back to `CODMIR_API_KEY`. The AI-call monitoring options that used to be listed 
 | `setUser(user \| null)` | `{ id, email, username, ip_address, ... }` on every later event |
 | `setTag(key, value)`, `setTags(tags)` | String tags on every later event and transaction |
 | `addBreadcrumb(breadcrumb)` | `{ category, message, data, level, type }`; the last 100 are kept |
-| `flush()` | Sends everything queued; resolves `false` when a batch failed and was put back for a retry |
+| `flush(timeout?)` | Sends everything queued; resolves `true` when all of it was sent or refused, `false` when a batch failed and was put back for a retry or when `timeout` (ms) ran out first; the sending goes on. Each caller has its own time, and the timer never keeps a process alive |
 | `close()` | Stops timers, listeners and the patch runtime, then flushes. In `/browser`, `/nextjs`, `/express`, `/remix` and `/react-native`, `close()` also ends what that entry's `init` started (its error handlers, route breadcrumbs, `fetch`, XHR, `history` and `console.error` patches, its pageload transactions), so a later `init` starts clean with its new config; a second `init` before `close()` is ignored. A patch that another library or a second copy of the SDK put over one of ours stays in place and only passes calls on. An error captured after `close()` and before the next `init` is sent once, without retries |
 | `setConversationId(id)`, `setSessionId(id)` | Attach ids to every error (`extra` and `contexts`); the session id is also sent with each request |
 | `getClient()`, `getDsn()`, `getEnvironment()`, `getClientKey()` | Read the current client and its settings |
@@ -1482,7 +1482,7 @@ Each framework's `init()` takes the core options plus its own:
 | Option | Default | What it does |
 | --- | --- | --- |
 | `onProgress` | none | `verify()`: called with each step as it starts and ends |
-| `timeout` | `10000` | `verify()`: passed to `flush()`, which does not use it at this version |
+| `timeout` | `10000` | `verify()`: how long to wait for the server's answer, in ms; then it fails with "No answer" |
 | `projectKey` | required | Bug reporting: sent as `Authorization: Bearer <projectKey>` |
 | `baseUrl` | `https://www.codmir.com/api/v1` | Bug reporting API base |
 | `timeout` (report) | `15000` | Bug reporting request timeout in ms |
@@ -1543,7 +1543,7 @@ Codmir SDK Verification
 =======================
 [OK]   Initialize SDK ..................... 0ms
 [OK]   Send test event .................... 3ms
-[OK]   Flush events ....................... 28ms
+[OK]   Server took the event .............. 28ms
 [OK]   Connection verified
 
 Event ID: ZPM2bB2SQUMmqqcQNyfuy
@@ -1564,11 +1564,27 @@ const ok = await quickVerify(key);
 ```
 
 > [!NOTE]
-> `verify()` initialises the SDK with the config you pass (replacing any client you made before), captures one `info`
-> message, "Codmir SDK setup verified", tagged `source: sdk-verify`, and flushes it. It does not check the server's
-> answer: a success means the SDK initialised, captured the message and finished the flush, even if the server
-> refused it or no DSN was set. Look for that message in your project to close the loop, and run `verify()` from a
-> one-off script rather than inside your app.
+A failed check prints `[FAIL]` and one sentence that names the server and the status, never the key, a query or a body:
+
+```text
+Codmir SDK Verification
+=======================
+[OK]   Initialize SDK ..................... 0ms
+[OK]   Send test event .................... 1ms
+[FAIL] https://www.codmir.com refused the client key (status 401): check that it is this project's key.
+```
+
+> [!NOTE]
+> `verify()` sends one `info` message, "Codmir SDK setup verified", tagged `source: sdk-verify`, with a client of its
+> own and reads the answer to that message. It succeeds only when the server answers 2xx and did not refuse the event;
+> it fails when there is no `clientKey` (the SDK reads no environment variable for it, so pass your own), the server
+> answers 401 or 403 (key refused), 402 (the project has no balance), 404 (nothing at that address), 429 or another 4xx
+> or 5xx, the host can not be reached, no answer comes within `timeout`, the answer says it dropped the event, or the
+> config drops it before it is sent (`enabled: false`, `sampleRate: 0`, a `beforeSend` that returns `null`). It does
+> not retry. It never touches the client your app made (its tags, user, queue, breadcrumbs and replay stay as they
+> were), starts no listener or patch and leaves no timer behind, so it is safe to call inside your app. The client your
+> app made stays initialised. `quickVerify(key, { dsn })` gives only the yes or no; a DSN alone carries no key, so
+> `quickVerify(dsn)` is `false`.
 
 ## Bug reporting
 
