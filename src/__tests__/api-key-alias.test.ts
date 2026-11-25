@@ -1,8 +1,10 @@
-/** `apiKey` is an alias of `clientKey` (the name @codmir/overseer used), in the root entry and every framework init. */
+/**
+ * `apiKey` is an alias of `clientKey` (the name @codmir/overseer used), in the root entry and every framework init.
+ * `/browser` needs a window, so its case is in api-key-alias-browser.test.ts (jsdom).
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Root from "../index";
 import * as Nextjs from "../nextjs/index";
-import * as Browser from "../browser/index";
 
 let headers: Record<string, string>[];
 beforeEach(() => {
@@ -23,7 +25,6 @@ afterEach(() => {
 const entries: [string, { init: (c: any) => void; captureException: (e: unknown) => string; flush: () => Promise<boolean> }][] = [
   ["root", Root],
   ["/nextjs", Nextjs],
-  ["/browser", Browser],
 ];
 
 describe("apiKey alias", () => {

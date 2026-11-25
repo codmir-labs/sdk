@@ -1,4 +1,5 @@
 import { addBreadcrumb, getClient } from "../overseer/index";
+import { isLive, type Installed } from "../overseer/lifecycle";
 import { scrubUrl } from "../overseer/url-scrub";
 import { getActiveSpan } from "./context";
 import { resolveUrl, shouldPropagate } from "./url-match";
@@ -11,7 +12,7 @@ export interface InstrumentFetchOptions {
 }
 
 const INSTALLED = Symbol.for("@codmir/sdk.fetch-instrumented");
-type PatchedFetch = typeof fetch & { [INSTALLED]?: typeof fetch };
+type PatchedFetch = typeof fetch & { [INSTALLED]?: Installed };
 
 /** The ingest URL, and the feedback door next to it (`<base>/feedback`): requests the SDK makes itself are left alone. */
 export function isIngestUrl(url: URL): boolean {
@@ -27,17 +28,20 @@ export function isIngestUrl(url: URL): boolean {
 /**
  * Wraps `globalThis.fetch` (browser, and Node 18+): every request made while a span is active becomes an
  * `http.client` child span and, for same-origin URLs and `tracePropagationTargets`, carries a `traceparent`
- * header naming that span. Requests to the Codmir ingest URL are left completely alone. Idempotent; returns a
- * function that restores the previous fetch.
+ * header naming that span. Requests to the Codmir ingest URL are left completely alone. Idempotent while its wrapper
+ * works; returns a function that restores the previous fetch if the wrapper is on top, and otherwise leaves the wrapper
+ * in place, passing every call on, so a patch over it (a second copy of the SDK) keeps working.
  */
 export function instrumentFetch(options: InstrumentFetchOptions = {}): () => void {
   const { breadcrumbs = true } = options;
   const g = globalThis as { fetch?: PatchedFetch };
   const original = g.fetch;
   if (typeof original !== "function") return () => {};
-  if (original[INSTALLED]) return () => {};
+  if (isLive(original, INSTALLED)) return () => {};
+  const installed: Installed = { active: true };
 
   const wrapped: PatchedFetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    if (!installed.active) return original.call(globalThis, input, init);
     const fullUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     // The breadcrumb names origin and path only: a query or fragment can hold a token.
     const rawUrl = scrubUrl(fullUrl);
@@ -93,10 +97,11 @@ export function instrumentFetch(options: InstrumentFetchOptions = {}): () => voi
       span?.end();
     }
   };
-  wrapped[INSTALLED] = original;
+  wrapped[INSTALLED] = installed;
 
   g.fetch = wrapped;
   return () => {
+    installed.active = false;
     if (g.fetch === wrapped) g.fetch = original;
   };
 }

@@ -9,6 +9,7 @@
  */
 
 import { releaseTrace, setStandingRoot } from "./context";
+import { isLive, listen, Stops, type Installed } from "../overseer/lifecycle";
 import { scrubUrl } from "../overseer/url-scrub";
 import { startTransaction } from "./index";
 import type { Span, Transaction } from "./span";
@@ -38,7 +39,7 @@ const DEFAULT_IDLE_TIMEOUT = 1000;
 const DEFAULT_FINAL_TIMEOUT = 30000;
 const HISTORY_PATCHED = Symbol.for("@codmir/sdk.history-patched");
 
-type PatchedHistoryFn = History["pushState"] & { [HISTORY_PATCHED]?: History["pushState"] };
+type PatchedHistoryFn = History["pushState"] & { [HISTORY_PATCHED]?: Installed };
 
 let teardownActive: (() => void) | undefined;
 
@@ -56,12 +57,14 @@ function pageloadStart(): number {
  * current root, unpatches history and removes the listeners.
  */
 export function startBrowserTracing(options: BrowserTracingOptions = {}): () => void {
-  if (typeof window === "undefined" || typeof document === "undefined") return () => {};
+  // No window, document or location (React Native, a worker, a server bundle): no pageload, no throw.
+  if (typeof window === "undefined" || typeof document === "undefined" || !window.location) return () => {};
   if (teardownActive) return () => {};
 
   const idleTimeout = options.idleTimeout ?? DEFAULT_IDLE_TIMEOUT;
   const finalTimeout = options.finalTimeout ?? DEFAULT_FINAL_TIMEOUT;
 
+  const stops = new Stops();
   let current: { tx: Transaction; finish: (endTimeMs?: number) => void } | undefined;
   let lastPath = window.location.pathname;
   const vitals: WebVitalsObserver = observeWebVitals();
@@ -147,7 +150,7 @@ export function startBrowserTracing(options: BrowserTracingOptions = {}): () => 
         lastActivity = Date.now();
         heartbeat();
       };
-      window.addEventListener("load", onLoad, { once: true });
+      stops.add(listen(window, "load", onLoad, { once: true }));
     } else {
       heartbeat();
     }
@@ -178,24 +181,27 @@ export function startBrowserTracing(options: BrowserTracingOptions = {}): () => 
     if (final.cls !== undefined) tx.setMeasurement("cls", final.cls);
     tx.end();
   };
-  window.addEventListener("visibilitychange", onHide, true);
+  stops.add(listen(window, "visibilitychange", onHide, true));
 
-  const restore: Array<() => void> = [];
+  // A patch that another copy of the SDK put over this one stays in place, passing the calls on, once this one ends.
+  const history = window.history as History | undefined;
   for (const method of ["pushState", "replaceState"] as const) {
-    const original = window.history[method] as PatchedHistoryFn;
-    if (original[HISTORY_PATCHED]) continue;
+    const original = history?.[method] as PatchedHistoryFn | undefined;
+    if (!history || typeof original !== "function" || isLive(original, HISTORY_PATCHED)) continue;
+    const installed: Installed = { active: true };
     const patched: PatchedHistoryFn = function (this: History, ...args: Parameters<History["pushState"]>) {
       const result = original.apply(this, args);
-      onRouteChange();
+      if (installed.active) onRouteChange();
       return result;
     };
-    patched[HISTORY_PATCHED] = original;
-    window.history[method] = patched;
-    restore.push(() => {
-      if (window.history[method] === patched) window.history[method] = original;
+    patched[HISTORY_PATCHED] = installed;
+    history[method] = patched;
+    stops.add(() => {
+      installed.active = false;
+      if (history[method] === patched) history[method] = original;
     });
   }
-  window.addEventListener("popstate", onRouteChange);
+  stops.add(listen(window, "popstate", onRouteChange));
 
   begin("pageload", document.readyState === "complete");
 
@@ -204,9 +210,7 @@ export function startBrowserTracing(options: BrowserTracingOptions = {}): () => 
     teardownActive = undefined;
     current?.finish();
     vitals.stop();
-    window.removeEventListener("popstate", onRouteChange);
-    window.removeEventListener("visibilitychange", onHide, true);
-    for (const undo of restore) undo();
+    stops.run();
   };
   teardownActive = teardown;
   return teardown;
