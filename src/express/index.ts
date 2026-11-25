@@ -45,6 +45,7 @@ import {
   type Breadcrumb,
   type SeverityLevel,
 } from "../overseer/index";
+import { Stops } from "../overseer/lifecycle";
 import { instrumentFetch } from "../tracing/fetch";
 import { startTransaction, withActiveSpan, type Span } from "../tracing/index";
 import { installNodeTracingContext } from "../tracing/server";
@@ -141,6 +142,8 @@ interface CodemirRequestContext {
 
 let isInitialized = false;
 let expressConfig: ExpressConfig = {};
+/** What `init` started, ended by `close`. */
+const stops = new Stops();
 
 /**
  * Initialize the Codmir SDK for Express.js.
@@ -168,7 +171,19 @@ export function init(config: ExpressConfig = {}): void {
   isInitialized = true;
 
   // Tracing: outgoing fetches become child spans and carry traceparent.
-  instrumentFetch({ breadcrumbs: false });
+  stops.add(instrumentFetch({ breadcrumbs: false }));
+}
+
+/**
+ * Ends what `init` started: the `fetch` patch (put back when it is still on top, and otherwise passing calls on) and the
+ * core client, which sends what it holds. A later `init` starts clean, with its own config. An error captured after
+ * `close` and before the next `init` is sent once, without retries.
+ */
+export function close(): void {
+  stops.run();
+  isInitialized = false;
+  expressConfig = {};
+  coreClose();
 }
 
 /** The request's path, never its query string or fragment: a breadcrumb or transaction name is an event field too. */
@@ -380,7 +395,6 @@ export const setTag = coreSetTag;
 export const setTags = coreSetTags;
 export const addBreadcrumb = coreAddBreadcrumb;
 export const flush = coreFlush;
-export const close = coreClose;
 
 /**
  * Check if Overseer is initialized for Express

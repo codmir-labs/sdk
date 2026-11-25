@@ -37,6 +37,7 @@ import {
   type Breadcrumb,
   type SeverityLevel,
 } from "../overseer/index";
+import { Stops } from "../overseer/lifecycle";
 
 // =============================================================================
 // Types
@@ -68,6 +69,8 @@ export interface DeviceInfo {
 
 let isInitialized = false;
 let deviceInfo: DeviceInfo | null = null;
+/** What `init` started, ended by `close`. */
+const stops = new Stops();
 
 export function init(config: ReactNativeConfig = {}): void {
   if (isInitialized) return;
@@ -85,20 +88,43 @@ export function init(config: ReactNativeConfig = {}): void {
   isInitialized = true;
 
   // Set up global error handler
-  const originalHandler = ErrorUtils.getGlobalHandler();
-  ErrorUtils.setGlobalHandler((error, isFatal) => {
-    coreCaptureException(error, {
-      handled: false,
-      mechanism: "global-error-handler",
-      fatal: isFatal,
-      device: deviceInfo,
-    });
+  if (typeof ErrorUtils !== "undefined") {
+    const originalHandler = ErrorUtils.getGlobalHandler();
+    let working = true;
+    const handler = (error: Error, isFatal?: boolean): void => {
+      if (working) {
+        coreCaptureException(error, {
+          handled: false,
+          mechanism: "global-error-handler",
+          fatal: isFatal,
+          device: deviceInfo,
+        });
+      }
 
-    // Call original handler
-    if (originalHandler) {
-      originalHandler(error, isFatal);
-    }
-  });
+      // Call original handler
+      if (originalHandler) {
+        originalHandler(error, isFatal);
+      }
+    };
+    ErrorUtils.setGlobalHandler(handler);
+    // A handler set over this one by another copy of the SDK stays in place and passes the error on.
+    stops.add(() => {
+      working = false;
+      if (ErrorUtils.getGlobalHandler() === handler && originalHandler) ErrorUtils.setGlobalHandler(originalHandler);
+    });
+  }
+}
+
+/**
+ * Ends what `init` started: the global error handler (put back when it is still the SDK's, and otherwise passing errors
+ * on) and the core client, which sends what it holds. A later `init` starts clean, with its own config. An error captured
+ * after `close` and before the next `init` is sent once, without retries.
+ */
+export function close(): void {
+  stops.run();
+  isInitialized = false;
+  deviceInfo = null;
+  coreClose();
 }
 
 /**
@@ -230,7 +256,6 @@ export {
   coreSetTags as setTags,
   coreAddBreadcrumb as addBreadcrumb,
   coreFlush as flush,
-  coreClose as close,
   getClient,
 };
 

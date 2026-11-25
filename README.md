@@ -1402,7 +1402,7 @@ back to `CODMIR_API_KEY`. The AI-call monitoring options that used to be listed 
 | `setTag(key, value)`, `setTags(tags)` | String tags on every later event and transaction |
 | `addBreadcrumb(breadcrumb)` | `{ category, message, data, level, type }`; the last 100 are kept |
 | `flush()` | Sends everything queued; resolves `false` when a batch failed and was put back for a retry |
-| `close()` | Stops timers, listeners and the patch runtime, then flushes |
+| `close()` | Stops timers, listeners and the patch runtime, then flushes. In `/browser`, `/nextjs`, `/express`, `/remix` and `/react-native`, `close()` also ends what that entry's `init` started (its error handlers, route breadcrumbs, `fetch`, XHR, `history` and `console.error` patches, its pageload transactions), so a later `init` starts clean with its new config; a second `init` before `close()` is ignored. A patch that another library or a second copy of the SDK put over one of ours stays in place and only passes calls on. An error captured after `close()` and before the next `init` is sent once, without retries |
 | `setConversationId(id)`, `setSessionId(id)` | Attach ids to every error (`extra` and `contexts`); the session id is also sent with each request |
 | `getClient()`, `getDsn()`, `getEnvironment()`, `getClientKey()` | Read the current client and its settings |
 

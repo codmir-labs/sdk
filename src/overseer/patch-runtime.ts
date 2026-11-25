@@ -60,6 +60,8 @@ export class PatchRuntime {
   private overseerKey: string;
   private signingSecret: string;
   private config: SelfHealingConfig;
+  private stopped = false;
+  private onReady: (() => void) | null = null;
 
   constructor(opts: {
     dsn: string;
@@ -76,14 +78,17 @@ export class PatchRuntime {
 
   async start(): Promise<void> {
     if (!this.config.enabled) return;
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+    this.stopped = false;
 
     await this.loadManifest();
 
-    if (!this.manifest?.patches.length) return;
+    // `stop()` may have run while the manifest loaded: nothing may start after it.
+    if (this.stopped || !this.manifest?.patches.length) return;
 
     if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", () => this.applyAll());
+      this.onReady = () => this.applyAll();
+      document.addEventListener("DOMContentLoaded", this.onReady);
     } else {
       this.applyAll();
     }
@@ -97,6 +102,9 @@ export class PatchRuntime {
   }
 
   stop(): void {
+    this.stopped = true;
+    if (this.onReady) document.removeEventListener("DOMContentLoaded", this.onReady);
+    this.onReady = null;
     this.observer?.disconnect();
     this.observer = null;
     if (this.pollTimer) {
@@ -138,7 +146,7 @@ export class PatchRuntime {
     const prevVersion = this.manifest?.version ?? 0;
     await this.loadManifest();
 
-    if (this.manifest && this.manifest.version > prevVersion) {
+    if (!this.stopped && this.manifest && this.manifest.version > prevVersion) {
       this.applyAll();
     }
   }
@@ -286,7 +294,7 @@ export class PatchRuntime {
   // ---------------------------------------------------------------------------
 
   private startObserver(): void {
-    if (typeof MutationObserver === "undefined") return;
+    if (typeof MutationObserver === "undefined" || !document.body) return;
 
     this.observer = new MutationObserver(() => {
       this.applyAll();
@@ -304,8 +312,9 @@ export class PatchRuntime {
 
   private matchesCurrentPage(patch: PatchEntry): boolean {
     if (!patch.pages?.length) return true;
-    const path = window.location.pathname;
-    return patch.pages.some((pattern) => this.globMatch(pattern, path));
+    // Without a `location` there is no page to match: a patch limited to pages does not apply.
+    const path = window.location?.pathname;
+    return path !== undefined && patch.pages.some((pattern) => this.globMatch(pattern, path));
   }
 
   private globMatch(pattern: string, path: string): boolean {

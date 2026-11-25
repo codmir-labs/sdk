@@ -1,4 +1,5 @@
 import { addBreadcrumb, getClient } from "../overseer/index";
+import { isLive, type Installed } from "../overseer/lifecycle";
 import { scrubUrl } from "../overseer/url-scrub";
 import { getActiveSpan } from "./context";
 import { isIngestUrl, resolveUrl, shouldPropagate } from "./fetch";
@@ -11,7 +12,7 @@ export interface InstrumentXhrOptions {
 
 const INSTALLED = Symbol.for("@codmir/sdk.xhr-instrumented");
 type XhrProto = typeof XMLHttpRequest.prototype;
-type PatchedOpen = XhrProto["open"] & { [INSTALLED]?: XhrProto["open"] };
+type PatchedOpen = XhrProto["open"] & { [INSTALLED]?: Installed };
 
 interface XhrState {
   /** As passed to `open`, for the breadcrumb. */
@@ -27,15 +28,17 @@ interface XhrState {
 /**
  * Patches `XMLHttpRequest.prototype` once: every request made while a span is active becomes an `http.client`
  * child span that ends on `loadend` (load, error, abort and timeout alike), mirroring `instrumentFetch`, including
- * the `traceparent` rules and leaving the Codmir ingest URL alone. Also records the `xhr` breadcrumb. Idempotent;
- * returns a function that restores the previous methods.
+ * the `traceparent` rules and leaving the Codmir ingest URL alone. Also records the `xhr` breadcrumb. Idempotent while
+ * its patch works; returns a function that restores the previous methods that are still its own, and makes the others
+ * pass every call on.
  */
 export function instrumentXhr(options: InstrumentXhrOptions = {}): () => void {
   const { breadcrumbs = true } = options;
   if (typeof XMLHttpRequest === "undefined") return () => {};
   const proto = XMLHttpRequest.prototype;
   const originalOpen = proto.open as PatchedOpen;
-  if (originalOpen[INSTALLED]) return () => {};
+  if (isLive(originalOpen, INSTALLED)) return () => {};
+  const installed: Installed = { active: true };
   const originalSend = proto.send;
   const originalSetRequestHeader = proto.setRequestHeader;
   const states = new WeakMap<XMLHttpRequest, XhrState>();
@@ -43,11 +46,11 @@ export function instrumentXhr(options: InstrumentXhrOptions = {}): () => void {
   const open: PatchedOpen = function (this: XMLHttpRequest, method: string, url: string | URL) {
     const fullUrl = String(url);
     // The breadcrumb names origin and path only: a query or fragment can hold a token.
-    states.set(this, { rawMethod: String(method), method: String(method).toUpperCase(), rawUrl: scrubUrl(fullUrl), url: resolveUrl(fullUrl), startTime: 0, hasTraceparent: false });
+    if (installed.active) states.set(this, { rawMethod: String(method), method: String(method).toUpperCase(), rawUrl: scrubUrl(fullUrl), url: resolveUrl(fullUrl), startTime: 0, hasTraceparent: false });
     // eslint-disable-next-line prefer-rest-params -- forwards every XHR open() argument unchanged
     return (originalOpen as (...args: unknown[]) => void).apply(this, arguments as unknown as unknown[]);
   } as PatchedOpen;
-  open[INSTALLED] = originalOpen;
+  open[INSTALLED] = installed;
 
   const setRequestHeader: XhrProto["setRequestHeader"] = function (this: XMLHttpRequest, name: string, value: string) {
     const state = states.get(this);
@@ -98,6 +101,7 @@ export function instrumentXhr(options: InstrumentXhrOptions = {}): () => void {
   proto.send = send;
   proto.setRequestHeader = setRequestHeader;
   return () => {
+    installed.active = false;
     if (proto.open === open) proto.open = originalOpen;
     if (proto.send === send) proto.send = originalSend;
     if (proto.setRequestHeader === setRequestHeader) proto.setRequestHeader = originalSetRequestHeader;

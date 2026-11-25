@@ -49,6 +49,8 @@ import {
   type Breadcrumb,
   type SeverityLevel,
 } from "../overseer/index";
+import { listen, Stops } from "../overseer/lifecycle";
+import { trackNavigation } from "../overseer/navigation";
 import { scrubUrl } from "../overseer/url-scrub";
 
 // =============================================================================
@@ -96,6 +98,8 @@ type DataFunction = (args: DataFunctionArgs) => Promise<unknown> | unknown;
 // =============================================================================
 
 let isInitialized = false;
+/** What `setupBrowserTracking` started, ended by `close`. */
+const stops = new Stops();
 let remixConfig: Required<Pick<RemixConfig, "captureLoaderErrors" | "captureActionErrors" | "captureRouteChanges" | "captureResponseErrors">> = {
   captureLoaderErrors: true,
   captureActionErrors: true,
@@ -345,75 +349,42 @@ export function setupBrowserTracking(): void {
   if (typeof window === "undefined") return;
 
   // Global error handler
-  window.addEventListener("error", (event) => {
-    coreCaptureException(event.error || event.message, {
-      handled: false,
-      mechanism: "onerror",
-    });
-  });
+  stops.add(
+    listen(window, "error", (event: ErrorEvent) => {
+      coreCaptureException(event.error || event.message, {
+        handled: false,
+        mechanism: "onerror",
+      });
+    }),
+  );
 
   // Unhandled rejection handler
-  window.addEventListener("unhandledrejection", (event) => {
-    coreCaptureException(event.reason, {
-      handled: false,
-      mechanism: "onunhandledrejection",
-    });
-  });
+  stops.add(
+    listen(window, "unhandledrejection", (event: PromiseRejectionEvent) => {
+      coreCaptureException(event.reason, {
+        handled: false,
+        mechanism: "onunhandledrejection",
+      });
+    }),
+  );
 
   // Route change tracking
   if (remixConfig.captureRouteChanges) {
-    setupRouteTracking();
+    stops.add(trackNavigation());
   }
 }
 
-// =============================================================================
-// Route Tracking (Browser)
-// =============================================================================
-
-function setupRouteTracking(): void {
-  if (typeof window === "undefined") return;
-
-  // Track initial page load
-  coreAddBreadcrumb({
-    category: "navigation",
-    message: window.location.pathname,
-    data: {
-      from: document.referrer ? scrubUrl(document.referrer) : undefined,
-      to: scrubUrl(window.location.href),
-    },
-  });
-
-  // Track history changes (SPA navigation)
-  const originalPushState = history.pushState;
-  const originalReplaceState = history.replaceState;
-
-  history.pushState = function (...args) {
-    const result = originalPushState.apply(this, args);
-    coreAddBreadcrumb({
-      category: "navigation",
-      message: "pushState",
-      data: { to: scrubUrl(args[2], window.location.href) },
-    });
-    return result;
-  };
-
-  history.replaceState = function (...args) {
-    const result = originalReplaceState.apply(this, args);
-    coreAddBreadcrumb({
-      category: "navigation",
-      message: "replaceState",
-      data: { to: scrubUrl(args[2], window.location.href) },
-    });
-    return result;
-  };
-
-  window.addEventListener("popstate", () => {
-    coreAddBreadcrumb({
-      category: "navigation",
-      message: "popstate",
-      data: { to: scrubUrl(window.location.href) },
-    });
-  });
+/**
+ * Ends what `init` and `setupBrowserTracking` started: the global handlers and the route breadcrumbs (the `history`
+ * patches go back when they are still on top, and otherwise only pass calls on), then the core client, which sends what
+ * it holds. A later `init` starts clean, with its own config. An error captured after `close` and before the next `init`
+ * is sent once, without retries.
+ */
+export function close(): void {
+  stops.run();
+  isInitialized = false;
+  remixConfig = { captureLoaderErrors: true, captureActionErrors: true, captureRouteChanges: true, captureResponseErrors: true };
+  coreClose();
 }
 
 // =============================================================================
@@ -459,7 +430,6 @@ export const setTag = coreSetTag;
 export const setTags = coreSetTags;
 export const addBreadcrumb = coreAddBreadcrumb;
 export const flush = coreFlush;
-export const close = coreClose;
 
 /**
  * Check if Overseer is initialized

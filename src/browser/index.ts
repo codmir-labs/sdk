@@ -35,6 +35,7 @@ import {
   type Breadcrumb,
   type SeverityLevel,
 } from "../overseer/index";
+import { listen, patch, Stops } from "../overseer/lifecycle";
 import { instrumentFetch } from "../tracing/fetch";
 import { instrumentXhr } from "../tracing/xhr";
 import { startBrowserTracing, type BrowserTracingOptions } from "../tracing/browser";
@@ -68,7 +69,15 @@ export interface BrowserConfig extends OverseerConfig {
 // =============================================================================
 
 let isInitialized = false;
+/** What `init` started, ended by `close`. */
+const stops = new Stops();
 
+/**
+ * Starts the browser integration: the core client, global error and rejection handlers, `console.error` capture,
+ * click and input breadcrumbs, `fetch` and XHR spans and breadcrumbs, and the pageload and navigation transactions.
+ * A second call before `close` is ignored. Where `window`, `document`, `location` or `history` is missing (React Native,
+ * a worker) the parts that need it are skipped.
+ */
 export function init(config: BrowserConfig = {}): void {
   if (typeof window === "undefined") {
     console.warn("[@codmir/sdk/browser] Cannot initialize in non-browser environment");
@@ -94,39 +103,44 @@ export function init(config: BrowserConfig = {}): void {
 
   // Global error handler
   if (captureGlobalErrors) {
-    window.addEventListener("error", (event) => {
-      coreCaptureException(event.error || event.message, {
-        handled: false,
-        mechanism: "onerror",
-        filename: event.filename,
-        lineno: event.lineno,
-        colno: event.colno,
-      });
-    });
+    stops.add(
+      listen(window, "error", (event: ErrorEvent) => {
+        coreCaptureException(event.error || event.message, {
+          handled: false,
+          mechanism: "onerror",
+          filename: event.filename,
+          lineno: event.lineno,
+          colno: event.colno,
+        });
+      }),
+    );
   }
 
   // Unhandled rejection handler
   if (captureUnhandledRejections) {
-    window.addEventListener("unhandledrejection", (event) => {
-      coreCaptureException(event.reason, {
-        handled: false,
-        mechanism: "onunhandledrejection",
-      });
-    });
+    stops.add(
+      listen(window, "unhandledrejection", (event: PromiseRejectionEvent) => {
+        coreCaptureException(event.reason, {
+          handled: false,
+          mechanism: "onunhandledrejection",
+        });
+      }),
+    );
   }
 
   // Console.error capture
   if (captureConsoleErrors) {
-    const originalError = console.error;
-    console.error = (...args) => {
-      coreCaptureMessage(args.map(String).join(" "), "error");
-      originalError.apply(console, args);
-    };
+    stops.add(
+      patch(console, "error", (originalError) => (...args: unknown[]) => {
+        coreCaptureMessage(args.map(String).join(" "), "error");
+        originalError.apply(console, args);
+      }),
+    );
   }
 
   // Click tracking
   if (trackClicks) {
-    document.addEventListener("click", (event) => {
+    const onClick = (event: Event): void => {
       const target = event.target as HTMLElement;
       if (!target) return;
 
@@ -141,12 +155,13 @@ export function init(config: BrowserConfig = {}): void {
       };
 
       coreAddBreadcrumb(breadcrumb);
-    });
+    };
+    stops.add(listen(typeof document === "undefined" ? undefined : document, "click", onClick));
   }
 
   // Input tracking (masked)
   if (trackInputs) {
-    document.addEventListener("input", (event) => {
+    const onInput = (event: Event): void => {
       const target = event.target as HTMLInputElement;
       if (!target) return;
 
@@ -161,18 +176,19 @@ export function init(config: BrowserConfig = {}): void {
       };
 
       coreAddBreadcrumb(breadcrumb);
-    });
+    };
+    stops.add(listen(typeof document === "undefined" ? undefined : document, "input", onInput));
   }
 
   // Fetch/XHR tracking
   if (trackRequests) {
-    setupRequestTracking();
+    stops.add(setupRequestTracking());
   }
 
   // Pageload / navigation roots. Started after fetch is instrumented so early requests become child spans.
   const tracingOn = browserTracing === undefined ? (getClient()?.getTracesSampleRate() ?? 0) > 0 : browserTracing !== false;
   if (tracingOn) {
-    startBrowserTracing(typeof browserTracing === "object" ? browserTracing : {});
+    stops.add(startBrowserTracing(typeof browserTracing === "object" ? browserTracing : {}));
   }
 }
 
@@ -200,12 +216,27 @@ function getElementDescription(el: HTMLElement): string {
   return description;
 }
 
-function setupRequestTracking(): void {
-  // Fetch: breadcrumbs plus http.client spans and traceparent propagation.
-  instrumentFetch({ breadcrumbs: true });
+function setupRequestTracking(): () => void {
+  // Fetch and XHR: breadcrumbs plus http.client spans and traceparent propagation.
+  const stopFetch = instrumentFetch({ breadcrumbs: true });
+  const stopXhr = instrumentXhr({ breadcrumbs: true });
+  return () => {
+    stopXhr();
+    stopFetch();
+  };
+}
 
-  // XHR: breadcrumbs plus http.client spans and traceparent propagation.
-  instrumentXhr({ breadcrumbs: true });
+/**
+ * Ends what `init` started: the global handlers, the click and input breadcrumbs, the `console.error`, `fetch`, XHR and
+ * `history` patches, the pageload and navigation transactions (the open one ends and is sent), and the core client,
+ * which sends what it holds. A later `init` starts clean, with its own config. A patch another copy of the SDK put over
+ * one of these stays in place and only passes the calls on. An error captured after `close` and before the next `init`
+ * is sent once, without retries.
+ */
+export function close(): void {
+  stops.run();
+  isInitialized = false;
+  coreClose();
 }
 
 // =============================================================================
@@ -219,7 +250,6 @@ export {
   coreSetTags as setTags,
   coreAddBreadcrumb as addBreadcrumb,
   coreFlush as flush,
-  coreClose as close,
   getClient,
 };
 
