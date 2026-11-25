@@ -39,6 +39,16 @@
     </select>
   </div>
 
+  <div class="row">
+    <label for="state">Pretend the entries are</label>
+    <select id="state">
+      <option value="received">received (we have it)</option>
+      <option value="known">a known problem</option>
+      <option value="fixed">fixed</option>
+    </select>
+    <span>then reload the page: it asks once per page view</span>
+  </div>
+
   <h2>Sent from this device</h2>
   <ul id="sent"></ul>
   <h2>What the server received last</h2>
@@ -47,7 +57,7 @@
   <script type="module">
     // The browser entry: it also records the page's requests, so a failed one can go with the words.
     import { init, captureException } from "/sdk/browser/index.js";
-    import { sendFeedback, deleteFeedback, listFeedback } from "/sdk/feedback/index.js";
+    import { sendFeedback, deleteFeedback, listFeedback, feedbackStatus, answerFeedback } from "/sdk/feedback/index.js";
 
     init({ dsn: `${location.origin}/api/overseer`, clientKey: "osk_example", environment: "example", release: "1.0.0" });
 
@@ -66,6 +76,51 @@
     const $ = (id) => document.getElementById(id);
     const say = (text) => ($("note").textContent = text);
 
+    // What became of an entry, in words. `release` and `reply` are the server's own text: put in with textContent, never as HTML.
+    const STATE_WORDS = {
+      received: () => "We have it.",
+      known: () => "It is a known problem.",
+      fixed: (s) => (s.release ? `Fixed in ${s.release}.` : "Fixed."),
+    };
+    const ANSWER_WORDS = { better: "You said it works now.", not_better: "You said it is still broken." };
+
+    // asked once per page view, for the newest few only; a not_found keeps the receipt (an older server has no such door)
+    const statuses = new Map();
+    async function readStates() {
+      for (const { id } of listFeedback().slice(0, 3)) statuses.set(id, await feedbackStatus(id));
+      showSent();
+    }
+
+    function statusLine(id, li) {
+      const s = statuses.get(id);
+      if (!s) return;
+      const line = document.createElement("div");
+      line.textContent = s.ok ? STATE_WORDS[s.state](s) : "";
+      li.append(line);
+      if (!s.ok || s.state !== "fixed") return;
+      if (s.reply) {
+        const reply = document.createElement("blockquote");
+        reply.textContent = s.reply;
+        li.append(reply);
+      }
+      if (s.answer) {
+        const said = document.createElement("div");
+        said.textContent = ANSWER_WORDS[s.answer];
+        li.append(said);
+      }
+      for (const [label, better] of [["It works now", true], ["Still broken", false]]) {
+        const button = document.createElement("button");
+        button.textContent = label;
+        button.onclick = async () => {
+          const r = await answerFeedback(id, better);
+          if (r.ok) statuses.set(id, r);
+          say(r.ok ? "Thank you for telling us." : r.reason === "not_fixed" ? "It is not marked as fixed any more." : r.reason === "rate_limited" ? "Too many answers: try again later." : "Could not send that: try again.");
+          showSent();
+        };
+        li.append(button);
+      }
+    }
+
     async function showSent() {
       const list = $("sent");
       list.replaceChildren(...listFeedback().map(({ id, at }) => {
@@ -79,11 +134,13 @@
           showSent();
         };
         li.append(button);
+        statusLine(id, li);
         return li;
       }));
       $("last").textContent = JSON.stringify(await (await fetch("/demo/last")).json(), null, 2);
     }
 
+    $("state").onchange = () => fetch("/demo/state", { method: "POST", body: JSON.stringify({ state: $("state").value }) });
     $("mode").onchange = () => fetch("/demo/mode", { method: "POST", body: JSON.stringify({ mode: $("mode").value }) });
 
     // An error and a failed request, so the feedback carries both.
@@ -107,6 +164,7 @@
       showSent();
     };
     showSent();
+    readStates();
   </script>
 </body>
 </html>

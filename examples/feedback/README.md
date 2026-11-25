@@ -23,7 +23,10 @@ On the page:
 3. **Pretend the server says** picks the next answer: it took it, a wrong key, a project without a card, too many
    calls, a refusal, an outage, a hotel Wi-Fi page. Each is shown in words, and the message you typed stays in the box when
    a retry makes sense.
-4. **Take it back** deletes a message with the token kept on this device (`localStorage`, never the words).
+4. **Pretend the entries are** received, a known problem or fixed, then reload: the page asks `feedbackStatus` once per page
+   view for the newest three and says `We have it.`, `It is a known problem.` or `Fixed in <release>.` with the reply (put in with
+   `textContent`). When fixed, **It works now** and **Still broken** call `answerFeedback`.
+5. **Take it back** deletes a message with the token kept on this device (`localStorage`, never the words).
 
 ## Check it
 
@@ -39,4 +42,5 @@ an empty and a too-long text (neither reaches the server). Exit 0 when all pass,
 - `sendFeedback({ text, replyWhenFixed })`: never throws, so the form needs no `try`; read `result.ok`.
 - `result.reason` is one of `not_configured`, `empty`, `too_long`, `unauthorized`, `payment_required`, `rate_limited`,
   `refused`, `unavailable`; `result.retryAfterMs` says how long a `rate_limited` answer asks to wait.
+- `feedbackStatus(id)` and `answerFeedback(id, better)`: what became of an entry and the visitor's answer to a fix; neither throws, neither changes the receipts.
 - `listFeedback()` and `deleteFeedback(id)`: what this device sent, and taking one back.

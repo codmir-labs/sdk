@@ -24,7 +24,7 @@ export interface FeedbackStorage {
 export interface FeedbackInput {
   /** What the person said: 1 to 2000 characters. Never cut for you: longer is refused as `too_long`. */
   text: string;
-  /** A wish only: the server keeps it, nothing is sent back yet. */
+  /** A wish only: the server keeps it; read what became of the entry with `feedbackStatus`. */
   replyWhenFixed?: boolean;
   /** The session replay it happened in, when the SDK does not record it here (a server passes the page's). `false`: none. */
   replayId?: string | false;
@@ -58,12 +58,27 @@ export type FeedbackResult =
 
 export type FeedbackDeleteResult = { ok: true } | { ok: false; reason: "not_configured" | "not_found" | "unavailable" };
 
+/** What became of an entry. `release`, `fixedAt`, `reply` and `answer` are null unless `state` is `fixed`. */
+export interface FeedbackStatus {
+  state: "received" | "known" | "fixed";
+  release: string | null;
+  fixedAt: string | null;
+  reply: string | null;
+  answer: "better" | "not_better" | null;
+}
+
+export type FeedbackStatusResult =
+  | ({ ok: true } & FeedbackStatus)
+  | { ok: false; reason: "not_configured" | "not_found" | "unauthorized" | "rate_limited" | "unavailable"; status?: number; retryAfterMs?: number };
+
+export type FeedbackAnswerResult = FeedbackStatusResult | { ok: false; reason: "not_fixed" | "refused"; status?: number };
+
 interface Receipt {
   id: string;
   token: string;
   at: string;
 }
-type Answer = { status: number; retry: string | null; body: string } | null;
+type Answer = { status: number; retry: string | null; body: string; big?: true } | null;
 
 const STORAGE_KEY = "codmir:feedback";
 const CLIENT_SLOT = Symbol.for("codmir.overseer.client");
@@ -71,7 +86,8 @@ const METHOD = /^[A-Za-z]{1,10}$/;
 const UUID = /^[\da-f]{8}(-[\da-f]{4}){3}-[\da-f]{12}$/i;
 const MAX_TEXT = 2000;
 const MAX_BODY = 16000;
-const MAX_ANSWER = 4096;
+// a reply of 1000 control characters is 6000 in JSON
+const MAX_ANSWER = 8192;
 const KEPT = 20;
 const DAY = 86400000;
 
@@ -85,6 +101,9 @@ const oneVisitor = (): boolean => {
 };
 
 const inflight = new Map<string, Promise<FeedbackResult>>();
+const reading = new Map<string, Promise<FeedbackStatusResult>>();
+// the last answer sent for an id: the next one waits for it
+const answering = new Map<string, Promise<unknown>>();
 // what `local` wrote last: the one key it ever holds
 let mirror: string | null = null;
 let broken = false;
@@ -207,15 +226,20 @@ function retryMs(header: string | null): number | undefined {
   return ms >= 0 ? Math.min(ms, DAY) : undefined;
 }
 
-/** One request that never throws: the status and the (short) body, or null for a network error, a timeout or an answer that is too large. */
-function call(url: string, init: RequestInit, ms: number): Promise<Answer> {
+/**
+ * One request that never throws: the status and the (short) body, or null for a network error, a timeout or an answer that is
+ * too large (with `keepBig`, that one keeps its status, marked `big`, and no body).
+ */
+function call(url: string, init: RequestInit, ms: number, keepBig = false): Promise<Answer> {
   const ctrl = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const work: Promise<Answer> = (async () => {
     // No cookies, no keepalive.
     const res = await fetch(url, { ...init, signal: ctrl.signal, credentials: "omit" });
     const body = await res.text();
-    return body.length > MAX_ANSWER ? null : { status: res.status, retry: res.headers.get("retry-after"), body };
+    const status = res.status;
+    if (body.length <= MAX_ANSWER) return { status, retry: res.headers.get("retry-after"), body };
+    return keepBig ? { status, retry: null, body: "", big: true as const } : null;
   })().catch(() => null);
   const timeout = new Promise<null>((resolve) => {
     timer = setTimeout(() => {
@@ -293,6 +317,114 @@ export async function deleteFeedback(id: string, reporterToken?: string): Promis
   if (!answer || (answer.status !== 204 && answer.status !== 404)) return fail("unavailable");
   if (own) await save(ctx.key, local, (kept) => kept.filter((r) => r.id !== id));
   return answer.status === 204 ? { ok: true } : fail("not_found");
+}
+
+const STATES = ["received", "known", "fixed"];
+
+/** The door's answer to the status or the answer call, field by field: a part that does not fit is null, and all four are null unless fixed. */
+function statusFrom(body: string): FeedbackStatus | undefined {
+  let json: unknown;
+  try {
+    json = JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+  const state = get(json, "state");
+  if (typeof state !== "string" || !STATES.includes(state)) return undefined;
+  if (state !== "fixed") return { state: state as FeedbackStatus["state"], release: null, fixedAt: null, reply: null, answer: null };
+  const fixedAt = get(json, "fixedAt");
+  const answer = get(json, "answer");
+  return {
+    state: "fixed",
+    release: str(get(json, "release"), 200) ?? null,
+    fixedAt: typeof fixedAt === "string" ? (iso(fixedAt) ?? null) : null,
+    reply: str(get(json, "reply"), 1000) ?? null,
+    answer: answer === "better" || answer === "not_better" ? answer : null,
+  };
+}
+
+/** One of the two doors of an entry. Never changes the receipts: a 404 may be an older server. */
+async function entryCall(ctx: FeedbackContext, id: string, token: string, send: { method: string; suffix: string; body?: string }): Promise<FeedbackAnswerResult> {
+  const headers: Record<string, string> = { "x-overseer-key": ctx.key, "x-reporter-token": token };
+  if (send.body !== undefined) headers["Content-Type"] = "application/json";
+  const answer = await call(
+    `${baseOf(ctx.dsn)}/feedback/${encodeURIComponent(id)}${send.suffix}`,
+    { method: send.method, headers, body: send.body, ...(send.method === "GET" ? { cache: "no-store" as const } : {}) },
+    10000,
+    true,
+  );
+  if (!answer) return fail("unavailable");
+  const { status } = answer;
+  if (answer.big) return fail("unavailable", { status });
+  if (status >= 200 && status < 300) {
+    const found = statusFrom(answer.body);
+    return found ? { ok: true, ...found } : fail("unavailable", { status });
+  }
+  const retryAfterMs = retryMs(answer.retry);
+  if (status === 401) return fail("unauthorized", { status });
+  if (status === 404) return fail("not_found", { status });
+  if (status === 429) return fail("rate_limited", { status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
+  if (send.method === "POST" && status === 409) return fail("not_fixed", { status });
+  if (send.method === "POST" && status >= 400 && status < 500) return fail("refused", { status });
+  return fail("unavailable", { status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
+}
+
+/** The token to use: the one given, else (in a page only) the one stored. Nothing is sent without an id and a token. */
+function tokenFor(ctx: FeedbackContext, id: string, given: unknown): string | undefined {
+  const token = given ?? (oneVisitor() ? receiptsOf(local.getItem(STORAGE_KEY), ctx.key).find((r) => r.id === id)?.token : undefined);
+  return str(id, 200) && str(token, 1000) ? (token as string) : undefined;
+}
+
+/**
+ * What became of an entry: `received`, `known` or `fixed` (with the release, the time and the reply). Never throws, never
+ * rejects, never changes the stored receipts (a `not_found` may be an older server). The token is the stored one unless
+ * given. On a page, two calls for the same entry while the first is in flight are one request. Ask once per page view.
+ */
+export async function feedbackStatus(id: string, reporterToken?: string): Promise<FeedbackStatusResult> {
+  try {
+    const ctx = contextOf();
+    if (!ctx) return fail("not_configured");
+    const token = tokenFor(ctx, id, reporterToken);
+    if (!token) return fail("not_found");
+    const run = () => entryCall(ctx, id, token, { method: "GET", suffix: "" }).catch(() => fail("unavailable")) as Promise<FeedbackStatusResult>;
+    if (!oneVisitor()) return await run();
+    const k = JSON.stringify([ctx.key, id, token]);
+    let result = reading.get(k);
+    if (!result) {
+      result = run().finally(() => reading.delete(k));
+      reading.set(k, result);
+    }
+    return await result;
+  } catch {
+    return fail("unavailable");
+  }
+}
+
+/**
+ * Tells whether a fix helped. Never throws, never rejects, never changes the receipts. `not_fixed` when the entry is not
+ * fixed (yet, or any more). A second answer replaces the first; answers are never merged and go out in order, each after
+ * the one before it.
+ */
+export async function answerFeedback(id: string, better: boolean, reporterToken?: string): Promise<FeedbackAnswerResult> {
+  try {
+    if (typeof better !== "boolean") return fail("refused");
+    const ctx = contextOf();
+    if (!ctx) return fail("not_configured");
+    const token = tokenFor(ctx, id, reporterToken);
+    if (!token) return fail("not_found");
+    const k = JSON.stringify([ctx.key, id]);
+    const before = answering.get(k);
+    const mine = (before ?? Promise.resolve()).then(() =>
+      entryCall(ctx, id, token, { method: "POST", suffix: "/answer", body: JSON.stringify({ better }) }).catch(() => fail("unavailable") as FeedbackAnswerResult),
+    );
+    const done = mine.finally(() => {
+      if (answering.get(k) === done) answering.delete(k);
+    });
+    answering.set(k, done);
+    return await mine;
+  } catch {
+    return fail("unavailable");
+  }
 }
 
 /** What this visitor sent from this device, newest first. Only the id and the time: the words are never kept. */

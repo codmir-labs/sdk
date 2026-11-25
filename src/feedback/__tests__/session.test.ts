@@ -110,6 +110,8 @@ describe("the last failed request", () => {
     crumb({ method: "POST", url: `${PAGE}/api/overseer/replay`, status: 503 });
     crumb({ method: "POST", url: `${PAGE}/api/overseer/feedback`, status: 429 });
     crumb({ method: "DELETE", url: `${PAGE}/api/overseer/feedback/fb_1`, status: 500 });
+    crumb({ method: "GET", url: `${PAGE}/api/overseer/feedback/fb_1`, status: 404 });
+    crumb({ method: "POST", url: `${PAGE}/api/overseer/feedback/fb_1/answer`, status: 409 });
     expect(await sent()).not.toHaveProperty("failed");
     crumb({ method: "GET", url: `${PAGE}/api/overseerish`, status: 500 });
     expect((await sent("again")).failed).toMatchObject({ path: "/api/overseerish" });
@@ -231,6 +233,20 @@ describe("its own request", () => {
       expect(del.ok).toBe(true);
       expect(new Headers(h.calls[before + 1].init.headers).has("traceparent")).toBe(false);
       expect(h.context().breadcrumbs).toHaveLength(crumbs);
+      // the two doors of an entry: a GET and a POST under the same path, the first answered 404 and the second 409
+      const second = (await h.fb.sendFeedback("second")) as { id: string; reporterToken: string };
+      const n = h.calls.length;
+      const read = await h.fb.feedbackStatus(second.id, "wrong");
+      expect(read).toMatchObject({ ok: false, reason: "not_found" });
+      const answered = await h.fb.answerFeedback(second.id, true, second.reporterToken);
+      expect(answered).toMatchObject({ ok: false, reason: "not_fixed" });
+      const urls = h.calls.slice(n).map((c) => `${c.init.method} ${c.url}`);
+      expect(urls).toEqual([`GET ${DSN_ORIGIN}/api/overseer/feedback/${second.id}`, `POST ${DSN_ORIGIN}/api/overseer/feedback/${second.id}/answer`]);
+      for (const c of h.calls.slice(n)) expect(new Headers(c.init.headers).has("traceparent")).toBe(false);
+      expect(h.context().breadcrumbs).toHaveLength(crumbs);
+      // and a 404 and a 409 of these doors are not the app's last failed request
+      await h.fb.sendFeedback("after the doors");
+      expect(h.door.accepted[h.door.accepted.length - 1]).not.toHaveProperty("failed");
     });
     expect(traceparentOfApp).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
     expect(h.context().breadcrumbs.length).toBe(crumbsBefore + 1);

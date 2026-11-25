@@ -117,7 +117,7 @@ describe("an answer that is not the door's", () => {
     ["no token", answer(201, JSON.stringify({ id: "a", known: false }))],
     ["an id as a number", answer(201, JSON.stringify({ id: 5, reporterToken: "t", known: false }))],
     ["an empty id", answer(201, JSON.stringify({ id: "", reporterToken: "t", known: false }))],
-    ["too large", answer(201, JSON.stringify({ id: "a", reporterToken: "t", known: false, pad: "x".repeat(5000) }))],
+    ["too large", answer(201, JSON.stringify({ id: "a", reporterToken: "t", known: false, pad: "x".repeat(9000) }))],
   ])("%s is unavailable", async (_name, a) => {
     h = await setup({});
     h.door.queue.push(a);

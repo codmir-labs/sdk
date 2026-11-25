@@ -31,6 +31,17 @@ export const FeedbackBodySchema = z
   .strict();
 export type FeedbackBody = z.infer<typeof FeedbackBodySchema>;
 
+/** The two doors of an entry: `GET <base>/feedback/<id>` and `POST <base>/feedback/<id>/answer` with `{ "better": boolean }` and nothing else. */
+export const AnswerBodySchema = z.object({ better: z.boolean() }).strict();
+
+export interface EntryState {
+  state: "received" | "known" | "fixed";
+  release?: string | null;
+  fixedAt?: string | null;
+  reply?: string | null;
+  answer?: "better" | "not_better" | null;
+}
+
 export const KEY = "osk_test";
 export const MAX_BODY_BYTES = 16 * 1024;
 
@@ -58,6 +69,12 @@ export interface Door {
   queue: DoorAnswer[];
   /** id -> reporterToken of what the door stored. */
   stored: Map<string, string>;
+  /** id -> what became of it; an id that is not here is `received`. Set `answer` on a fixed one to start with an answer. */
+  states: Map<string, EntryState>;
+  /** An older server: both doors answer 404, as a server that has none. */
+  older: boolean;
+  /** The bodies of the answers the door took, in order. */
+  answers: Array<{ id: string; better: boolean }>;
   handle(method: string, url: string, headers: Record<string, string>, raw: string): DoorAnswer;
 }
 
@@ -69,6 +86,9 @@ export function createDoor(base = "/api/overseer"): Door {
     accepted: [],
     queue: [],
     stored: new Map(),
+    states: new Map(),
+    older: false,
+    answers: [],
     handle(method, url, headers, raw) {
       const path = new URL(url, "http://door.invalid").pathname;
       const record = (answer: DoorAnswer, into: DoorRequest[]): DoorAnswer => {
@@ -89,6 +109,36 @@ export function createDoor(base = "/api/overseer"): Door {
         if (door.stored.get(id) !== headers["x-reporter-token"]) return record({ status: 404 }, door.requests);
         door.stored.delete(id);
         return record({ status: 204 }, door.requests);
+      }
+      const entry = /^\/feedback\/([^/]+)(\/answer)?$/.exec(path.slice(base.length));
+      if (entry && ((method === "GET" && !entry[2]) || (method === "POST" && entry[2]))) {
+        const id = decodeURIComponent(entry[1]);
+        const state = door.states.get(id) ?? { state: "received" as const };
+        if (door.older || door.stored.get(id) === undefined || door.stored.get(id) !== headers["x-reporter-token"]) return record({ status: 404 }, door.requests);
+        const view = (): DoorAnswer => {
+          const fixed = state.state === "fixed";
+          return json(200, {
+            state: state.state,
+            release: fixed ? (state.release ?? null) : null,
+            fixedAt: fixed ? (state.fixedAt ?? null) : null,
+            reply: fixed ? (state.reply ?? null) : null,
+            answer: fixed ? (state.answer ?? null) : null,
+          });
+        };
+        if (method === "GET") return record(view(), door.requests);
+        let value: unknown;
+        try {
+          value = JSON.parse(raw);
+        } catch {
+          return record(json(400, { error: "not json" }), door.requests);
+        }
+        const body = AnswerBodySchema.safeParse(value);
+        if (!body.success) return record(json(400, { error: "bad body" }), door.requests);
+        if (state.state !== "fixed") return record(json(409, { error: "not fixed" }), door.requests);
+        state.answer = body.data.better ? "better" : "not_better";
+        door.states.set(id, state);
+        door.answers.push({ id, better: body.data.better });
+        return record(view(), door.requests);
       }
       if (method !== "POST" || path !== `${base}/feedback`) return record({ status: 404 }, door.requests);
       if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return record(json(413, { error: "too large" }), door.requests);

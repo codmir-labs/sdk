@@ -52,6 +52,8 @@ interface Api {
   sendFeedback(input: string | Record<string, unknown>): Promise<FeedbackResult>;
   deleteFeedback(id: string, token?: string): Promise<{ ok: boolean; reason?: string }>;
   listFeedback(): Array<{ id: string; at: string }>;
+  feedbackStatus(id: string, token?: string): Promise<Record<string, unknown>>;
+  answerFeedback(id: string, better: boolean, token?: string): Promise<Record<string, unknown>>;
 }
 
 const CONFIG = () => ({
@@ -115,6 +117,54 @@ async function story(api: Api, label: string): Promise<void> {
   api.close();
 }
 
+/** What became of an entry, and the answer to a fix, through a real socket. Needs `init` done and a page (or a given token). */
+async function statusStory(api: Api, label: string, stored: boolean): Promise<void> {
+  api.init(CONFIG());
+  const sent = (await api.sendFeedback(`${label}: status`)) as unknown as { id: string; reporterToken: string };
+  const token = stored ? undefined : sent.reporterToken;
+  const receipts = stored ? JSON.stringify(api.listFeedback()) : "";
+  const requestsBefore = door.requests.length;
+  expect(await api.feedbackStatus(sent.id, token)).toEqual({ ok: true, state: "received", release: null, fixedAt: null, reply: null, answer: null });
+  const get = door.requests[requestsBefore];
+  expect(get).toMatchObject({ method: "GET", url: `/api/overseer/feedback/${sent.id}` });
+  expect(get.headers["x-reporter-token"]).toBe(sent.reporterToken);
+  expect(get.headers["x-overseer-key"]).toBe(KEY);
+  expect(get.headers.cookie).toBeUndefined();
+  expect(get.raw).toBe("");
+  expect(await api.answerFeedback(sent.id, true, token)).toEqual({ ok: false, reason: "not_fixed", status: 409 });
+  door.states.set(sent.id, { state: "known" });
+  expect(await api.feedbackStatus(sent.id, token)).toMatchObject({ ok: true, state: "known", reply: null });
+  door.states.set(sent.id, { state: "fixed", release: "1.2.4", fixedAt: "2026-11-24T09:00:00Z", reply: "<b>Thanks</b>" });
+  expect(await api.feedbackStatus(sent.id, token)).toEqual({ ok: true, state: "fixed", release: "1.2.4", fixedAt: "2026-11-24T09:00:00.000Z", reply: "<b>Thanks</b>", answer: null });
+  expect(await api.answerFeedback(sent.id, false, token)).toMatchObject({ ok: true, state: "fixed", answer: "not_better" });
+  const post = door.requests[door.requests.length - 1];
+  expect(post).toMatchObject({ method: "POST", url: `/api/overseer/feedback/${sent.id}/answer`, raw: '{"better":false}' });
+  expect(await api.answerFeedback(sent.id, true, token)).toMatchObject({ ok: true, answer: "better" });
+  expect(await api.answerFeedback(sent.id, "yes" as never, token)).toEqual({ ok: false, reason: "refused" });
+  expect(await api.feedbackStatus(sent.id, "wrong")).toEqual({ ok: false, reason: "not_found", status: 404 });
+  expect(await api.feedbackStatus(sent.id, token)).toMatchObject({ ok: true, answer: "better" });
+  // an older server: 404 to both doors, and nothing forgotten
+  door.older = true;
+  expect(await api.feedbackStatus(sent.id, token)).toEqual({ ok: false, reason: "not_found", status: 404 });
+  expect(await api.answerFeedback(sent.id, true, token)).toEqual({ ok: false, reason: "not_found", status: 404 });
+  door.older = false;
+  if (stored) expect(JSON.stringify(api.listFeedback())).toBe(receipts);
+  door.queue.push({ status: 429, headers: { "retry-after": "7" }, body: "{}" });
+  expect(await api.feedbackStatus(sent.id, token)).toEqual({ ok: false, reason: "rate_limited", status: 429, retryAfterMs: 7000 });
+  door.queue.push({ status: 200, headers: { "content-type": "text/html" }, body: "<html>hotel wifi</html>" });
+  expect(await api.answerFeedback(sent.id, true, token)).toEqual({ ok: false, reason: "unavailable", status: 200 });
+  api.close();
+  api.init({ ...CONFIG(), clientKey: "osk_wrong" });
+  expect(await api.feedbackStatus(sent.id, sent.reporterToken)).toEqual({ ok: false, reason: "unauthorized", status: 401 });
+  api.close();
+  api.init({ ...CONFIG(), dsn: "http://127.0.0.1:1/api/overseer" });
+  expect(await api.feedbackStatus(sent.id, sent.reporterToken)).toEqual({ ok: false, reason: "unavailable" });
+  api.init({ ...CONFIG(), enabled: false });
+  expect(await api.feedbackStatus(sent.id, sent.reporterToken)).toEqual({ ok: false, reason: "not_configured" });
+  expect(await api.answerFeedback(sent.id, true, sent.reporterToken)).toEqual({ ok: false, reason: "not_configured" });
+  api.close();
+}
+
 describe.skipIf(!hasDist)("the built files against a server that enforces the door's contract", () => {
   // `story` is a visitor's: a page has a document. Without one the same files are a server's (the last test).
   const page = () => vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible" }));
@@ -124,7 +174,7 @@ describe.skipIf(!hasDist)("the built files against a server that enforces the do
     page();
     const overseer = await import(pathToFileURL(`${root}dist/overseer/index.js`).href);
     const feedback = await import(pathToFileURL(`${root}dist/feedback/index.js`).href);
-    expect(Object.keys(feedback).sort()).toEqual(["deleteFeedback", "listFeedback", "sendFeedback"]);
+    expect(Object.keys(feedback).sort()).toEqual(["answerFeedback", "deleteFeedback", "feedbackStatus", "listFeedback", "sendFeedback"]);
     await story(
       {
         ...overseer,
@@ -132,9 +182,12 @@ describe.skipIf(!hasDist)("the built files against a server that enforces the do
         sendFeedback: feedback.sendFeedback,
         deleteFeedback: feedback.deleteFeedback,
         listFeedback: feedback.listFeedback,
+        feedbackStatus: feedback.feedbackStatus,
+        answerFeedback: feedback.answerFeedback,
       },
       "esm",
     );
+    await statusStory({ ...overseer, listFeedback: feedback.listFeedback, sendFeedback: feedback.sendFeedback, feedbackStatus: feedback.feedbackStatus, answerFeedback: feedback.answerFeedback } as unknown as Api, "esm", true);
   });
 
   it("CommonJS, in Node: each entry has its own copy of the code, and still one client", async () => {
@@ -142,7 +195,7 @@ describe.skipIf(!hasDist)("the built files against a server that enforces the do
     const require = createRequire(import.meta.url);
     const overseer = require(`${root}dist/overseer/index.cjs`);
     const feedback = require(`${root}dist/feedback/index.cjs`);
-    expect(Object.keys(feedback).sort()).toEqual(["deleteFeedback", "listFeedback", "sendFeedback"]);
+    expect(Object.keys(feedback).sort()).toEqual(["answerFeedback", "deleteFeedback", "feedbackStatus", "listFeedback", "sendFeedback"]);
     await story(
       {
         ...overseer,
@@ -150,9 +203,12 @@ describe.skipIf(!hasDist)("the built files against a server that enforces the do
         sendFeedback: feedback.sendFeedback,
         deleteFeedback: feedback.deleteFeedback,
         listFeedback: feedback.listFeedback,
+        feedbackStatus: feedback.feedbackStatus,
+        answerFeedback: feedback.answerFeedback,
       },
       "cjs",
     );
+    await statusStory({ ...overseer, listFeedback: feedback.listFeedback, sendFeedback: feedback.sendFeedback, feedbackStatus: feedback.feedbackStatus, answerFeedback: feedback.answerFeedback } as unknown as Api, "cjs", true);
   });
 
   it("the browser bundle, run with a page's location and localStorage", async () => {
@@ -161,7 +217,7 @@ describe.skipIf(!hasDist)("the built files against a server that enforces the do
         contents: `
           import * as o from ${JSON.stringify(`${root}dist/overseer/index.js`)};
           import * as f from ${JSON.stringify(`${root}dist/feedback/index.js`)};
-          globalThis.__api = { ...o, setReplayHook: (hook) => o.getClient().setReplayHook(hook), sendFeedback: f.sendFeedback, deleteFeedback: f.deleteFeedback, listFeedback: f.listFeedback };
+          globalThis.__api = { ...o, setReplayHook: (hook) => o.getClient().setReplayHook(hook), sendFeedback: f.sendFeedback, deleteFeedback: f.deleteFeedback, listFeedback: f.listFeedback, feedbackStatus: f.feedbackStatus, answerFeedback: f.answerFeedback };
         `,
         resolveDir: root,
         loader: "js",
@@ -207,6 +263,9 @@ describe.skipIf(!hasDist)("the built files against a server that enforces the do
     expect(ls.map.get("codmir:feedback")).not.toContain("from the bundle");
     expect(await api.deleteFeedback((sent as { id: string }).id)).toEqual({ ok: true });
     api.close();
+    // the receipt of the status story's entry is in this page's storage, and stays there through every answer
+    await statusStory(api, "bundle", true);
+    expect(JSON.parse(ls.map.get("codmir:feedback")!)[KEY]).toHaveLength(1);
   });
 
   it("on a server, in Node: nothing of the shared client but the environment and the release", async () => {
@@ -221,7 +280,16 @@ describe.skipIf(!hasDist)("the built files against a server that enforces the do
     expect(Object.keys(door.accepted[before] as object).sort()).toEqual(["at", "environment", "release", "sdk", "text"]);
     expect(feedback.listFeedback()).toEqual([]);
     expect(await feedback.deleteFeedback(sent.id)).toEqual({ ok: false, reason: "not_found" });
+    // a server never uses a stored token: only a given one
+    expect(await feedback.feedbackStatus(sent.id)).toEqual({ ok: false, reason: "not_found" });
+    expect(await feedback.answerFeedback(sent.id, true)).toEqual({ ok: false, reason: "not_found" });
+    expect(await feedback.feedbackStatus(sent.id, sent.reporterToken)).toMatchObject({ ok: true, state: "received" });
     expect(await feedback.deleteFeedback(sent.id, sent.reporterToken)).toEqual({ ok: true });
     overseer.close();
+    await statusStory(
+      { ...overseer, listFeedback: feedback.listFeedback, sendFeedback: feedback.sendFeedback, feedbackStatus: feedback.feedbackStatus, answerFeedback: feedback.answerFeedback } as unknown as Api,
+      "server",
+      false,
+    );
   });
 });
