@@ -37,6 +37,8 @@ jobs:
       - run: npx vitest run src/__tests__/root-entry.test.ts
       # One client for every entry point, under require and under import: each case in a new Node process.
       - run: npx vitest run src/__tests__/dist-one-client.test.ts
+      # verify() against a server that never answers, from the built dist: the process must end on its own.
+      - run: npx vitest run src/verify/__tests__/verify.test.ts
       # rrweb must stay out of every bundle but /replay; skips without a build too.
       - run: npx vitest run src/replay/__tests__/dist-bundles.test.ts
       # Every entry but the four Node-only ones must bundle for the browser with esbuild and vite: no Node built-in in
