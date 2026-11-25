@@ -29,6 +29,7 @@
 
 import { generateId } from "../id";
 import { getClient } from "../overseer/index";
+import { ChoiceFilter, hiddenChoices } from "./choices";
 import { dropPageQuery } from "./page-query";
 import {
   resolvePrivacy,
@@ -414,11 +415,15 @@ export class ReplayRecorder {
         if (!this.config.upload?.debug) return;
         console.log(`[Overseer replay] privacy.${list}: skipped invalid selector ${JSON.stringify(selector)}`);
       });
+      const choices = new ChoiceFilter(hiddenChoices(this.config.privacy));
       this.stopRrweb = record({
         // rrweb resolved this event's links against the page's address of this moment, and a pushState changes that
         // address without a Meta event, so the page's query is cut out of them here, the one place that still knows it.
-        emit: (event, isCheckout) =>
-          this.onEvent(dropPageQuery(event as unknown as RrwebEvent, window.location.href), isCheckout === true),
+        // The state of a radio button or a checkbox, which no input mask hides, is taken out here too.
+        emit: (event, isCheckout) => {
+          const kept = choices.apply(dropPageQuery(event as unknown as RrwebEvent, window.location.href));
+          if (kept) this.onEvent(kept, isCheckout === true);
+        },
         ...rrwebPrivacy,
         // On-error mode needs a full snapshot at the start of whatever window is uploaded.
         ...(this.mode === "buffer" ? { checkoutEveryNms: Math.max(1000, Math.floor(this.config.bufferDuration / 2)) } : {}),
