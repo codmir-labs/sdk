@@ -31,6 +31,8 @@ function describe(request: Request, options?: WithCodmirTracingOptions) {
     method: request.method,
     route: options?.route ?? pathOf(request.url),
     traceparent: request.headers.get("traceparent"),
+    // The request in scope: an error captured in the loader carries its origin and path, and its own user.
+    url: request.url,
   };
 }
 

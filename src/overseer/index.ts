@@ -317,7 +317,7 @@ class OverseerClient {
         stacktrace: this.stackFor(err.stack),
         mechanism: { type: "generic", handled: true },
       },
-      user: this.user || undefined,
+      user: this.userOf() || undefined,
       tags: { ...this.tags },
       extra: {
         // No request, headers, cookies, query, params or body, whatever the caller passed.
@@ -354,7 +354,7 @@ class OverseerClient {
       timestamp: new Date().toISOString(),
       level,
       message,
-      user: this.user || undefined,
+      user: this.userOf() || undefined,
       tags: { ...this.tags },
       breadcrumbs: [...this.breadcrumbs],
       environment: this.config.environment,
@@ -391,7 +391,7 @@ class OverseerClient {
       // a failing replay hook never breaks feedback
     }
     try {
-      userId = this.user?.id;
+      userId = this.userOf()?.id;
     } catch {
       // a user object with a throwing getter has no id
     }
@@ -430,8 +430,17 @@ class OverseerClient {
     }
   }
 
+  /** Inside a request the user is the request's own: `setUser` sets it and leaves the client's alone. */
   setUser(user: UserContext | null): void {
-    this.user = user;
+    const scope = getRequestScope();
+    if (scope) scope.user = user;
+    else this.user = user;
+  }
+
+  /** The request's user (`null`: nobody) when it has one, else the client's. */
+  private userOf(): UserContext | null {
+    const own = getRequestScope()?.user;
+    return own === undefined ? this.user : own;
   }
 
   setTag(key: string, value: string): void {
