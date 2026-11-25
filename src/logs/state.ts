@@ -4,7 +4,7 @@
  * every string is cut and redacted again, and a group that is not whole is dropped on its own.
  */
 import type { Group } from "./monitor";
-import { MAX_KEY, MAX_SAMPLE, isScannerPath, redact, shortId } from "./redact";
+import { MAX_KEY, MAX_SAMPLE, isScannerPath, nameOf, redact, shortId } from "./redact";
 import type { LogLevel, LogState, LogStateGroup, LogStateMark, MarkOptions } from "./types";
 
 export const COUNT_BATCHES = 96;
@@ -29,6 +29,8 @@ function bad(): never {
 }
 const int = (v: unknown): number => (Number.isInteger(v) && (v as number) >= 0 && (v as number) <= MAX_N ? (v as number) : bad());
 const text = (v: unknown, n: number): string => (typeof v === "string" ? redact(v.slice(0, n)).slice(0, n) : bad());
+/** A release or a service: a wrong type is a broken group, a name that is none any more ("") is left out alone. */
+const name = (v: unknown): string => (typeof v === "string" ? nameOf(v) : bad());
 /** A key or an id as the monitor makes it: short, and not changed by `redact`. */
 const clean = (v: unknown): v is string => typeof v === "string" && v.length <= MAX_KEY && redact(v) === v;
 
@@ -57,11 +59,12 @@ function readGroup(raw: unknown, now: number, zeros: number, isNoise: (label: st
   for (const n of ["firstMs", "lastMs", "sentAt"]) g[n] = Math.min(g[n] as number, now);
   g.sentTotal = Math.min(g.sentTotal as number, g.total as number);
   g.sample = text(k("sample"), MAX_SAMPLE);
-  g.service = opt("service", (v) => text(v, 64));
+  g.service = opt("service", name) || undefined;
   g.known = opt("known", (v) => text(v, 200));
   // Not what the last batch said (it is not kept): a restart makes a repeat `seen`.
   g.last = g.noise ? "noise" : g.known !== undefined ? "known" : "seen";
-  g.releases = (k("releases") as unknown[]).slice(0, MAX_RELEASES).map((v) => text(v, 64));
+  // A name that is none any more (an older version kept `[hex]` for a commit) is left out, the rest stays.
+  g.releases = [...new Set((k("releases") as unknown[]).slice(0, MAX_RELEASES).map(name).filter(Boolean))];
   g.counts = [...(k("counts") as unknown[]).slice(-COUNT_BATCHES).map(int), ...Array<number>(zeros).fill(0)].slice(-COUNT_BATCHES);
   const fam = k("families") as Record<string, unknown> | undefined;
   g.families = {};

@@ -6,7 +6,7 @@
 import type { OverseerEvent } from "../overseer/index";
 import { SDK_VERSION } from "../version";
 import { num } from "./num";
-import { redact } from "./redact";
+import { nameOf, redact } from "./redact";
 import type { CloudOptions, Finding, LogLevel, MonitorStats } from "./types";
 
 /** What the monitor keeps per group so a finding is not sent twice in an hour, and every hit is sent once. */
@@ -42,6 +42,8 @@ const cut = (s: unknown, n: number): string => redact(s).slice(0, n);
 /** The flat error event of a finding. `fingerprint` is the group, so one finding is one issue and a repeat counts up. */
 export function findingEvent(f: Finding, meta: { environment?: string; release?: string; hits?: number }): OverseerEvent {
   const title = cut(f.title, 200);
+  const releases = f.releases.map((r) => nameOf(r)).filter(Boolean);
+  const release = releases[releases.length - 1] ?? nameOf(meta.release);
   const level = eventLevel(f);
   const tags: Record<string, string> = {
     source: "codmir-logs",
@@ -54,7 +56,8 @@ export function findingEvent(f: Finding, meta: { environment?: string; release?:
   if (f.method) tags.method = cut(f.method, 16);
   if (f.path) tags.path = cut(f.path, 200);
   if (f.status) tags.status = String(f.status);
-  if (f.service) tags.service = cut(f.service, 64);
+  const service = nameOf(f.service);
+  if (service) tags.service = service;
   if (f.known) tags.known = cut(f.known, 200);
   return {
     id: `${f.id}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
@@ -69,12 +72,12 @@ export function findingEvent(f: Finding, meta: { environment?: string; release?:
       firstSeen: f.firstSeen,
       lastSeen: f.lastSeen,
       batches: f.counts.slice(-8),
-      releases: f.releases.map((r) => cut(r, 64)),
+      releases,
       ...(f.families ? { families: f.families } : {}),
       sample: cut(f.sample, 300),
     },
     ...(meta.environment ? { environment: cut(meta.environment, 32) } : {}),
-    ...(f.releases.length ? { release: cut(f.releases[f.releases.length - 1], 64) } : meta.release ? { release: cut(meta.release, 64) } : {}),
+    ...(release ? { release } : {}),
     sdk: { name: "codmir-logs", version: SDK_VERSION },
   };
 }

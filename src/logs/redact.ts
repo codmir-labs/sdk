@@ -28,7 +28,9 @@ const SECRET_PAIR = new RegExp(
   `((?:token|secret|password|passwd|pwd|api[-_]?key|auth(?!or(?!i[sz]))|signature|session|credential)[A-Za-z0-9_-]{0,40}|(?:^|[^A-Za-z0-9])sig(?:[_-][A-Za-z0-9_-]{0,40})?)(["']?)\\s*[=:]\\s*(?!(?:bearer|basic)\\b|${PLACEHOLDER})("[^"]*"|'[^']*'|[^\\s,;&)}\\]]+)`,
   "gi",
 );
-const PREFIXED = /\b(?:sk|pk|rk|whsec|ghp|gho|ghu|ghs|ghr|github_pat|xox[abprs]|AKIA|ASIA|AIza|ya29|npm|glpat)[-_]?[A-Za-z0-9_-]{8,}/g;
+// Each prefix has its own form, so that no ordinary word is one: `skipped_records` and `npm-mirror-service` are words.
+const PREFIXED =
+  /\b(?:(?:[sp]k|rk|whsec|gh[pousr]|github_pat|glpat)[-_][A-Za-z0-9_-]{8,}|xox[abprs]-[A-Za-z0-9_-]{8,}|npm_[A-Za-z0-9]{20,}|A[KS]IA[A-Z0-9]{16,}|AIza[A-Za-z0-9_-]{20,}|ya29[._-][A-Za-z0-9_-]{8,})/g;
 const EMAIL = /[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
 // The character before is captured instead of looked behind for: a lookbehind stops older browsers from parsing the file.
 const IPV4 = /(^|[^\d.])(?:\d{1,3}\.){3}\d{1,3}(?!\d)/g;
@@ -133,6 +135,46 @@ function pass(text: string, extra?: readonly RegExp[]): string {
   s = s.replace(LONG_RUN, (m) => (mixedCase(m) || m.length >= 40 ? "[secret]" : m));
   if (s.includes("/")) s = s.replace(PATH_ID, "/:id");
   return s;
+}
+
+/** Longest name (a release, a service) that is kept. */
+const MAX_NAME = 64;
+const W = "[A-Za-z0-9]{1,20}";
+// Not 13 digits in a row: that is a card number or an id, not a commit.
+const COMMIT = "(?!\\d{13})[0-9a-fA-F]{7,40}";
+const TAIL_WORD = `(?:${W}|[0-9a-fA-F]{21,40})`;
+const VER = `(?:v?\\d{1,9}\\.\\d{1,9}(?:\\.\\d{1,9})?|v\\d{1,9}(?:\\.\\d{1,9}){3})(?:[-+]${TAIL_WORD}(?:[.-]${TAIL_WORD}){0,5})?`;
+const NPM = "[a-z0-9][a-z0-9._-]{0,29}";
+const LOWER = "[a-z][a-z0-9]{0,19}";
+// The whole value, one shape or another. Nothing here holds an `@` outside `name@`, a colon or a `?`.
+const NAME_SHAPE = new RegExp(
+  `^(?:${COMMIT}|(?:dpl|prj)_(?![A-Za-z0-9]*\\d{13})[A-Za-z0-9]{6,60}|${HEX}{8}(?:-${HEX}{4}){3}-${HEX}{12}|${VER}|(?:@[a-z0-9][a-z0-9._-]{0,19}/)?${NPM}@(?:${VER}|${COMMIT})|(?:${W}[-_./]){1,4}${COMMIT}|20\\d{6}(?:[-.T_]?(?:\\d{4}|\\d{6}))?|1[6-9]\\d{8}(?:\\d{3})?|${LOWER}(?:[-_./](?:${LOWER}|\\d{1,4})){0,7})$`,
+);
+const FOUR_PART = /^v\d+\.\d+\.\d+\.\d+/;
+const MASKED = new RegExp(`${PLACEHOLDER}|\\[q\\]`);
+
+/** The secret patterns a shape can hold (it has no space, colon, equals sign or `?`: a cookie, a pair, a bearer token and a query are none of its business). */
+const secretShaped = (s: string): boolean => s.search(JWT) >= 0 || s.search(PREFIXED) >= 0;
+
+function nameOnce(v: unknown, extra?: readonly RegExp[]): string {
+  const s = typeof v === "string" ? v.trim().slice(0, MAX_INPUT) : "";
+  if (!s) return "";
+  if (extra?.some((re) => s.search(re) >= 0)) return "";
+  // `v1.2.3.4` is a version, not an address; what follows it is looked at as any other text.
+  if (s.length <= MAX_NAME && NAME_SHAPE.test(s) && !secretShaped(s) && s.replace(FOUR_PART, "v").search(IPV4) < 0) return s;
+  const r = redact(s, extra);
+  return MASKED.test(r) ? "" : r.slice(0, MAX_NAME).trim();
+}
+
+/**
+ * A release or a service as it may be kept and sent, or "" when it is none or cannot be told apart once masked. The
+ * shapes a developer gives a name (a commit, `web@1.4.0`, `main-<commit>`, a version, a date stamp, plain words) stay as
+ * they are, though {@link redact} would take them for secrets; whatever else it masks makes the name "". An app's own
+ * patterns win. At most 64 characters, stable: `nameOf(nameOf(x)) === nameOf(x)`.
+ */
+export function nameOf(v: unknown, extra?: readonly RegExp[]): string {
+  const a = nameOnce(v, extra);
+  return a && nameOnce(a, extra) === a ? a : "";
 }
 
 /** Longest text that is parsed as JSON; a longer one is taken as it is. */
