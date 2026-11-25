@@ -89,7 +89,7 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
   // The app's own names, cleaned once: they are the ones of nearly every hit.
   const ownRelease = nameOf(opts.release, extra);
   const ownService = nameOf(opts.service, extra);
-  const cloud: Cloud | null = opts.cloud ? createCloud(opts.cloud, { service: ownService || undefined, release: ownRelease || undefined, environment: typeof opts.cloud === "object" ? opts.cloud.environment : undefined }) : null;
+  const cloud: Cloud | null = opts.cloud ? createCloud(opts.cloud, { service: ownService || undefined, release: ownRelease || undefined, environment: typeof opts.cloud === "object" ? opts.cloud.environment : undefined, onRollback: () => persist() }) : null;
 
   const groups = new Map<string, Group>();
   const marks = new Map<string, MarkOptions>();
@@ -363,7 +363,7 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
     if (!cloud) return;
     const p = guard(() => {
       const chosen = cloud.select(candidates, now);
-      return cloud.send(chosen.map((c) => findingEvent(c.finding, { environment: undefined, release: ownRelease, hits: c.sinceSent })));
+      return cloud.send(chosen.map((c) => findingEvent(c.finding, { environment: undefined, release: ownRelease, hits: c.sinceSent })), chosen);
     });
     if (p) track(p.catch(() => false));
   };

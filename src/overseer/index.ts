@@ -88,9 +88,11 @@ export interface OverseerConfig {
   beforeSend?: (event: OverseerEvent) => OverseerEvent | null;
   /**
    * Called when the server did not take events: a batch it refused (`status` 401 for a wrong key, say), or events it
-   * dropped out of a batch it answered 200 to (`reason`, such as `payment_required`). They are not sent again.
+   * dropped out of a batch it answered 200 to (`reason`, such as `payment_required`), or that the client gave up on
+   * (`status` 0: the queue was full, or the client was closed before the last try went through). They are not sent again.
+   * `eventIds` are the ids `captureEvent` returned for those events, when they are known.
    */
-  onDropped?: (dropped: { events: number; status: number; reason?: string }) => void;
+  onDropped?: (dropped: { events: number; status: number; reason?: string; eventIds?: string[] }) => void;
   /** Initial user context */
   initialUser?: UserContext;
   /** Initial tags */
@@ -591,8 +593,9 @@ class OverseerClient {
   private trimQueue(): void {
     const excess = this.eventQueue.length - MAX_QUEUE_SIZE;
     if (excess > 0) {
-      this.eventQueue.splice(0, excess);
+      const lost = this.eventQueue.splice(0, excess);
       this.log(`Queue full (${MAX_QUEUE_SIZE}); dropped ${excess} oldest event(s)`);
+      this.tellDropped(excess, 0, "queue_full", lost);
     }
   }
 
@@ -614,6 +617,11 @@ class OverseerClient {
       }
       if (outcome.kind === "drop") continue;
 
+      if (this.closed) {
+        // close() makes one last attempt; a failure then is final.
+        this.tellDropped(batch.length, 0, "closed", batch);
+        return false;
+      }
       this.eventQueue.unshift(...batch);
       this.trimQueue();
       this.scheduleRetry(outcome.retryAfterMs);
@@ -656,9 +664,10 @@ class OverseerClient {
     });
   }
 
-  private tellDropped(events: number, status: number, reason?: unknown): void {
+  private tellDropped(events: number, status: number, reason?: unknown, which?: ReadonlyArray<object | undefined>): void {
+    const eventIds = which?.flatMap((e) => ((e as { id?: string } | undefined)?.id ? [(e as { id: string }).id] : []));
     try {
-      this.config.onDropped?.({ events, status, ...(typeof reason === "string" ? { reason } : {}) });
+      this.config.onDropped?.({ events, status, ...(typeof reason === "string" ? { reason } : {}), ...(eventIds?.length ? { eventIds } : {}) });
     } catch {
       // the app's hook never breaks the sending
     }
@@ -689,7 +698,7 @@ class OverseerClient {
         const dropped = await readDroppedEvents(res);
         if (dropped.length > 0) {
           this.log("Server dropped events:", dropped);
-          this.tellDropped(dropped.length, res.status, dropped[0]?.reason);
+          this.tellDropped(dropped.length, res.status, dropped[0]?.reason, dropped.map((d) => events[d?.index]));
         }
       }
       return { kind: "ok" };
@@ -697,7 +706,7 @@ class OverseerClient {
 
     if (!isRetryableStatus(res.status)) {
       this.log(`Server rejected a batch of ${events.length} event(s) with ${res.status}; not retrying`);
-      this.tellDropped(events.length, res.status);
+      this.tellDropped(events.length, res.status, undefined, events);
       return { kind: "drop" };
     }
     const retryAfter = Number(res.headers?.get?.("retry-after"));

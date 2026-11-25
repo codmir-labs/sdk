@@ -23,10 +23,28 @@ export interface Candidate {
   state: SendState;
   /** Hits since the group was last sent (all of them, the first time); set when it is chosen. */
   sinceSent?: number;
+  /** The marks the group had before it was chosen, and which choice this was; set when it is chosen. */
+  before?: Pick<SendState, "sentAt" | "sentBack" | "sentTotal">;
+  seq?: number;
+}
+
+/** What is kept of an event the client has not answered for: enough to put the group's marks back. */
+interface Waiting {
+  state: SendState;
+  before: NonNullable<Candidate["before"]>;
+  seq: number;
+  /** The call of `send` it went out in, the `now` of its `select` and the UTC day it was counted on. */
+  call: number;
+  now: number;
+  day: string;
 }
 
 export const CLOUD_DEFAULTS = { everyMinutes: 60, perBatch: 50, perDay: 1000 } as const;
 const SEND_TIMEOUT_MS = 5000;
+/** As many as can wait in the client's queue. */
+const MAX_WAITING = 1000;
+const BACKOFF_MS = 60_000;
+const BACKOFF_MAX = 60;
 const utcDay = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 const RANK: Record<string, number> = { debug: 0, info: 1, warning: 2, error: 3, fatal: 4 };
 const PRIORITY: Record<string, number> = { alarm: 0, back: 1, new: 2, known: 3, seen: 4, noise: 5 };
@@ -88,8 +106,8 @@ type SdkClient = NonNullable<ReturnType<OverseerModule["getClient"]>>;
 export interface Cloud {
   /** The candidates to send now, caps applied; their `state` is marked sent. */
   select(candidates: Candidate[], now: number): Candidate[];
-  /** Hands the events to the client and waits for its flush, at most 5 s. Never throws. */
-  send(events: OverseerEvent[]): Promise<boolean>;
+  /** Hands the events to the client and waits for its flush, at most 5 s. `chosen[i]` is the finding of `events[i]`. Never throws. */
+  send(events: OverseerEvent[], chosen?: Candidate[]): Promise<boolean>;
   counters(): MonitorStats["cloud"];
   /** The UTC day (`2026-11-24`) the per-day count is for, and the count; what a restart takes up again. */
   state(): { day: string; sent: number };
@@ -99,7 +117,7 @@ export interface Cloud {
 
 export function createCloud(
   options: true | CloudOptions,
-  base: { service?: string; release?: string; environment?: string },
+  base: { service?: string; release?: string; environment?: string; onRollback?: () => void },
 ): Cloud {
   const o: CloudOptions = options === true ? {} : options;
   const everyMs = num(o.everyMinutes, CLOUD_DEFAULTS.everyMinutes, 0, 525_600) * 60_000;
@@ -114,7 +132,50 @@ export function createCloud(
   let waiting = 0;
   let reason: string | undefined;
   let own: SdkClient | null = null;
+  // Only with `apiKey`: the app's own client has no hook that tells.
+  const waitingFor = new Map<string, Waiting>();
+  const lastChoice = new WeakMap<SendState, number>();
+  let seq = 0;
+  let calls = 0;
+  let lastNow = 0;
+  let strikes = 0;
+  let lastStrike = 0;
+  let pausedUntil = 0;
 
+  /** The server did not take these events: their groups get their marks back (unless sent again since), the day its places, and nothing is chosen for a while. */
+  const refuse = (ids: readonly string[]): void => {
+    let strike = ids.length === 0 || ids.every((id) => !waitingFor.has(id));
+    let at = lastNow;
+    let call = calls;
+    let changed = false;
+    for (const id of ids) {
+      const w = waitingFor.get(id);
+      if (!w) continue;
+      waitingFor.delete(id);
+      strike = true;
+      at = w.now;
+      call = w.call;
+      if (lastChoice.get(w.state) === w.seq) {
+        w.state.sentAt = w.before.sentAt;
+        w.state.sentBack = w.before.sentBack;
+        w.state.sentTotal = w.before.sentTotal;
+        changed = true;
+      }
+      if (w.day === day && today > 0) today -= 1;
+    }
+    if (strike && call > lastStrike) {
+      lastStrike = call;
+      strikes += 1;
+      pausedUntil = at + Math.min(BACKOFF_MAX, 2 ** (strikes - 1)) * BACKOFF_MS;
+    }
+    if (changed) {
+      try {
+        base.onRollback?.();
+      } catch {
+        // the monitor's save never breaks the client's hook
+      }
+    }
+  };
   const wants = (c: Candidate, now: number): boolean => {
     const { finding: f, state } = c;
     if (f.judgement === "noise" || f.hits <= 0) return false;
@@ -138,6 +199,7 @@ export function createCloud(
         onDropped: (d) => {
           refused += d.events;
           reason = cut(d.reason ?? `status ${d.status}`, 64);
+          refuse(Array.isArray(d.eventIds) ? d.eventIds : []);
         },
       }) as SdkClient;
       own.init();
@@ -147,6 +209,8 @@ export function createCloud(
 
   return {
     select(candidates, now) {
+      if (now < pausedUntil) return [];
+      lastNow = now;
       const d = utcDay(now);
       if (d !== day) {
         day = d;
@@ -159,6 +223,9 @@ export function createCloud(
       const chosen = eligible.slice(0, room);
       skipped += eligible.length - chosen.length;
       for (const c of chosen) {
+        c.before = { sentAt: c.state.sentAt, sentBack: c.state.sentBack, sentTotal: c.state.sentTotal };
+        c.seq = ++seq;
+        lastChoice.set(c.state, c.seq);
         c.state.sentAt = now;
         c.state.sentBack = c.finding.backCount;
         c.sinceSent = c.finding.total - (c.state.sentTotal ?? 0);
@@ -168,17 +235,25 @@ export function createCloud(
       return chosen;
     },
 
-    async send(events) {
+    async send(events, chosen) {
       if (events.length === 0) return true;
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const c = await client();
         if (!c) return false;
-        for (const e of events) {
+        const call = ++calls;
+        const strikesBefore = lastStrike;
+        for (const [i, e] of events.entries()) {
           try {
-            if (c.captureEvent(e)) {
+            const id = c.captureEvent(e);
+            if (id) {
               sent += 1;
               waiting += 1;
+              const k = chosen?.[i];
+              if (o.apiKey && k?.before && k.seq !== undefined) {
+                if (waitingFor.size >= MAX_WAITING) waitingFor.delete(waitingFor.keys().next().value as string);
+                waitingFor.set(id, { state: k.state, before: k.before, seq: k.seq, call, now: lastNow, day });
+              }
             }
           } catch {
             // one bad event never stops the others
@@ -189,7 +264,15 @@ export function createCloud(
           (timer as { unref?: () => void }).unref?.();
         });
         const answered = await Promise.race([c.flush(), deadline]);
-        if (answered) waiting = 0; // the client's queue is empty: what an earlier call left in it went out too
+        if (answered) {
+          // The client's queue is empty: what an earlier call left in it went out too, and what nobody named was taken.
+          waiting = 0;
+          waitingFor.clear();
+          if (lastStrike === strikesBefore) {
+            strikes = 0;
+            pausedUntil = 0;
+          }
+        }
         return answered;
       } catch {
         return false;
@@ -198,7 +281,7 @@ export function createCloud(
       }
     },
 
-    counters: () => ({ sent, skipped, today, refused, waiting, ...(reason ? { reason } : {}) }),
+    counters: () => ({ sent, skipped, today, refused, waiting, ...(reason ? { reason } : {}), ...(pausedUntil > Date.now() ? { pausedUntil: new Date(pausedUntil).toISOString() } : {}) }),
 
     state: () => ({ day, sent: today }),
 

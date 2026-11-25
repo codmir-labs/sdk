@@ -114,6 +114,8 @@ export interface MonitorStats {
     reason?: string;
     /** Of `sent`, the ones no answer came for: the client tries again while the process lives. */
     waiting: number;
+    /** ISO time until which nothing is sent: after a refusal, 1 minute, doubled per refusal in a row up to 60. Only while it lasts. */
+    pausedUntil?: string;
   };
 }
 

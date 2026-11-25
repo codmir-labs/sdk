@@ -1177,6 +1177,12 @@ matters, then at most once per `everyMinutes` while it has hits, and at once whe
 `known` only the first time, with its note. Delivery is the SDK's own client: its queue, its batching and its retry. A
 refusal or a network failure never throws and never blocks your app.
 
+With `cloud.apiKey`, a finding the server did not take (a wrong key, no card, a limit, or a queue that gave up on it) is not
+counted as sent: it goes back to what it was, so the next send carries all its hits, a restart too, and its place in
+`perDay` is given back. After a refusal nothing is sent for 1 minute, doubled per refusal in a row up to 60, and
+`stats().cloud.pausedUntil` says until when; a send that is taken ends it. With `cloud: true` (the client your app made)
+nobody tells the monitor what happened, so nothing is taken back.
+
 | What is sent | What is never sent |
 | --- | --- |
 | The issue title (`GET /orders/:n answers 500`, or the folded log line), level and the group as its fingerprint | The raw log line, or any text that was not redacted |
@@ -1312,7 +1318,7 @@ Leave it off unless you serve that manifest.
 | `replaysSessionSampleRate` | `0` | Read by `startReplay()` |
 | `replaysOnErrorSampleRate` | `1` | Read by `startReplay()` |
 | `beforeSend` | keeps every event | `(event) => event \| null`, for errors and messages; `null` drops the event |
-| `onDropped` | none | `({ events, status, reason }) => void`, called when the server did not take events: a batch it refused, or ones it dropped behind a 200 |
+| `onDropped` | none | `({ events, status, reason, eventIds }) => void`, called when the server did not take events: a batch it refused, or ones it dropped behind a 200, or ones the client gave up on (`status` 0: the queue was full, or the client was closed before the last try went through). `eventIds` are the ids `captureEvent` returned for them |
 | `initialUser` | none | The user from the first event on |
 | `initialTags` | `{}` | Tags from the first event on |
 | `includeSourceContext` | `true` | Node only: source lines around the first three in-app frames |

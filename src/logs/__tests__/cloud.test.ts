@@ -222,7 +222,7 @@ describe("it never hurts the app", () => {
     const wrongKey = make();
     fail(wrongKey);
     await wrongKey.flush();
-    expect(wrongKey.stats().cloud).toEqual({ sent: 1, skipped: 0, today: 1, refused: 1, waiting: 0, reason: "status 401" });
+    expect(wrongKey.stats().cloud).toEqual({ sent: 1, skipped: 0, today: 0, refused: 1, waiting: 0, reason: "status 401", pausedUntil: expect.any(String) });
 
     answer = 200;
     body = JSON.stringify({ received: 0, dropped: 1, droppedEvents: [{ index: 0, reason: "payment_required" }] });
