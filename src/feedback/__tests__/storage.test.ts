@@ -138,7 +138,7 @@ describe("the receipts in localStorage", () => {
     }
   });
 
-  it("without localStorage (Node, React Native) it is memory, and a fresh load starts empty", async () => {
+  it("without localStorage (a sandboxed page, React Native) it is memory, and a fresh load starts empty", async () => {
     h = await setup({});
     expect(typeof localStorage).toBe("undefined");
     await h.fb.sendFeedback("one");

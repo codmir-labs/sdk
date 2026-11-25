@@ -31,7 +31,7 @@
     <select id="mode">
       <option value="ok">it took it</option>
       <option value="unauthorized">the key is wrong (401)</option>
-      <option value="payment">the plan does not take feedback (402)</option>
+      <option value="payment">the project has no card (402)</option>
       <option value="limited">too many calls (429, retry in 30 s)</option>
       <option value="refused">no (400)</option>
       <option value="down">it is down (503)</option>
@@ -97,7 +97,7 @@
       say("Sending…");
       const result = await sendFeedback({ text: $("words").value, replyWhenFixed: $("reply").checked });
       if (result.ok) {
-        say(result.known ? "Thank you: others told us the same." : "Thank you: we have it.");
+        say(result.known ? "Thank you: we know this problem." : "Thank you: we have it.");
         $("words").value = "";
       } else {
         const words = WORDS[result.reason];

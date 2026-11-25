@@ -10,7 +10,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import vm from "node:vm";
 import { build } from "esbuild";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FeedbackResult } from "../index";
 import { KEY, createDoor, type Door, type DoorAnswer } from "./door";
 import { REPLAY_ID, fakeLocalStorage } from "./harness";
@@ -116,7 +116,12 @@ async function story(api: Api, label: string): Promise<void> {
 }
 
 describe.skipIf(!hasDist)("the built files against a server that enforces the door's contract", () => {
+  // `story` is a visitor's: a page has a document. Without one the same files are a server's (the last test).
+  const page = () => vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible" }));
+  afterEach(() => vi.unstubAllGlobals());
+
   it("ESM, in Node", async () => {
+    page();
     const overseer = await import(pathToFileURL(`${root}dist/overseer/index.js`).href);
     const feedback = await import(pathToFileURL(`${root}dist/feedback/index.js`).href);
     expect(Object.keys(feedback).sort()).toEqual(["deleteFeedback", "listFeedback", "sendFeedback"]);
@@ -133,6 +138,7 @@ describe.skipIf(!hasDist)("the built files against a server that enforces the do
   });
 
   it("CommonJS, in Node: each entry has its own copy of the code, and still one client", async () => {
+    page();
     const require = createRequire(import.meta.url);
     const overseer = require(`${root}dist/overseer/index.cjs`);
     const feedback = require(`${root}dist/feedback/index.cjs`);
@@ -168,7 +174,7 @@ describe.skipIf(!hasDist)("the built files against a server that enforces the do
       logLevel: "silent",
     });
     const ls = fakeLocalStorage();
-    const page = new URL("https://app.example/checkout?email=ann%40example.com&token=SECRET#access_token=Z");
+    const address = new URL("https://app.example/checkout?email=ann%40example.com&token=SECRET#access_token=Z");
     const sandbox: Record<string, unknown> = {
       fetch: (input: string, init?: RequestInit) => fetch(input, init),
       URL,
@@ -179,8 +185,9 @@ describe.skipIf(!hasDist)("the built files against a server that enforces the do
       clearTimeout,
       crypto: globalThis.crypto,
       console,
-      location: page,
+      location: address,
       localStorage: ls,
+      document: Object.assign(new EventTarget(), { visibilityState: "visible" }),
     };
     const context = vm.createContext(sandbox);
     // The bundle's globals are the page's: no process, no require, no Buffer.
@@ -200,5 +207,21 @@ describe.skipIf(!hasDist)("the built files against a server that enforces the do
     expect(ls.map.get("codmir:feedback")).not.toContain("from the bundle");
     expect(await api.deleteFeedback((sent as { id: string }).id)).toEqual({ ok: true });
     api.close();
+  });
+
+  it("on a server, in Node: nothing of the shared client but the environment and the release", async () => {
+    const overseer = await import(pathToFileURL(`${root}dist/overseer/index.js`).href);
+    const feedback = await import(pathToFileURL(`${root}dist/feedback/index.js`).href);
+    const before = door.accepted.length;
+    overseer.init(CONFIG());
+    overseer.getClient().setReplayHook({ getReplayId: () => REPLAY_ID, onError: () => undefined });
+    overseer.captureException(new Error("another visitor's"));
+    const sent = await feedback.sendFeedback("from a server");
+    expect(sent).toMatchObject({ ok: true });
+    expect(Object.keys(door.accepted[before] as object).sort()).toEqual(["at", "environment", "release", "sdk", "text"]);
+    expect(feedback.listFeedback()).toEqual([]);
+    expect(await feedback.deleteFeedback(sent.id)).toEqual({ ok: false, reason: "not_found" });
+    expect(await feedback.deleteFeedback(sent.id, sent.reporterToken)).toEqual({ ok: true });
+    overseer.close();
   });
 });

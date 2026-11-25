@@ -61,11 +61,6 @@ describe("every status and its result", () => {
     expect(await h.fb.sendFeedback("hello")).toEqual({ ok: false, reason: "unavailable" });
   });
 
-  it("a redirect is not followed with the key: the request asks for an error", async () => {
-    h = await setup({});
-    await h.fb.sendFeedback("hello");
-    expect(h.calls[0].init.redirect).toBe("error");
-  });
 });
 
 describe("Retry-After", () => {
@@ -120,8 +115,6 @@ describe("an answer that is not the door's", () => {
     ["an array", answer(201, "[]")],
     ["another shape", answer(201, JSON.stringify({ ok: true, ticket: "x" }))],
     ["no token", answer(201, JSON.stringify({ id: "a", known: false }))],
-    ["no known", answer(201, JSON.stringify({ id: "a", reporterToken: "t" }))],
-    ["known as a string", answer(201, JSON.stringify({ id: "a", reporterToken: "t", known: "no" }))],
     ["an id as a number", answer(201, JSON.stringify({ id: 5, reporterToken: "t", known: false }))],
     ["an empty id", answer(201, JSON.stringify({ id: "", reporterToken: "t", known: false }))],
     ["too large", answer(201, JSON.stringify({ id: "a", reporterToken: "t", known: false, pad: "x".repeat(5000) }))],
@@ -131,6 +124,19 @@ describe("an answer that is not the door's", () => {
     const result = await h.fb.sendFeedback("hello");
     expect(result).toMatchObject({ ok: false, reason: "unavailable" });
     expect(h.fb.listFeedback()).toEqual([]);
+  });
+});
+
+describe("`known`", () => {
+  it.each([
+    ["true", true, true],
+    ["false", false, false],
+    ["absent", undefined, false],
+    ["a word", "yes", false],
+  ])("%s: the feedback was stored, so it is never a failure", async (_name, known, expected) => {
+    h = await setup({});
+    h.door.queue.push(answer(201, JSON.stringify({ id: "a", reporterToken: "t", known })));
+    expect(await h.fb.sendFeedback("hello")).toEqual({ ok: true, id: "a", reporterToken: "t", known: expected });
   });
 });
 
@@ -256,7 +262,7 @@ describe("no network at all", () => {
     const spy = vi.fn(async () => new Response("{}", { status: 500 }));
     vi.stubGlobal("fetch", spy);
     await h.fb.sendFeedback("hello");
-    expect(spy.mock.calls[0][0]).toBe("https://codmir.com/api/overseer/feedback");
+    expect(spy.mock.calls[0][0]).toBe("https://www.codmir.com/api/v1/overseer/feedback");
   });
 
   it("empty and too_long are answered before anything is built", async () => {

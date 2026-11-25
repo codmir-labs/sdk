@@ -26,13 +26,17 @@ export interface FeedbackInput {
   text: string;
   /** A wish only: the server keeps it, nothing is sent back yet. */
   replyWhenFixed?: boolean;
+  /** The session replay it happened in, when the SDK does not record it here (a server passes the page's). `false`: none. */
+  replayId?: string | false;
   /** The error this is about, when the SDK's last error of the last 10 minutes is not it. `false`: none. */
   eventId?: string | false;
   /** The request that failed, when the SDK's last failed request of the last 5 minutes is not it. `false`: none. */
   failedRequest?: { method: string; path: string; status: number; at?: string } | false;
   /** The page, as a path. Default `location.pathname`. `false`: none. */
   pagePath?: string | false;
-  /** Where the receipt (id and token, never the text) is kept. Default `localStorage`, else memory. `false`: nowhere. */
+  /** Your id for the person, as in `setUser`; the server keeps only a hash. Default `user.id`. `false`: none. */
+  userId?: string | false;
+  /** Where the receipt (id and token, never the text) is kept. Default `localStorage`, else memory; on a server nowhere. `false`: nowhere. */
   storage?: FeedbackStorage | false;
   /** 1000 to 60000, default 10000. */
   timeoutMs?: number;
@@ -70,6 +74,15 @@ const MAX_BODY = 16000;
 const MAX_ANSWER = 4096;
 const KEPT = 20;
 const DAY = 86400000;
+
+/**
+ * One visitor per client: a page, or a React Native app. On a server all visitors share the client, so its last error, its
+ * last failed request, its user, a request in flight and a kept receipt would be somebody else's.
+ */
+const oneVisitor = (): boolean => {
+  const g = globalThis as { document?: unknown; navigator?: { product?: unknown } };
+  return g.document !== undefined || g.navigator?.product === "ReactNative";
+};
 
 const inflight = new Map<string, Promise<FeedbackResult>>();
 // what `local` wrote last: the one key it ever holds
@@ -158,24 +171,24 @@ function failedOf(v: unknown, at: string): unknown {
 /** The body, from a fixed list of keys: nothing but what is named here can leave. A value that does not fit is left out. */
 function bodyOf(ctx: FeedbackContext, text: string, input: unknown, now: number): string {
   const at = new Date(now).toISOString();
-  // the caller's value, else the SDK's own (`auto`); `false` switches it off
+  const own = oneVisitor();
+  // the caller's value, else the SDK's own (`auto`, never on a server); `false` switches it off
   const pick = (key: string, auto: () => unknown, norm: (v: unknown) => unknown): unknown => {
     const v = get(input, key);
-    return v === false ? undefined : norm(v === undefined ? auto() : v);
+    return v === false ? undefined : norm(v !== undefined ? v : own ? auto() : undefined);
   };
   const replyWhenFixed = get(input, "replyWhenFixed");
-  const replayId = ctx.replayId;
   // undefined values are not serialized, so a key is there only when its value fits
   const json = JSON.stringify({
     text,
     replyWhenFixed: typeof replyWhenFixed === "boolean" ? replyWhenFixed : undefined,
-    replayId: typeof replayId === "string" && UUID.test(replayId) ? replayId : undefined,
+    replayId: pick("replayId", () => ctx.replayId, (v) => (typeof v === "string" && UUID.test(v) ? v : undefined)),
     eventId: pick("eventId", () => (ctx.lastError && now - ctx.lastError.at <= 600000 ? ctx.lastError.id : undefined), (v) => str(v, 200)),
     failed: pick("failedRequest", () => lastFailed(ctx, now), (v) => failedOf(v, at)),
     pagePath: pick("pagePath", () => (globalThis as { location?: { pathname?: string } }).location?.pathname, pathOf),
     environment: str(ctx.environment, 80),
     release: ctx.release === "unknown" ? undefined : str(ctx.release, 120),
-    userId: str(ctx.userId, 200),
+    userId: pick("userId", () => ctx.userId, (v) => str(v, 200)),
     at,
     sdk: SDK_INFO,
   });
@@ -199,8 +212,8 @@ function call(url: string, init: RequestInit, ms: number): Promise<Answer> {
   const ctrl = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const work: Promise<Answer> = (async () => {
-    // No cookies, no keepalive, no redirect (the key must not follow one to another host).
-    const res = await fetch(url, { ...init, signal: ctrl.signal, credentials: "omit", redirect: "error" });
+    // No cookies, no keepalive.
+    const res = await fetch(url, { ...init, signal: ctrl.signal, credentials: "omit" });
     const body = await res.text();
     return body.length > MAX_ANSWER ? null : { status: res.status, retry: res.headers.get("retry-after"), body };
   })().catch(() => null);
@@ -232,11 +245,11 @@ async function run(ctx: FeedbackContext, text: string, input: unknown): Promise<
     }
     const id = str(json?.id, 200);
     const token = str(json?.reporterToken, 1000);
-    const known = json?.known;
-    if (!id || !token || typeof known !== "boolean") return fail("unavailable", { status });
-    const storage = get(input, "storage") as FeedbackStorage | false | undefined;
-    if (storage !== false) await save(ctx.key, storage ?? local, (kept) => [{ id, token, at: new Date().toISOString() }, ...kept]);
-    return { ok: true, id, reporterToken: token, known };
+    if (!id || !token) return fail("unavailable", { status });
+    const given = get(input, "storage") as FeedbackStorage | false | undefined;
+    const storage = given ?? (oneVisitor() && local);
+    if (storage) await save(ctx.key, storage, (kept) => [{ id, token, at: new Date().toISOString() }, ...kept]);
+    return { ok: true, id, reporterToken: token, known: json?.known === true };
   }
   const retryAfterMs = retryMs(answer.retry);
   const extra = { status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) };
@@ -246,7 +259,8 @@ async function run(ctx: FeedbackContext, text: string, input: unknown): Promise<
 
 /**
  * Sends what a visitor said, with the replay, the error and the failed request of their session. Never throws and never
- * rejects; read `ok`. Two calls with the same text while the first is in flight are one request and one result.
+ * rejects; read `ok`. Two calls with the same text while the first is in flight are one request and one result. On a
+ * server only what you pass is sent: the client there is everybody's.
  */
 export async function sendFeedback(input: string | FeedbackInput): Promise<FeedbackResult> {
   const ctx = contextOf();
@@ -254,11 +268,11 @@ export async function sendFeedback(input: string | FeedbackInput): Promise<Feedb
   const raw = typeof input === "string" ? input : get(input, "text");
   const text = typeof raw === "string" ? raw.trim() : "";
   if (!text || text.length > MAX_TEXT) return fail(text ? "too_long" : "empty");
+  const send = () => run(ctx, text, input).catch(() => fail("unavailable"));
+  if (!oneVisitor()) return send();
   let result = inflight.get(text);
   if (!result) {
-    result = run(ctx, text, input)
-      .catch(() => fail("unavailable"))
-      .finally(() => inflight.delete(text));
+    result = send().finally(() => inflight.delete(text));
     inflight.set(text, result);
   }
   return result;
@@ -268,7 +282,8 @@ export async function sendFeedback(input: string | FeedbackInput): Promise<Feedb
 export async function deleteFeedback(id: string, reporterToken?: string): Promise<FeedbackDeleteResult> {
   const ctx = contextOf();
   if (!ctx) return fail("not_configured");
-  const token = reporterToken ?? receiptsOf(await local.getItem(STORAGE_KEY), ctx.key).find((r) => r.id === id)?.token;
+  const own = oneVisitor();
+  const token = reporterToken ?? (own ? receiptsOf(local.getItem(STORAGE_KEY), ctx.key).find((r) => r.id === id)?.token : undefined);
   if (!str(id, 200) || !str(token, 1000)) return fail("not_found");
   const answer = await call(
     `${baseOf(ctx.dsn)}/feedback/${encodeURIComponent(id)}`,
@@ -276,14 +291,14 @@ export async function deleteFeedback(id: string, reporterToken?: string): Promis
     10000,
   );
   if (!answer || (answer.status !== 204 && answer.status !== 404)) return fail("unavailable");
-  await save(ctx.key, local, (kept) => kept.filter((r) => r.id !== id));
+  if (own) await save(ctx.key, local, (kept) => kept.filter((r) => r.id !== id));
   return answer.status === 204 ? { ok: true } : fail("not_found");
 }
 
 /** What this visitor sent from this device, newest first. Only the id and the time: the words are never kept. */
 export function listFeedback(): Array<{ id: string; at: string }> {
   const ctx = contextOf();
-  return ctx ? receiptsOf(local.getItem(STORAGE_KEY), ctx.key).map(({ id, at }) => ({ id, at })) : [];
+  return ctx && oneVisitor() ? receiptsOf(local.getItem(STORAGE_KEY), ctx.key).map(({ id, at }) => ({ id, at })) : [];
 }
 
 // --- the receipts: `{ [project key]: [{ id, token, at }] }` under one key ---

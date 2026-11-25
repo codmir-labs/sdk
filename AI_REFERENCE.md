@@ -196,7 +196,7 @@ try {
 | React Native | `@codmir/sdk/react-native` | Mobile error tracking |
 | Browser | `@codmir/sdk/browser` | Vanilla JS error tracking |
 | Node.js | `@codmir/sdk/overseer` | Server error tracking |
-| Any (browser, React Native, worker, Node 18+) | `@codmir/sdk/feedback` | `sendFeedback(text \| { text, replyWhenFixed?, eventId?, failedRequest?, pagePath?, storage?, timeoutMs? })` sends what a visitor says with the replay, the last error and the last failed request of the session; never throws, resolves `{ ok: true, id, reporterToken, known }` or `{ ok: false, reason, status?, retryAfterMs? }`; `deleteFeedback(id, token?)`, `listFeedback()`. Needs `init()` first. No UI |
+| Any (browser, React Native, worker, Node 18+) | `@codmir/sdk/feedback` | `sendFeedback(text \| { text, replyWhenFixed?, replayId?, eventId?, failedRequest?, pagePath?, userId?, storage?, timeoutMs? })` sends what a visitor says with the replay, the last error and the last failed request of the session (on a server only what is passed: one client serves every visitor); never throws, resolves `{ ok: true, id, reporterToken, known }` or `{ ok: false, reason, status?, retryAfterMs? }`; `deleteFeedback(id, token?)`, `listFeedback()`. Needs `init()` first. No UI |
 
 ## Environment Variables
 

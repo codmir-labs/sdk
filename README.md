@@ -1603,19 +1603,24 @@ the server's limits is left out, and the words are never cut: more than 2,000 ch
 | --- | --- |
 | `text` | What the person typed, trimmed. 1 to 2,000 characters |
 | `replyWhenFixed` | `replyWhenFixed`, when it is a boolean. A wish only: the server keeps it, and nothing is sent back yet |
-| `replayId` | The id the running [replay](#session-replay) reports, when it is a uuid |
+| `replayId` | The id the running [replay](#session-replay) reports, when it is a uuid. `replayId` overrides it, `replayId: false` leaves it out |
 | `eventId` | The id of the last **error** the SDK queued in the last 10 minutes (not one that was sampled out, dropped by `beforeSend` or captured while `enabled` is false, and not a message). `eventId` overrides it, `eventId: false` leaves it out |
 | `failed` | `{ method, path, status, at }` of the newest `fetch` or XHR breadcrumb of the last 5 minutes with a status of 400 or more, to the page's own origin or a `tracePropagationTargets` match, and not one of the SDK's own requests. A request that failed without an answer is not one. `failedRequest` overrides it, `failedRequest: false` leaves it out |
 | `pagePath` | `location.pathname`. `pagePath` overrides it, `pagePath: false` leaves it out |
 | `environment`, `release` | The client's. A release that is the default `unknown` is left out |
-| `userId` | `user.id` from `setUser`. The server stores only a hash of it |
+| `userId` | `user.id` from `setUser`. `userId` overrides it, `userId: false` leaves it out. The server stores only a hash of it |
 | `at`, `sdk` | The time, and `@codmir/sdk` with its version |
 
 **Never sent:** a query string or a fragment (a path is only a path, also what you pass), an origin, a user's email, name
 or IP address, a header, a cookie, a third party's address, a request body. Its own request has no cookies
-(`credentials: "omit"`), no `keepalive`, no `traceparent`, makes no breadcrumb and no span, and is not followed through a
-redirect. There is no retry: after a lost answer nobody knows whether it was stored. Two calls with the same text while
-the first is in flight are one request and the same result. The timeout is 10 seconds (`timeoutMs`, 1,000 to 60,000).
+(`credentials: "omit"`), no `keepalive`, no `traceparent`, and makes no breadcrumb and no span. There is no retry: after a
+lost answer nobody knows whether it was stored. Two calls with the same text while the first is in flight are one request
+and the same result. The timeout is 10 seconds (`timeoutMs`, 1,000 to 60,000).
+
+**On a server** (no `document`, and not React Native) one client serves every visitor, so its last error, its last failed
+request, its replay and its user may be somebody else's. There, only the environment, the release and the SDK come from the
+client: pass what you know about this visitor (`replayId`, `eventId`, `failedRequest`, `pagePath`, `userId`). Nothing is
+kept, calls are never merged, and the `reporterToken` in the result is yours to hand to the visitor.
 
 ### The results
 
@@ -1625,26 +1630,27 @@ the first is in flight are one request and the same result. The timeout is 10 se
 | `empty` | No text, or only spaces. No network | none | Ask for words |
 | `too_long` | More than 2,000 characters. No network | none | Ask for fewer |
 | `unauthorized` | The key is missing, unknown or inactive | 401 | Check `clientKey` |
-| `payment_required` | The project's plan does not take feedback | 402 | Nothing for the visitor |
+| `payment_required` | The project's owner has no card on file (feedback itself costs nothing) | 402 | Nothing for the visitor |
 | `rate_limited` | Too many calls | 429, and `retryAfterMs` from `Retry-After` when it is a number of seconds or a date | Offer a retry after that |
 | `refused` | Any other 4xx, `400` and `413` included | the status | A bug in the call: see `status` |
 | `unavailable` | 5xx, 404, a network error, the timeout, or an answer that is not the door's | the status, when there was one | Offer a retry |
 
-On success `result` is `{ ok: true, id, reporterToken, known }`.
+On success `result` is `{ ok: true, id, reporterToken, known }`. `known` says that it was tied to an error or a log finding
+the project already has.
 
 ### Deleting and listing
 
 The receipt (the id, the `reporterToken` and the time, **never the text**) is kept on the visitor's device: in
 `localStorage` under `codmir:feedback`, the newest 20 per project key, none older than 365 days, other projects' entries
 left as they are. What is read back is checked field by field, because any script on the page can write there. Without
-`localStorage` (Node, React Native, private mode, a full disk) it is kept in memory. `storage` takes your own
+`localStorage` (React Native, private mode, a full disk) it is kept in memory. `storage` takes your own
 `{ getItem, setItem, removeItem }`, synchronous or not (it is where that call's receipt goes, and `deleteFeedback` and
 `listFeedback` read `localStorage`, so pass `deleteFeedback` the token), and `storage: false` keeps nothing.
 
 ```ts
 import { deleteFeedback, listFeedback } from '@codmir/sdk/feedback';
 
-listFeedback();                       // [{ id, at }], newest first, from this device
+listFeedback();                       // [{ id, at }], newest first, from this device; [] on a server
 await deleteFeedback(id);             // the stored token; or deleteFeedback(id, reporterToken)
 // { ok: true }, or { ok: false, reason: 'not_found' | 'unavailable' | 'not_configured' }
 ```
@@ -1772,7 +1778,7 @@ is tree-shaken, then compressed with gzip level 9. Importing less can only make 
 | `@codmir/sdk/logs` | 19.3 kB | 8.4 kB |
 | `@codmir/sdk/logs/node` | 19.6 kB | 8.6 kB, with the line parsers and the redaction they use |
 | `@codmir/sdk/logs/parse` | 12.2 kB | 5.4 kB |
-| `@codmir/sdk/feedback` | 5.2 kB | 2.5 kB, with the URL helpers it shares with tracing and the SDK version |
+| `@codmir/sdk/feedback` | 5.4 kB | 2.6 kB, with the URL helpers it shares with tracing and the SDK version |
 | `codmir-logs` (the command, a Node program, not a page's bundle) | 46.6 kB | 19.5 kB |
 
 rrweb is a separate chunk that loads only when `startReplay()` decides to record. The log monitor loads the error client

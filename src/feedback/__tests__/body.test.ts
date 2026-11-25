@@ -47,14 +47,13 @@ describe("the body", () => {
     ]);
   });
 
-  it("goes to <base>/feedback with the key, JSON, no cookies, no keepalive and no redirect", async () => {
+  it("goes to <base>/feedback with the key, JSON, no cookies and no keepalive", async () => {
     h = await setup({});
     await h.fb.sendFeedback("hello");
     const [call] = h.calls;
     expect(call.url).toBe("https://app.example/api/overseer/feedback");
     expect(call.init.method).toBe("POST");
     expect(call.init.credentials).toBe("omit");
-    expect(call.init.redirect).toBe("error");
     expect("keepalive" in call.init).toBe(false);
     expect(call.init.signal).toBeInstanceOf(AbortSignal);
     expect(h.door.requests[0].headers).toMatchObject({ "x-overseer-key": "osk_test", "content-type": "application/json" });

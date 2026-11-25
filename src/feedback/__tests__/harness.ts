@@ -16,12 +16,13 @@ export interface Harness {
   context: () => ReturnType<NonNullable<ReturnType<typeof import("../../overseer/index").getClient>>["feedbackContext"]>;
 }
 
-/** Fresh modules (the feedback module keeps state), a door behind `fetch`, and a client made by `init()`. */
-export async function setup(config: OverseerConfig | null = {}, opts: { page?: string; door?: Door } = {}): Promise<Harness> {
+/** Fresh modules (the feedback module keeps state), a door behind `fetch`, and a client made by `init()`. A page unless `server`. */
+export async function setup(config: OverseerConfig | null = {}, opts: { page?: string; door?: Door; server?: boolean } = {}): Promise<Harness> {
   vi.resetModules();
   const door = opts.door ?? createDoor();
   const { fetch: stub, calls } = doorFetch(door);
   vi.stubGlobal("fetch", stub);
+  if (!opts.server) vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible" }));
   if (opts.page) vi.stubGlobal("location", new URL(opts.page));
   const overseer = await import("../../overseer/index");
   const tracing = await import("../../tracing/index");

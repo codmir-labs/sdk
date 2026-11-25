@@ -20,7 +20,7 @@ On the page:
 2. **Send** sends the words. Under **What the server received last** is the body: the page's path (no query), the
    environment, the release, the time and the SDK, plus the error and the failed request from step 1. Never an
    address, an email or a name.
-3. **Pretend the server says** picks the next answer: it took it, a wrong key, a plan that does not take feedback, too many
+3. **Pretend the server says** picks the next answer: it took it, a wrong key, a project without a card, too many
    calls, a refusal, an outage, a hotel Wi-Fi page. Each is shown in words, and the message you typed stays in the box when
    a retry makes sense.
 4. **Take it back** deletes a message with the token kept on this device (`localStorage`, never the words).
