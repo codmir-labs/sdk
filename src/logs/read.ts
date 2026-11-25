@@ -8,7 +8,7 @@ import { StringDecoder } from "node:string_decoder";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream";
 import { constants as zlibConstants, createGunzip } from "node:zlib";
-import { MAX_LINE, parseLogLines } from "./parse";
+import { MAX_LINE, Seen, parseLogLines } from "./parse";
 import type { LogFormat, LogMonitor } from "./types";
 
 type Sink = Pick<LogMonitor, "record" | "request">;
@@ -99,11 +99,16 @@ class Lines {
   }
 }
 
+const seenBy = new WeakMap<object, Seen>();
+
 /** What happens to every line: parsed, and handed to the monitor as a record or a request. */
 function sinkOf(monitor: Sink, format: LogFormat, res: ReadResult): (line: string) => void {
+  // The request ids of a drain are the monitor's: a request counts once however many reads feed the same monitor.
+  let seen = seenBy.get(monitor);
+  if (!seen) seenBy.set(monitor, (seen = new Seen()));
   return (line) => {
     res.lines += 1;
-    const parsed = parseLogLines(line, format);
+    const parsed = parseLogLines(line, format, seen);
     if (parsed.length === 0) res.skipped += 1;
     for (const p of parsed) {
       if ("record" in p) {

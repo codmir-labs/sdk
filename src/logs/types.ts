@@ -35,6 +35,8 @@ export interface RequestRecord {
   time?: TimeInput;
   release?: string;
   service?: string;
+  /** The status this same request was counted with before: a later record of it said worse. That earlier hit is taken back (as far as the open batch holds it). */
+  replaces?: number;
 }
 
 export interface Finding {
