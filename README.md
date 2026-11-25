@@ -1858,13 +1858,14 @@ only when `cloud` is on.
 </details>
 
 <details>
-<summary><b>Calls from one entry point do not see <code>init()</code> from another (CommonJS)</b></summary>
+<summary><b>Calls from one entry point do not see <code>init()</code> from another (two module formats)</b></summary>
 
-With `import` (ES modules), every entry point shares one client: `init()` from `@codmir/sdk/express` is the client
-that `@codmir/sdk`, `@codmir/sdk/tracing` and `@codmir/sdk/replay` use. With `require` (CommonJS), each entry point
-carries its own copy of the client, so a `captureException` required from `@codmir/sdk` does not see the client that
-`require('@codmir/sdk/express').init()` created, and `@codmir/sdk/tracing` and `@codmir/sdk/replay` see none at all.
-Use ES modules, or call `init` and the functions you use from the same entry point.
+Within one module format every entry point shares one client, one tracing context, one replay hook and one request
+scope: `init()` from `@codmir/sdk/express` is the client that `@codmir/sdk`, `@codmir/sdk/tracing` and
+`@codmir/sdk/replay` use, under `import` and under `require` alike. The two formats are two copies of the SDK. An app
+that loads it through both `import` and `require` (an ES module that imports a CommonJS dependency which requires the
+SDK, say) has two clients, and so does a page that loads two copies of the package; each copy needs its own `init()`.
+Load the SDK one way, or call `init` from the copy you use.
 
 </details>
 
@@ -1898,8 +1899,8 @@ It needs `node:async_hooks`. Use it only in the Node.js runtime; keep `@codmir/s
 <summary><b><code>startReplay()</code> returns <code>null</code></b></summary>
 
 It needs a client from `init()` with a client key, a browser, and at least one rate that hits:
-`replaysSessionSampleRate` (default 0) or `replaysOnErrorSampleRate` (default 1). Under CommonJS it cannot see the
-client at all (see above).
+`replaysSessionSampleRate` (default 0) or `replaysOnErrorSampleRate` (default 1). It sees the client of its own module
+format only (see above).
 
 </details>
 
