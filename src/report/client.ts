@@ -8,7 +8,8 @@ import type {
   UpvoteResult,
 } from './types'
 
-const DEFAULT_BASE_URL = 'https://codmir.com/api/v1'
+// `www`, not the apex: the apex redirects, and `fetch` drops `Authorization` when a redirect leaves the host.
+const DEFAULT_BASE_URL = 'https://www.codmir.com/api/v1'
 const DEFAULT_TIMEOUT = 15000
 
 export class CodmirReport {

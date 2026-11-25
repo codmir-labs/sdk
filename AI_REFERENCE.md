@@ -29,7 +29,7 @@ import { CodmirClient } from '@codmir/sdk';
 const client = new CodmirClient({
   apiKey: process.env.CODMIR_API_KEY,
   // Optional:
-  baseUrl: 'https://codmir.com/api',
+  baseUrl: 'https://www.codmir.com/api',
   timeout: 30000,
 });
 ```
@@ -202,7 +202,7 @@ try {
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `CODMIR_API_KEY` | Yes | API key for authentication |
-| `CODMIR_BASE_URL` | No | Custom API URL (default: codmir.com/api) |
+| `CODMIR_BASE_URL` | No | Custom API URL (default: www.codmir.com/api) |
 | `CODMIR_PROJECT_ID` | No | Default project for operations |
 | `CODMIR_ORG_ID` | No | Default organization |
 

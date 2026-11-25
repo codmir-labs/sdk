@@ -9,7 +9,7 @@
  * import { init, captureException } from '@codmir/sdk/overseer';
  *
  * init({
- *   dsn: 'https://your-project.codmir.com/api/overseer',
+ *   dsn: 'https://www.codmir.com/api/v1/overseer',
  *   environment: 'production',
  * });
  *

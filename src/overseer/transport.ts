@@ -7,7 +7,11 @@
  */
 
 /** Public ingest base. Never derived from `window.location`: that is the customer's own origin. */
-export const DEFAULT_DSN = "https://codmir.com/api/overseer";
+/**
+ * The address that answers itself. The apex answers every request with a redirect to `www`, and a browser refuses a
+ * redirect on the preflight that `x-overseer-key` makes it send: from a page, nothing would ever arrive.
+ */
+export const DEFAULT_DSN = "https://www.codmir.com/api/v1/overseer";
 
 /** Events per request. The server caps a body at 256 KB and 500 events; 100 events of ~1-2 KB sits well under both. */
 export const MAX_BATCH_EVENTS = 100;
