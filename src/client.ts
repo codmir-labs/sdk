@@ -26,7 +26,8 @@ import {
   CodmirApiError,
 } from "./types";
 
-const DEFAULT_BASE_URL = "https://codmir.com/api";
+// `www`, not the apex: the apex redirects, and `fetch` drops `Authorization` when a redirect leaves the host.
+const DEFAULT_BASE_URL = "https://www.codmir.com/api";
 const DEFAULT_TIMEOUT = 30000;
 
 export class CodmirClient {

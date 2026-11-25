@@ -75,7 +75,7 @@ export interface VerifyResult {
  * @example
  * ```typescript
  * const result = await verify({
- *   dsn: 'https://your-project.codmir.com/api/overseer',
+ *   dsn: 'https://www.codmir.com/api/v1/overseer',
  *   timeout: 5000,
  *   onProgress: (step) => console.log(`[${step.status}] ${step.message}`),
  * });

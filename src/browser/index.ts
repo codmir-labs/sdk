@@ -10,7 +10,7 @@
  *   import { init, captureException } from '@codmir/sdk/browser';
  *
  *   init({
- *     dsn: 'https://your-project.codmir.com/api/overseer',
+ *     dsn: 'https://www.codmir.com/api/v1/overseer',
  *   });
  *
  *   window.onerror = (msg, url, line, col, error) => {

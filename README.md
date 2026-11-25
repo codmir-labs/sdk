@@ -367,7 +367,7 @@ captureException(err, { orderId: 'ord_123', password: 'hunter2', req: { headers:
 5. **Queue and send.** One second after the last capture the queue is sent as one request:
 
 ```http
-POST https://codmir.com/api/overseer/ingest
+POST https://www.codmir.com/api/v1/overseer/ingest
 Content-Type: application/json
 x-overseer-key: osk_example
 ```
@@ -1292,7 +1292,7 @@ Leave it off unless you serve that manifest.
 | `clientKey` | none | Your project's client key, sent as `x-overseer-key`. Replay needs it. |
 | `apiKey` | none | Alias of `clientKey`; `clientKey` wins when both are set |
 | `overseerKey` | none | Deprecated alias of `clientKey` |
-| `dsn` | `https://codmir.com/api/overseer` once a key is set | Where events go: errors to `<dsn>/ingest`, replay to `<dsn>/replay`. A DSN ending in `/ingest` is used as it is |
+| `dsn` | `https://www.codmir.com/api/v1/overseer` once a key is set | Where events go: errors to `<dsn>/ingest`, replay to `<dsn>/replay`. A DSN ending in `/ingest` is used as it is |
 | `environment` | `'development'` | On every event and request (the request field is cut to 32 characters) |
 | `release` | `'unknown'` | Your release version (request field cut to 64 characters) |
 | `service` | none | Service name on each request (cut to 64 characters) |
@@ -1318,7 +1318,7 @@ import { init } from '@codmir/sdk';
 
 init({
   clientKey: 'osk_your_client_key',
-  dsn: 'https://codmir.com/api/overseer', // the default once a key is set
+  dsn: 'https://www.codmir.com/api/v1/overseer', // the default once a key is set
   environment: 'production',
   release: '1.4.2',
   service: 'web',
@@ -1435,7 +1435,7 @@ Each framework's `init()` takes the core options plus its own:
 | `onProgress` | none | `verify()`: called with each step as it starts and ends |
 | `timeout` | `10000` | `verify()`: passed to `flush()`, which does not use it at this version |
 | `projectKey` | required | Bug reporting: sent as `Authorization: Bearer <projectKey>` |
-| `baseUrl` | `https://codmir.com/api/v1` | Bug reporting API base |
+| `baseUrl` | `https://www.codmir.com/api/v1` | Bug reporting API base |
 | `timeout` (report) | `15000` | Bug reporting request timeout in ms |
 | `autoSearch` | `true` | Search for a matching report before filing, and upvote it instead |
 | `beforeReport` | none | Edit a report, or return `null` to block it (the call then throws) |
@@ -1603,7 +1603,7 @@ const task = await client.createAgentTask({
 ```
 
 `new CodmirClient({ apiKey, baseUrl, timeout, headers })`: the key is sent as `Authorization: Bearer <apiKey>` and,
-when you pass none, read from `CODMIR_API_KEY`. `baseUrl` defaults to `https://codmir.com/api` and `timeout` to
+when you pass none, read from `CODMIR_API_KEY`. `baseUrl` defaults to `https://www.codmir.com/api` and `timeout` to
 30,000 ms.
 
 <details>

@@ -21,7 +21,7 @@
  * // Error Tracking (React Native)
  * import * as Codmir from '@codmir/sdk/react-native';
  *
- * Codmir.init({ dsn: 'https://your-project.codmir.com/api/overseer' });
+ * Codmir.init({ dsn: 'https://www.codmir.com/api/v1/overseer' });
  * ```
  *
  * @packageDocumentation

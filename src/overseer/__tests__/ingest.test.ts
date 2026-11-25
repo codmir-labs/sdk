@@ -331,7 +331,7 @@ describe("browser unload flush (criterion 4)", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe("https://codmir.com/api/overseer/ingest");
+    expect(calls[0].url).toBe("https://www.codmir.com/api/v1/overseer/ingest");
     expect((calls[0].init as any).keepalive).toBe(true);
     expect((calls[0].init.headers as Record<string, string>)["x-overseer-key"]).toBe("osk_test");
     expect(WrapperErrorEventSchema.safeParse(calls[0].body.events[0]).success).toBe(true);
@@ -384,8 +384,8 @@ describe("default dsn (criterion 5)", () => {
     const c = client();
     c.captureException(nodeError());
     await c.flush();
-    expect(calls[0].url).toBe("https://codmir.com/api/overseer/ingest");
-    expect(c.getDsn()).toBe("https://codmir.com/api/overseer");
+    expect(calls[0].url).toBe("https://www.codmir.com/api/v1/overseer/ingest");
+    expect(c.getDsn()).toBe("https://www.codmir.com/api/v1/overseer");
   });
 
   it("an explicit dsn still wins", async () => {
