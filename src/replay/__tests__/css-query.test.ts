@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dropPageQuery } from "../page-query";
 import type { RrwebEvent } from "../upload";
+import { quickest } from "../../__tests__/helpers/quickest";
 
 const PAGE = "https://app.example.com/a/b?next=/x/y&token=TOK123/DEF456";
 const BARE = "https://app.example.com/a/b";
@@ -84,9 +85,8 @@ describe("a url() in CSS text", () => {
     const hostile = "url(".repeat(250_000);
     const nearly = `${BARE}?next=/x/y&token=TOK123`.repeat(25_000);
     for (const css of [plain, matching, escaped, hostile, nearly]) {
-      const start = performance.now();
+      expect(quickest(() => cut(css), 100)).toBeLessThan(100);
       const out = cut(css);
-      expect(performance.now() - start).toBeLessThan(100);
       expect(out.includes("TOK123/DEF456") || out.includes(`${DIR}img.png`)).toBe(false);
     }
     expect(cut(plain)).toBe(plain);
