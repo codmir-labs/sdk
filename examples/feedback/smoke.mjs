@@ -14,6 +14,9 @@ const check = (name, ok, detail) => {
   if (!ok) failed++;
 };
 
+// What a page has and a server has not: one visitor, whose receipts are kept (here in memory, there is no localStorage).
+globalThis.document = new EventTarget();
+
 init({ dsn: `${origin}/api/overseer`, clientKey: KEY, environment: "example", release: "1.0.0" });
 
 const expected = {
@@ -40,6 +43,10 @@ const [kept] = listFeedback();
 check("the receipt is kept", Boolean(kept), kept?.id);
 check("a receipt is taken back", (await deleteFeedback(kept.id)).ok === true);
 check("and is gone", listFeedback().length === 0);
+
+const served = await fetch(`${origin}/?from=mail`);
+check("the page is served as HTML", served.headers.get("content-type") === "text/html" && (await served.text()).startsWith("<!doctype html>"));
+check("and the SDK beside it", (await (await fetch(`${origin}/sdk/feedback/index.js`)).text()).includes("sendFeedback"));
 
 const page = readFileSync(new URL("./public/index.html", import.meta.url), "utf8");
 for (const reason of ["not_configured", "empty", "too_long", "unauthorized", "payment_required", "rate_limited", "refused", "unavailable"]) {

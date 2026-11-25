@@ -28,7 +28,7 @@ export function start(port = 0) {
   const stored = new Map();
   const send = (res, status, body = "", headers = {}) => {
     res.writeHead(status, { "content-type": "application/json", ...headers });
-    res.end(typeof body === "string" ? body : JSON.stringify(body));
+    res.end(typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body));
   };
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");

@@ -45,7 +45,8 @@
   <pre id="last">nothing yet</pre>
 
   <script type="module">
-    import { init, captureException } from "/sdk/overseer/index.js";
+    // The browser entry: it also records the page's requests, so a failed one can go with the words.
+    import { init, captureException } from "/sdk/browser/index.js";
     import { sendFeedback, deleteFeedback, listFeedback } from "/sdk/feedback/index.js";
 
     init({ dsn: `${location.origin}/api/overseer`, clientKey: "osk_example", environment: "example", release: "1.0.0" });
