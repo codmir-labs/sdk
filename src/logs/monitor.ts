@@ -7,7 +7,7 @@
 import { createCloud, findingEvent, type Candidate, type Cloud, type SendState } from "./cloud";
 import { normalizeLevel } from "./level";
 import { num } from "./num";
-import { MAX_KEY, MAX_SAMPLE, compileExtra, isScannerPath, lineText, messageKey, pathPattern, redact, shortId, uaFamily } from "./redact";
+import { MAX_KEY, MAX_SAMPLE, compileExtra, isScannerPath, lineText, messageKey, nameOf, pathPattern, redact, shortId, uaFamily } from "./redact";
 import { COUNT_BATCHES, FORGET_MS, MAX_MARKS, MAX_RELEASES, exportState, loadState, seedOf } from "./state";
 import type { Finding, Judgement, LogBatch, LogLevel, LogMonitor, LogMonitorOptions, LogRecord, MarkOptions, MonitorStats, RequestRecord, TimeInput } from "./types";
 
@@ -86,7 +86,10 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
   const batchMs = num(opts.batchMinutes, 15, 1, MAX_BATCH_MINUTES) * 60_000;
   const noiseTests = (opts.noise ?? []).map((n) => (typeof n === "string" ? (label: string) => label.toLowerCase().includes(n.toLowerCase()) : (label: string) => new RegExp(n.source, n.flags.replace(/[gy]/g, "")).test(label)));
   const store = opts.store;
-  const cloud: Cloud | null = opts.cloud ? createCloud(opts.cloud, { service: opts.service, release: opts.release, environment: typeof opts.cloud === "object" ? opts.cloud.environment : undefined }) : null;
+  // The app's own names, cleaned once: they are the ones of nearly every hit.
+  const ownRelease = nameOf(opts.release, extra);
+  const ownService = nameOf(opts.service, extra);
+  const cloud: Cloud | null = opts.cloud ? createCloud(opts.cloud, { service: ownService || undefined, release: ownRelease || undefined, environment: typeof opts.cloud === "object" ? opts.cloud.environment : undefined }) : null;
 
   const groups = new Map<string, Group>();
   const marks = new Map<string, MarkOptions>();
@@ -141,12 +144,11 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
     g.total += 1;
     if (ms < g.firstMs || g.total === 1) g.firstMs = ms;
     if (ms > g.lastMs || g.total === 1) g.lastMs = ms;
-    const rel = release ?? opts.release;
-    if (rel && g.releases.length < MAX_RELEASES) {
-      const r = clip(rel, 64);
+    if (g.releases.length < MAX_RELEASES) {
+      const r = typeof release === "string" ? nameOf(release, extra) : ownRelease;
       if (r && !g.releases.includes(r)) g.releases.push(r);
     }
-    if (!g.service && (service ?? opts.service)) g.service = clip(service ?? opts.service, 64);
+    if (!g.service) g.service = (typeof service === "string" ? nameOf(service, extra) : ownService) || undefined;
   };
 
   const judge = (g: Group, hits: number): Judgement => {
@@ -338,7 +340,7 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
     if (!cloud) return;
     const p = guard(() => {
       const chosen = cloud.select(candidates, now);
-      return cloud.send(chosen.map((c) => findingEvent(c.finding, { environment: undefined, release: opts.release, hits: c.sinceSent })));
+      return cloud.send(chosen.map((c) => findingEvent(c.finding, { environment: undefined, release: ownRelease, hits: c.sinceSent })));
     });
     if (p) track(p.catch(() => false));
   };

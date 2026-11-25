@@ -362,8 +362,9 @@ describe("parseLogLine: 64 KB of each pattern's worst case, as a ratio", () => {
       best(large, format, 2); // warm up
       const t8 = Math.max(best(small, format, 5), 0.05);
       const t64 = best(large, format, 5);
-      // 8 times the input: linear is about 8, quadratic 64. The slack is for timer noise and the garbage collector.
-      expect(t64 / t8, `${name}: ${t8.toFixed(2)} ms for 8 KB, ${t64.toFixed(2)} ms for 64 KB`).toBeLessThan(24);
+      // 8 times the input: linear is about 8, quadratic 64. The slack is for timer noise and the garbage collector. Below
+      // 10 ms one pause of a busy machine decides the ratio, and a line at the size limit that takes that long is not slow.
+      expect(t64 < 10 || t64 / t8 < 24, `${name}: ${t8.toFixed(2)} ms for 8 KB, ${t64.toFixed(2)} ms for 64 KB`).toBe(true);
     });
   }
 

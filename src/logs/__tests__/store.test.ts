@@ -559,8 +559,7 @@ describe("loading trusts nothing", () => {
     expect(f.sample.length).toBeLessThanOrEqual(300);
     expect(f.sample).toContain("[email]");
     expect(f.sample).not.toMatch(/bob@|hunter2/);
-    expect(f.service!.length).toBeLessThanOrEqual(64);
-    expect(f.service).not.toContain("jane.doe@");
+    expect(f.service).toBeUndefined(); // an email address is no name: the service is dropped, the group stays
     expect(f.known!.length).toBeLessThanOrEqual(200);
     expect(f.releases.every((r) => r.length <= 64)).toBe(true);
     expect(f.releases.join(" ")).not.toContain("sk-live_ABCdef");
