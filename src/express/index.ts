@@ -114,7 +114,9 @@ export interface ExpressConfig extends OverseerConfig {
 
   /**
    * Extract user context from the request object.
-   * Called on each request to populate Overseer user context.
+   * Called once per request, when `requestHandler()` runs, and again in `errorHandler()` when a later middleware has
+   * set `req.user` since. The answer is this request's user and no other request's: `null` (or `undefined`) means
+   * nobody, not the process-wide user. One that throws leaves the request without a user.
    *
    * @example
    * ```typescript
@@ -133,6 +135,10 @@ interface CodemirRequestContext {
   eventId?: string;
   /** The `http.server` transaction opened by tracingHandler. */
   span?: Span;
+  /** The request's scope: its url, method and user, the one every capture in its async tail sees. */
+  scope?: RequestScope;
+  /** What `req.user` was when `extractUser` last ran, to tell a later `req.user` from it. */
+  userSeen?: unknown;
 }
 
 /** Headers stripped from error reports to avoid leaking secrets */
@@ -220,8 +226,10 @@ function scopeOf(req: ExpressRequest): RequestScope {
 export function requestHandler(): RequestMiddleware {
   return (req: ExpressRequest, _res: ExpressResponse, next: NextFunction): void => {
     // Attach context for downstream middleware
+    const scope = scopeOf(req);
     req._codmir = {
       startTime: Date.now(),
+      scope,
     };
 
     // Add request breadcrumb
@@ -237,18 +245,23 @@ export function requestHandler(): RequestMiddleware {
       level: "info",
     });
 
-    // Extract and set user context if configured
-    if (expressConfig.extractUser) {
-      const user = expressConfig.extractUser(req);
-      if (user) {
-        coreSetUser(user);
-      }
-    }
+    // The request's own user, from `extractUser`: nobody when it answers nothing or throws.
+    if (expressConfig.extractUser) extractInto(req, scope);
 
     // Everything downstream, async tail included, captures under this request.
     installNodeTracingContext();
-    withRequestScope(scopeOf(req), () => next());
+    withRequestScope(scope, () => next());
   };
+}
+
+/** Sets the request's user to what `extractUser` answers, and never lets it break the request. */
+function extractInto(req: ExpressRequest, scope: RequestScope): void {
+  if (req._codmir) req._codmir.userSeen = req.user;
+  try {
+    scope.user = expressConfig.extractUser?.(req) || null;
+  } catch {
+    scope.user = null;
+  }
 }
 
 // =============================================================================
@@ -280,14 +293,11 @@ export function errorHandler(): ErrorMiddleware {
     const requestContext: Record<string, unknown> = { mechanism: "express-error-handler" };
     if (typeof req.route?.path === "string") requestContext.route = `${req.baseUrl ?? ""}${req.route.path}`;
 
-    // Extract user context if configured
-    if (expressConfig.extractUser) {
-      const user = expressConfig.extractUser(req);
-      if (user) {
-        coreSetUser(user);
-        requestContext.user = user;
-      }
-    }
+    // The request's scope is the one `requestHandler` made, with the user `setUser` or `extractUser` gave it.
+    const scope = req._codmir?.scope ?? scopeOf(req);
+    // `extractUser` runs again only when a later middleware has set `req.user` since.
+    if (expressConfig.extractUser && (!req._codmir?.scope || req.user !== req._codmir.userSeen)) extractInto(req, scope);
+    if (expressConfig.extractUser && scope.user) requestContext.user = scope.user;
 
     // Add client IP if available
     if (req.ip) {
@@ -295,7 +305,7 @@ export function errorHandler(): ErrorMiddleware {
     }
 
     // Capture the exception
-    const eventId = withRequestScope(scopeOf(req), () => coreCaptureException(err, requestContext));
+    const eventId = withRequestScope(scope, () => coreCaptureException(err, requestContext));
 
     // Store event ID on request for downstream access
     if (req._codmir) {
@@ -370,7 +380,7 @@ export function tracingHandler(): RequestMiddleware {
     // A client that hangs up never gets a "finish".
     res.on("close", finish);
 
-    withRequestScope(scopeOf(req), () => withActiveSpan(tx, () => next()));
+    withRequestScope(req._codmir?.scope ?? scopeOf(req), () => withActiveSpan(tx, () => next()));
   };
 }
 

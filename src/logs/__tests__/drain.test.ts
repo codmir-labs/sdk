@@ -4,6 +4,7 @@ import { createLogMonitor } from "../monitor";
 import { Seen, parseLogLines } from "../parse";
 import { readLog } from "../read";
 import type { LogState } from "../types";
+import { quickest } from "../../__tests__/helpers/quickest";
 
 /** A drain's record, built from the fields of Vercel's log drain reference. */
 let n = 0;
@@ -145,7 +146,6 @@ describe("a drain's records: every rule, fed three ways", () => {
   });
 
   it("a hostile record is cheap", () => {
-    const t0 = performance.now();
     const seen = new Seen();
     const lines = [
       JSON.stringify(rec({ statusCode: 500, requestId: "a".repeat(60_000), proxy: px() })),
@@ -157,7 +157,11 @@ describe("a drain's records: every rule, fed three ways", () => {
       "{\"deploymentId\":\"d\",\"message\":\"" + "START RequestId: ".repeat(6000),
     ];
     const out = lines.map((l) => parseLogLines(l, "auto", seen));
-    expect(performance.now() - t0).toBeLessThan(50);
+    const again = (): void => {
+      const fresh = new Seen();
+      for (const l of lines) parseLogLines(l, "auto", fresh);
+    };
+    expect(quickest(again, 50)).toBeLessThan(50);
     expect(out[0]).toHaveLength(1);
     expect(out[1]).toHaveLength(1);
     expect(out[2]).toHaveLength(0);

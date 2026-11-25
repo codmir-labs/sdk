@@ -6,13 +6,23 @@
  * default is a synchronous "current" slot, enough for `captureException` (which builds its event synchronously) when
  * the caller wraps it in `withRequestScope`; `installNodeTracingContext` (tracing/server.ts) swaps in AsyncLocalStorage,
  * so a capture anywhere in the handler's async tail sees its own request and never another's.
+ *
+ * The scope also holds the request's user, so `setUser` inside a request never reaches another one. Where the scope does
+ * not survive an `await` (no `installNodeTracingContext`), a later `setUser` is outside it and is the client's.
  */
+
+import type { UserContext } from "./index";
 
 export interface RequestScope {
   /** Origin and path, or just the path when the origin is unknown. No query, no fragment, no credentials. */
   url: string;
   /** Upper-case HTTP method. */
   method: string;
+  /**
+   * Who this request is for. `undefined`: not known, so an event takes the client's own user. `null`: nobody, and an
+   * event inside the request has no user, never the client's. `setUser` inside the request sets it; the client's is left alone.
+   */
+  user?: UserContext | null;
 }
 
 export interface RequestScopeStrategy {

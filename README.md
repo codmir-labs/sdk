@@ -587,9 +587,9 @@ app.listen(3000);
 
 | Middleware | What it does |
 | --- | --- |
-| `requestHandler()` | Adds an `http.request` breadcrumb (method and path), runs `extractUser`, and runs the rest of the chain in the request's scope, so any capture in the handler's async tail carries this request's `request.url` and `request.method`. Mount it first. |
+| `requestHandler()` | Adds an `http.request` breadcrumb (method and path), runs `extractUser` once, and runs the rest of the chain in the request's scope, so any capture in the handler's async tail carries this request's `request.url`, `request.method` and user. Mount it first. |
 | `tracingHandler()` | Continues an incoming `traceparent` or starts a trace, opens an `http.server` transaction named after the route pattern (`GET /orders/:id`), ends it when the response finishes or the client hangs up, and adds an `http.response` breadcrumb with the status and duration. A 5xx marks it `error`. |
-| `errorHandler()` | Captures the error with the route pattern, then calls `next(err)` so your own error handler still runs. Mount it after the routes. |
+| `errorHandler()` | Captures the error with the route pattern and the request's user, then calls `next(err)` so your own error handler still runs. It runs `extractUser` again only when a later middleware has set `req.user` since. Mount it after the routes. |
 
 `init()` also wraps the global `fetch`, so outgoing calls inside a traced request become `http.client` spans and carry
 a `traceparent` to same-origin URLs and to your `tracePropagationTargets`.
@@ -597,6 +597,25 @@ a `traceparent` to same-origin URLs and to your `tracePropagationTargets`.
 > [!NOTE]
 > `errorHandler()` adds `clientIp` (`req.ip`) and the `extractUser` result to the event's `extra`. Leave
 > `extractUser` out, or strip them in `beforeSend`, if you must not send them.
+
+**Each request has its own user.** Inside a request, an event's user is the request's: what `extractUser` answered (`null`
+or `undefined` means nobody, not the process-wide user; an `extractUser` that throws leaves the request without a user and
+never breaks it), or what `setUser` was last called with inside this request. `setUser` inside a request sets that request's
+user and leaves the process-wide one, and every other request, alone; outside a request it is process-wide, as before. A
+request with no user of its own (no `extractUser`, no `setUser`) takes the process-wide one, such as `initialUser`.
+
+Which handlers run in a request scope that survives `await` without you doing anything:
+
+| Integration | Scope | Survives `await` |
+| --- | --- | --- |
+| Express `requestHandler()` (and `tracingHandler()`, `errorHandler()` after it) | yes | yes |
+| Hono `codmirTracing()` | yes | yes |
+| Next.js `withCodmirTracing`, `withCodmirMiddleware` from `/nextjs/server` | yes | yes |
+| Remix `withCodmirTracing`, `withCodmirRequestHandler` from `/remix/server` | yes | yes |
+| Next.js `captureRequestError`, `captureRouterError` | only around the capture itself | no: there is no user of the request |
+| A handler you did not wrap, or code that runs before Express's `requestHandler()` | none | `setUser` there is process-wide, so two requests that overlap can see each other's user: wrap the handler, or call `setUser` inside a wrapped one |
+
+The scope is AsyncLocalStorage, installed by the first request that goes through one of these wrappers.
 
 ### Hono
 
@@ -680,8 +699,8 @@ export const loader = withCodmirTracing(
 );
 ```
 
-Errors captured inside these wrappers do not get `request.url` or `request.method` at this version (the Express,
-Next.js and Hono integrations attach both); the transaction is named after the route.
+Errors captured inside these wrappers carry `request.url` (origin and path), `request.method` and the user `setUser` set
+inside the request, as in the Express, Next.js and Hono integrations; the transaction is named after the route.
 
 <details>
 <summary><b>What each Remix function captures</b></summary>
@@ -1398,7 +1417,7 @@ back to `CODMIR_API_KEY`. The AI-call monitoring options that used to be listed 
 | `init(config)` | Creates the client. Call it once; each call replaces the client |
 | `captureException(error, context?)` | Sends an error (anything thrown; a non-`Error` is wrapped). Returns the event id, or `''` before `init`, when disabled or sampled out |
 | `captureMessage(message, level = 'info')` | Sends a message event at `fatal`, `error`, `warning`, `info` or `debug` |
-| `setUser(user \| null)` | `{ id, email, username, ip_address, ... }` on every later event |
+| `setUser(user \| null)` | `{ id, email, username, ip_address, ... }` on every later event. Inside a server request (see [Express](#express)) it is that request's user only |
 | `setTag(key, value)`, `setTags(tags)` | String tags on every later event and transaction |
 | `addBreadcrumb(breadcrumb)` | `{ category, message, data, level, type }`; the last 100 are kept |
 | `flush(timeout?)` | Sends everything queued; resolves `true` when all of it was sent or refused, `false` when a batch failed and was put back for a retry or when `timeout` (ms) ran out first; the sending goes on. Each caller has its own time, and the timer never keeps a process alive |
@@ -1446,7 +1465,7 @@ Each framework's `init()` takes the core options plus its own:
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `extractUser` | none | `(req) => user \| null`, run on each request and on each captured error |
+| `extractUser` | none | `(req) => user \| null`, run once per request, and again in `errorHandler()` when a later middleware set `req.user`; its answer is that request's user, and `null` means nobody |
 | `captureRequestBody` | `false` | Deprecated and ignored: a request body is never sent |
 | `captureResponseBody` | `false` | Accepted, not read at this version |
 
