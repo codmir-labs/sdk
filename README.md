@@ -885,8 +885,9 @@ Both rates at 0 record nothing and never load rrweb. While a replay records, eve
 `startReplay()` returns the replay id, or `null` when nothing records: no client, no client key, not in a browser, or
 neither rate hit.
 
-Privacy is on by default: every input is masked, `[data-private]` and `.private` text is masked, `[data-codmir-block]`
-subtrees are not recorded, and password fields are masked whatever the config says. Pass
+Privacy is on by default: every input is masked, a picked radio button or checkbox is not recorded, `[data-private]`
+and `.private` text is masked, `[data-codmir-block]` subtrees are not recorded, and password fields are masked
+whatever the config says (the exact rules are [below](#what-a-recording-holds)). Pass
 `startReplay({ privacy: { maskSelectors: [...], blockSelectors: [...] } })` to change the selectors:
 
 ```ts
@@ -909,6 +910,40 @@ stopReplay();
 <p data-private>Order for Jane Doe</p>       <!-- text replaced by * -->
 <section data-codmir-block>...</section>     <!-- not recorded; a same-size placeholder instead -->
 ```
+
+#### What a recording holds
+
+With `maskAllInputs` on (the default), or with the type named in `maskInputTypes`:
+
+| Control | What the recording holds |
+| --- | --- |
+| `<input type="radio">`, `<input type="checkbox">` | That the control is there, with its `type`, `name`, `value` and label (page content). **Not** whether it is checked: no `checked` (attribute or property) in a snapshot or an added node, a change of the `checked` attribute is dropped, and its input events and clicks are dropped. A radio group sends no event for any member. Any case of `<INPUT TYPE="RADIO">` counts. |
+| `<select>` and `<option>` | The options and their `value`s (page content), a mask in place of the selected value, no `selected` on any option. |
+| text, email, number, search, tel, url, `textarea`, `range`, `color`, `date`, `datetime-local`, `month`, `time`, `week`, `hidden`, `file` | A fixed mask of eight `*` for any value that is not empty, as typed and as written in the markup. |
+| `password` | The same mask, whatever the config says. |
+
+With `maskAllInputs: false`, a radio button or checkbox is recorded, state included, unless its type is in
+`maskInputTypes` (`['radio']`, `['checkbox']`); `select` in that list hides the selected option the same way, and the
+other types are recorded as typed unless named.
+
+What it does not cover:
+
+- **A custom control is page markup.** `<div role="radio" aria-checked="true">`, `data-state="on"` and a class that
+  says "selected" are recorded like any other attribute. Put `data-codmir-block` on it (or `data-private` for its text)
+  to leave it out.
+- **`contenteditable`** text is the page's text, recorded as it is typed. Mark it `data-private` or `data-codmir-block`.
+- **Where the pointer is.** A click, a scroll and the pointer's path are recorded. A click on a radio button or a
+  checkbox, or a focus on it, is dropped, but a click on its label is a click on the label, and the pointer's path
+  passes over what it passes over.
+- **A recording with more than 50,000 elements known at once**: the recorder then does not know which inputs are
+  choices, so it drops every `checked`, every input event and every click until the next full snapshot.
+- **The page's own text and markup** (headings, labels, a confirmation message that appears after a pick, class names).
+  Keep what must not leave out of them.
+
+The page's query string is not in a recording. A link or source that points at the page itself, and a `url(...)` in CSS
+(a style attribute, a `<style>`, a stylesheet rule, a style declaration, an `@import`, `image-set(...)`) that rrweb
+resolved against the page's address, is cut to the page's origin and path. CSS that you write with another site's
+address and a query of its own stays as it is.
 
 <details>
 <summary><b>Replay options, modes and limits</b></summary>
@@ -1252,8 +1287,8 @@ that undoes them. Cloud mode is off unless you pass `cloud`.
   `request.url` drop the query string and fragment, so an `?access_token=` or an OAuth `#access_token=` in a URL does
   not ride along with your errors. Session replay's meta events carry the page's address as origin and path too, and
   so does a recorded link or source that points at the page itself, such as `href="#top"`, which keeps its own
-  fragment. The rest of the recorded page is content (its text, other links, CSS), so still keep tokens out of the URLs
-  of pages you record.
+  fragment, and a `url(...)` in CSS that rrweb resolved against it. The rest of the recorded page is content (its
+  text, other links, CSS with its own addresses), so still keep tokens out of the URLs of pages you record.
 - **Replay masks by default.** Every input value is masked, password fields always, and you choose what else is masked
   or not recorded at all ([selectors](#session-replay)).
 - **Browser input breadcrumbs** (`trackInputs`, off by default) record the element and its type, never the value.
