@@ -775,8 +775,7 @@ export function init(config: OverseerConfig = {}): void {
   client?.close();
   client = new OverseerClient(config);
   client.init();
-  // A CommonJS build bundles each entry with its own copy of this module, so `@codmir/sdk/logs` could not see the client
-  // `@codmir/sdk` made; the slot is how it finds it.
+  // The slot lets `@codmir/sdk/feedback` and `@codmir/sdk/logs` find the client without importing this module.
   (globalThis as Record<symbol, unknown>)[CLIENT_SLOT] = client;
 }
 
