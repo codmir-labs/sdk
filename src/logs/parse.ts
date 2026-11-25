@@ -17,6 +17,9 @@ const MAX_PAIRS = 4096;
 const MAX_WRAP = 3;
 
 type Obj = Record<string, unknown>;
+/** What a line gives: one thing, several (a drain's record can give its request and its text), or nothing. */
+type Out = ParsedLine | ParsedLine[] | null;
+const first = (x: Out): ParsedLine | null => (Array.isArray(x) ? (x[0] ?? null) : x);
 type Pick<T> = (v: unknown) => T | undefined;
 interface About {
   time?: number;
@@ -181,7 +184,7 @@ function inner(raw: string, base: Base): ParsedLine | null {
   const b: Base = { ...base, wraps: false, depth };
   const o = depth <= MAX_WRAP ? jsonObject(t) : undefined;
   const parsed = (o && fromObject(o, b)) ?? (!b.noRequest && CLF_START.test(t) ? clf(t, b) : null);
-  return parsed ?? (o ? record(b, b.level ?? "info", t) : text(line, b));
+  return parsed ?? (o ? record(b, b.level ?? "info", t) : first(text(line, b)));
 }
 
 const record = (base: Base, lv: LogLevel, msg: string, t?: number): ParsedLine => ({
@@ -247,26 +250,89 @@ const V_ENV = P("environment");
 const V_SOURCE = P("source");
 const V_RELEASE = P("deploymentId");
 const V_AGENT = P("clientUserAgent");
-/** Vercel: the CLI's `{ type, data }` lines, a log drain's object and the older CLI's flat line. */
-function vercel(o: Obj): ParsedLine | null {
+const CONSOLE = new Set(["stdout", "stderr", "fatal"]);
+const PLATFORM = new Set(["report", "delimiter", "metrics", "middleware-invocation", "edge-function-invocation"]);
+const WAF = new Set(["challenge", "deny", "rate_limit"]);
+const SUMMARY_LINE = /^\[[A-Za-z]{3,10}\] \S{1,2000} status=-?\d{1,3}$/;
+const MAX_IDS = 5000;
+const MAX_ID = 128;
+
+/** The request ids of a drain seen so far (the last 5,000, in order) and the worst status each was counted with. Ids are never kept anywhere else. */
+export class Seen {
+  private readonly ids = new Map<string, number>();
+  get(id: string): number | undefined {
+    return this.ids.get(id);
+  }
+  set(id: string, status: number): void {
+    if (!this.ids.has(id) && this.ids.size >= MAX_IDS) this.ids.delete(this.ids.keys().next().value as string);
+    this.ids.set(id, status);
+  }
+}
+let current: Seen | undefined;
+
+/** A drain message without the platform's own lines (an invocation's start, end, report and summary); undefined when nothing is left. */
+function appText(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const t = raw.slice(0, MAX_LINE);
+  if (!/RequestId: |INIT_START | status=/.test(t)) return t;
+  const keep: string[] = [];
+  for (let i = 0; i <= t.length; ) {
+    let j = t.indexOf("\n", i);
+    if (j < 0) j = t.length;
+    const l = t.slice(i, j);
+    i = j + 1;
+    if (/^(?:(?:START|END|REPORT) RequestId: |INIT_START )/.test(l) || (l.length < 2100 && SUMMARY_LINE.test(l.trim()))) continue;
+    keep.push(l);
+  }
+  return str(keep.join("\n"));
+}
+
+/**
+ * Vercel: the CLI's `{ type, data }` lines, a log drain's record and the older CLI's flat line. A drain record gives its
+ * request (once per `requestId`, with the worse status if a later record of it has one) and its text, each or none.
+ */
+function vercel(o: Obj): ParsedLine[] {
   const type = own(o, "type");
-  if (type === "summary" || own(o, "status") === "error") return null;
-  const d = (type === "request" || type === "log") && obj(own(o, "data")) ? (obj(own(o, "data")) as Obj) : o;
+  if (type === "summary" || own(o, "status") === "error") return [];
+  const data = (type === "request" || type === "log") && obj(own(o, "data"));
+  const d = data || o;
   const proxy = obj(own(d, "proxy"));
-  const at = find(d, V_TIME, time) ?? (proxy && time(own(proxy, "timestamp")));
-  const m = find(d, V_METHOD, method) ?? (proxy && method(own(proxy, "method")));
-  const p = find(d, V_PATH, path) ?? (proxy && path(own(proxy, "path")));
-  const code = find(d, V_STATUS, status) ?? (proxy && status(own(proxy, "statusCode")));
+  const px = (k: string): unknown => (proxy ? own(proxy, k) : undefined);
+  // The older CLI's flat line is not a drain's record: it keeps the old reading (a request, or the text when that is the worse news).
+  const drain = !data && !("requestMethod" in o || "requestPath" in o || "responseStatusCode" in o || "httpStatus" in o);
+  const source = own(d, "source");
+  if (drain && (source === "firewall" || source === "build" || WAF.has(px("wafAction") as string))) return [];
+  const at = find(d, V_TIME, time) ?? time(px("timestamp"));
+  const pm = method(px("method"));
+  const pp = path(px("path"));
+  const m = drain ? (pm ?? find(d, V_METHOD, method)) : (find(d, V_METHOD, method) ?? pm);
+  const p = drain ? (pp ?? find(d, V_PATH, path)) : (find(d, V_PATH, path) ?? pp);
+  const pcode = status(px("statusCode"));
+  // `statusCode: -1` is no answer (the function crashed): 500, or what the visitor got; `proxy.statusCode: -1` is a revalidation in the background.
+  const code = drain && px("statusCode") === -1 ? undefined : (find(d, V_STATUS, status) ?? (drain && own(d, "statusCode") === -1 ? (pcode ?? 500) : pcode));
   const service = [find(d, V_ENV, name), find(d, V_SOURCE, name)].filter(Boolean).join(" ").slice(0, 64) || undefined;
   const release = find(d, V_RELEASE, name);
-  const req: ParsedLine | null =
-    m && p && code ? { request: done<RequestRecord>({ method: m, path: p, status: code, userAgent: find(d, V_AGENT, agent) ?? (proxy && agent(own(proxy, "userAgent"))), time: at, release, service }) } : null;
-  if (type === "request") return req;
+  let req: ParsedLine | null =
+    m && p && code ? { request: done<RequestRecord>({ method: m, path: p, status: code, userAgent: find(d, V_AGENT, agent) ?? agent(px("userAgent")), time: at, release, service }) } : null;
+  if (req && drain) {
+    const id = own(d, "requestId");
+    if (typeof id === "string" && id.length > 0 && id.length <= MAX_ID) {
+      const seen = (current ??= new Seen());
+      const before = seen.get(id);
+      if (before === undefined || (code as number) > before) {
+        seen.set(id, code as number);
+        if (before !== undefined) (req as { request: RequestRecord }).request.replaces = before;
+      } else req = null;
+    } else if (typeof type === "string" && CONSOLE.has(type)) req = null;
+  }
+  if (type === "request") return req ? [req] : [];
   // The level is the stream's (`console.error` gives error): a line of a JSON logger, or one that starts with a level, says it better.
-  const line = find(d, V_MESSAGE, str);
-  const rec = line ? inner(line, { level: find(d, LEVEL, level), time: at, service, release, path: p, over: true, noRequest: true }) : null;
-  if (type === "log" || !req) return rec;
-  return rec && "record" in rec && (code as number) < 500 && isBad(rec.record.level) ? rec : req;
+  const found = find(d, V_MESSAGE, str);
+  const line = drain ? (typeof type === "string" && PLATFORM.has(type) ? undefined : appText(found)) : found;
+  const rec = line ? inner(line, { level: find(d, LEVEL, level) ?? (type === "fatal" ? "fatal" : undefined), time: at, service, release, path: p, over: true, noRequest: true }) : null;
+  if (drain) return [req, rec].filter((x): x is ParsedLine => !!x);
+  if (type === "log" || !req) return rec ? [rec] : [];
+  return [rec && "record" in rec && (code as number) < 500 && isBad(rec.record.level) ? rec : req];
 }
 
 /** Apache and nginx Common and Combined Log Format, with a host name first or not. The client address, the user and the referer are never kept. */
@@ -331,7 +397,7 @@ function bsdTime(m: RegExpExecArray): number {
 }
 
 /** Plain text: a leading time, a level word near the start, and a stack-trace line (which belongs to the line before it) is nothing. */
-function text(raw: string, base: Base = {}): ParsedLine | null {
+function text(raw: string, base: Base = {}): Out {
   const line = plain(raw);
   if (STACK.test(line)) return null;
   let rest = line.trim();
@@ -420,7 +486,7 @@ function text(raw: string, base: Base = {}): ParsedLine | null {
 }
 
 /** An object read as the format says, or as the keys it has when the format is `auto`. */
-function route(o: Obj, format: LogFormat, base: Base = {}): ParsedLine | null {
+function route(o: Obj, format: LogFormat, base: Base = {}): ParsedLine[] {
   let f = format;
   if (f === "auto") {
     const data = obj(own(o, "data"));
@@ -428,14 +494,16 @@ function route(o: Obj, format: LogFormat, base: Base = {}): ParsedLine | null {
     else if ((data && (o.type === "request" || o.type === "log" || o.type === "summary")) || "deploymentId" in o || "timestampInMs" in o || "responseStatusCode" in o || obj(own(o, "proxy"))) f = "vercel";
     else if (obj(own(o, "attributes"))) f = "railway";
   }
-  return f === "journald" ? journald(o) : f === "vercel" ? vercel(o) : f === "railway" ? railway(o) : fromObject(o, base);
+  return f === "vercel" ? vercel(o) : one(f === "journald" ? journald(o) : f === "railway" ? railway(o) : fromObject(o, base));
 }
 
 /**
  * Reads one line as the format says (`auto` decides per line) and returns what it holds: usually one record or request,
- * more for a JSON array of objects (a log drain's batch). Never throws; a line that says nothing gives `[]`.
+ * more for a JSON array of objects (a log drain's batch). Never throws; a line that says nothing gives `[]`. `seen`
+ * carries the request ids of a drain from one call to the next: a request counts once per id while the same one is given.
  */
-export function parseLogLines(line: string, format: LogFormat = "auto"): ParsedLine[] {
+export function parseLogLines(line: string, format: LogFormat = "auto", seen?: Seen): ParsedLine[] {
+  current = seen;
   try {
     if (typeof line !== "string") return [];
     const raw = line.slice(0, MAX_LINE);
@@ -447,19 +515,21 @@ export function parseLogLines(line: string, format: LogFormat = "auto"): ParsedL
     const first = t.charCodeAt(0);
     if (first === 123) {
       const o = jsonObject(t);
-      return o ? one(route(o, f)) : one(text(raw));
+      return o ? route(o, f) : one(text(raw));
     }
     if (first === 91 && f !== "pino" && /^\[\s*\{/.test(t)) {
       const a = jsonValue(t);
-      if (Array.isArray(a) && a.length <= MAX_ITEMS && a.every((x) => obj(x))) return a.flatMap((x) => one(route(x as Obj, f)));
+      if (Array.isArray(a) && a.length <= MAX_ITEMS && a.every((x) => obj(x))) return a.flatMap((x) => route(x as Obj, f));
     }
     return one((f === "auto" && CLF_START.test(t) ? clf(t) : null) ?? text(raw));
   } catch {
     return [];
+  } finally {
+    current = undefined;
   }
 }
 
-const one = (p: ParsedLine | null | undefined): ParsedLine[] => (p ? [p] : []);
+const one = (p: Out | undefined): ParsedLine[] => (Array.isArray(p) ? p : p ? [p] : []);
 
 /** The first thing a line holds, or null. See {@link parseLogLines}. */
 export function parseLogLine(line: string, format: LogFormat = "auto"): ParsedLine | null {

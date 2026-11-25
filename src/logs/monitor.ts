@@ -89,7 +89,7 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
   // The app's own names, cleaned once: they are the ones of nearly every hit.
   const ownRelease = nameOf(opts.release, extra);
   const ownService = nameOf(opts.service, extra);
-  const cloud: Cloud | null = opts.cloud ? createCloud(opts.cloud, { service: ownService || undefined, release: ownRelease || undefined, environment: typeof opts.cloud === "object" ? opts.cloud.environment : undefined }) : null;
+  const cloud: Cloud | null = opts.cloud ? createCloud(opts.cloud, { service: ownService || undefined, release: ownRelease || undefined, environment: typeof opts.cloud === "object" ? opts.cloud.environment : undefined, onRollback: () => persist() }) : null;
 
   const groups = new Map<string, Group>();
   const marks = new Map<string, MarkOptions>();
@@ -226,6 +226,28 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
     });
   };
 
+  /** A request that was counted with a lesser status comes again with a worse one: the earlier hit goes (when the open batch still holds it), and the new one is no extra record. */
+  const takeBack = (req: RequestRecord, status: number): void => {
+    const old = Number(req.replaces);
+    if (!Number.isFinite(old) || !Number.isFinite(status) || status <= old) return;
+    counters.records = Math.max(0, counters.records - 1);
+    windowRecords = Math.max(0, windowRecords - 1);
+    if (old < minStatus) {
+      counters.ignored = Math.max(0, counters.ignored - 1);
+      return;
+    }
+    const method = String(req.method ?? "GET").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 10) || "GET";
+    const key = `${method}|${pathPattern(req.path)}|${old}`.slice(0, MAX_KEY);
+    const g = groups.get(key);
+    if (!g || g.hits <= 0) return;
+    g.hits -= 1;
+    g.total -= 1;
+    const fam = uaFamily(req.userAgent);
+    if (g.families[fam] > 0) g.families[fam] -= 1;
+    if (fam !== "bot" && g.nonBot > 0) g.nonBot -= 1;
+    if (g.total <= 0) groups.delete(key);
+  };
+
   const request = (req: RequestRecord): void => {
     if (stopped) return;
     if (busy) {
@@ -234,9 +256,10 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
     }
     guard(() => {
       if (!req || typeof req !== "object") return;
+      const status = Number(req.status);
+      if (req.replaces !== undefined) takeBack(req, status);
       counters.records += 1;
       windowRecords += 1;
-      const status = Number(req.status);
       if (!Number.isFinite(status) || status < minStatus) {
         counters.ignored += 1;
         return;
@@ -340,7 +363,7 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
     if (!cloud) return;
     const p = guard(() => {
       const chosen = cloud.select(candidates, now);
-      return cloud.send(chosen.map((c) => findingEvent(c.finding, { environment: undefined, release: ownRelease, hits: c.sinceSent })));
+      return cloud.send(chosen.map((c) => findingEvent(c.finding, { environment: undefined, release: ownRelease, hits: c.sinceSent })), chosen);
     });
     if (p) track(p.catch(() => false));
   };

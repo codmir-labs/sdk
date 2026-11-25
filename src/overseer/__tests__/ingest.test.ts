@@ -407,7 +407,7 @@ describe("onDropped: what the server did not take", () => {
     c.captureException(nodeError("one"));
     c.captureException(nodeError("two"));
     expect(await c.flush()).toBe(true);
-    expect(told).toEqual([{ events: 2, status: 401 }]);
+    expect(told).toEqual([{ events: 2, status: 401, eventIds: expect.any(Array) }]);
     respond = () => new Response("{}", { status: 503 });
     c.captureException(nodeError("three"));
     expect(await c.flush()).toBe(false);
@@ -420,7 +420,7 @@ describe("onDropped: what the server did not take", () => {
     respond = () => ok({ received: 1, dropped: 1, droppedEvents: [{ index: 0, reason: "payment_required", type: "error" }] });
     c.captureException(nodeError("one"));
     await c.flush();
-    expect(told).toEqual([{ events: 1, status: 200, reason: "payment_required" }]);
+    expect(told).toEqual([{ events: 1, status: 200, reason: "payment_required", eventIds: expect.any(Array) }]);
     for (const body of [{ received: 1 }, { droppedEvents: [] }, { droppedEvents: "x" }, [], null]) {
       respond = () => ok(body);
       c.captureException(nodeError("again"));
@@ -430,6 +430,18 @@ describe("onDropped: what the server did not take", () => {
     c.captureException(nodeError("again"));
     await c.flush();
     expect(told).toHaveLength(1);
+    c.close();
+  });
+
+  it("is told what a full queue pushed out, oldest first, by id", async () => {
+    const c = client((d) => told.push(d));
+    const ids: unknown[] = [];
+    (globalThis.fetch as any).mockRejectedValueOnce(new TypeError("offline"));
+    for (let i = 0; i < MAX_QUEUE_SIZE + 3; i++) ids.push(c.captureException(nodeError(`e${i}`)));
+    await c.flush();
+    const lost = told as Array<{ events: number; status: number; reason: string; eventIds: string[] }>;
+    expect(lost.every((d) => d.status === 0 && d.reason === "queue_full" && d.eventIds.length === d.events)).toBe(true);
+    expect(lost.flatMap((d) => d.eventIds)).toEqual(ids.slice(0, 3));
     c.close();
   });
 
