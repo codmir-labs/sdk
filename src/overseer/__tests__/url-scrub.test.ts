@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * CSL-5640: a URL in a breadcrumb or a transaction keeps origin and path, never the query string or fragment. A sentinel
+ * A URL in a breadcrumb or a transaction keeps origin and path, never the query string or fragment. A sentinel
  * in both must be absent from the whole serialized event, and the path must still be there.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

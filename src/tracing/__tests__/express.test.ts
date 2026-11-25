@@ -1,4 +1,4 @@
-/** CSL-5575: the Express tracingHandler continues an incoming traceparent and finishes on response end. */
+/** The Express tracingHandler continues an incoming traceparent and finishes on response end. */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import * as Codmir from "../../express/index";
 import { formatTraceparent, generateSpanId, generateTraceId, getActiveSpan, startSpan } from "../index";

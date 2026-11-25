@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "A sample app that sends an error, a 3-span trace and a masked session replay to Codmir (CSL-5588)",
+  "description": "A sample app that sends an error, a 3-span trace and a masked session replay to Codmir",
   "scripts": {
     "start": "node server.mjs",
     "capture-server": "node capture-server.mjs",

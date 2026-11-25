@@ -1,5 +1,5 @@
 /**
- * CSL-5639: no request, header, cookie, authorization, query, params or body reaches any event field, from any
+ * No request, header, cookie, authorization, query, params or body reaches any event field, from any
  * integration or from a direct `captureException(err, { request })`. The sentinel SECRET appears in every place a
  * request carries something sensitive; the whole serialized event (extra, breadcrumbs, request, everything) must not hold it.
  */

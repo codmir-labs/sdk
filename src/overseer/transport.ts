@@ -1,5 +1,5 @@
 /**
- * Wire format and delivery helpers for the Overseer client (CSL-5492).
+ * Wire format and delivery helpers for the Overseer client.
  *
  * The deployed Codmir ingest route (`POST /api/v1/overseer/ingest`) stores an error only when it arrives as
  * `{ type: "error", event: {...}, group: {...} }`. A flat `OverseerEvent` is counted as dropped behind a 200,
@@ -47,7 +47,7 @@ export interface WireSourceEvent {
 }
 
 /**
- * Group fingerprint, identical to `sdkFingerprint` in the platform (apps/api normalize-sdk-event.ts, CSL-5492):
+ * Group fingerprint, identical to `sdkFingerprint` in the platform:
  * error name, `file:line` of the first in-app frame, then the message with digits masked to `<N>` and runs of
  * 8+ hex characters masked to `<ID>`, cut to 100 characters.
  */

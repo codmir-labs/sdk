@@ -1,7 +1,7 @@
 /**
  * @codmir/sdk/overseer - Error Tracking & Session Replay
  *
- * Sentry-compatible API for error tracking, session replay,
+ * API for error tracking, session replay,
  * and performance monitoring.
  *
  * @example
@@ -225,7 +225,7 @@ class OverseerClient {
   private patchRuntime: PatchRuntime | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryAttempt = 0;
-  // CSL-7688: once closed, the client never schedules a retry.
+  // Once closed, the client never schedules a retry.
   private closed = false;
   private flushing: Promise<boolean> | null = null;
   private onPageHide = (): void => this.flushOnHide();
@@ -235,7 +235,7 @@ class OverseerClient {
 
   constructor(config: OverseerConfig = {}) {
     const resolvedKey = config.clientKey || config.apiKey || config.overseerKey || "";
-    // Always Codmir's own endpoint; an explicit `dsn` wins. Never the page's origin (CSL-5492).
+    // Always Codmir's own endpoint; an explicit `dsn` wins. Never the page's origin.
     const defaultIngestUrl = DEFAULT_DSN;
 
     this.config = {
@@ -320,7 +320,7 @@ class OverseerClient {
       user: this.user || undefined,
       tags: { ...this.tags },
       extra: {
-        // CSL-5639: no request, headers, cookies, query, params or body, whatever the caller passed.
+        // No request, headers, cookies, query, params or body, whatever the caller passed.
         ...sanitizeExtra(context),
         conversationId: this.conversationId,
         sessionId: this.sessionId,
@@ -552,7 +552,7 @@ class OverseerClient {
   }
 
   /**
-   * `{ request }` from the server request in scope (CSL-5637), else the page in a browser (origin and path), else
+   * `{ request }` from the server request in scope, else the page in a browser (origin and path), else
    * nothing: the key is absent, not undefined. Never a query string, headers or cookies.
    */
   private requestOf(): { request?: RequestData } {
@@ -771,7 +771,7 @@ let client: OverseerClient | null = null;
 const CLIENT_SLOT = Symbol.for("codmir.overseer.client");
 
 export function init(config: OverseerConfig = {}): void {
-  // The client being replaced stops here: its timers, retries, listeners and runtime patches (CSL-7688).
+  // The client being replaced stops here: its timers, retries, listeners and runtime patches.
   client?.close();
   client = new OverseerClient(config);
   client.init();

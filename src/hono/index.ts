@@ -1,5 +1,5 @@
 /**
- * @codmir/sdk/hono (CSL-5586): `http.server` transactions for Hono.
+ * @codmir/sdk/hono: `http.server` transactions for Hono.
  *
  * ```ts
  * import { Hono } from "hono";

@@ -1,4 +1,4 @@
-/** CSL-5586: the Hono middleware opens an http.server transaction named by the matched route. */
+/** The Hono middleware opens an http.server transaction named by the matched route. */
 import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import { codmirTracing } from "../../hono/index";

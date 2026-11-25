@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * CSL-5612: rrweb recording with masking on by default, on-error buffering, sampling and segment upload.
+ * rrweb recording with masking on by default, on-error buffering, sampling and segment upload.
  * The wire shape is checked against the mirrored `ReplaySegmentUploadSchema` (helpers.ts).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

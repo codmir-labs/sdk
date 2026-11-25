@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-/** CSL-5587: LCP, CLS and INP on the pageload transaction. */
+/** LCP, CLS and INP on the pageload transaction. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { close, flush, init } from "../../overseer/index";
 import { startBrowserTracing } from "../browser";
@@ -171,7 +171,7 @@ describe("web vitals on the pageload transaction", () => {
   });
 });
 
-/** CSL-5599: TTFB and FCP on the pageload transaction, final INP and CLS on page hide. */
+/** TTFB and FCP on the pageload transaction, final INP and CLS on page hide. */
 function stubTiming(entries: { navigation?: any[]; paint?: any[] }): void {
   vi.spyOn(performance, "getEntriesByType").mockImplementation(((type: string) =>
     (type === "navigation" ? entries.navigation : type === "paint" ? entries.paint : []) ?? []) as any);

@@ -1,5 +1,5 @@
 /**
- * @codmir/sdk tracing (CSL-5575): spans, W3C `traceparent` propagation and sampling.
+ * @codmir/sdk tracing: spans, W3C `traceparent` propagation and sampling.
  *
  * ```ts
  * init({ clientKey, tracesSampleRate: 0.2 });

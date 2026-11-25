@@ -2,7 +2,7 @@
   "name": "@codmir/agent-kit",
   "version": "0.0.0",
   "private": true,
-  "description": "Agent, council, serverless, runtime, AI-monitoring and MCP code split out of @codmir/sdk (CSL-5590). Never published.",
+  "description": "Agent, council, serverless, runtime, AI-monitoring and MCP code split out of @codmir/sdk. Never published.",
   "type": "module",
   "scripts": {
     "test": "vitest run",

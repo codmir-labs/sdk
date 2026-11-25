@@ -1,5 +1,5 @@
 /**
- * CSL-5637: an error captured while an Express, Next.js or Hono handler serves a request carries that request's url
+ * An error captured while an Express, Next.js or Hono handler serves a request carries that request's url
  * (origin and path) and method in `event.request`; never the query, headers or cookies; none outside a request; and two
  * requests in flight at once never see each other's.
  */

@@ -1,6 +1,6 @@
 /**
- * CSL-5636: the `contexts` and `request` an error event carries, with the field names the platform's ingest allowlist
- * reads (`event-context.ts` in platform-v2): browser, os, runtime and device, each with name, version, family, type.
+ * The `contexts` and `request` an error event carries, with the field names the platform's ingest allowlist
+ * reads: browser, os, runtime and device, each with name, version, family, type.
  * Nothing here reads headers, cookies, a body or a query string.
  */
 

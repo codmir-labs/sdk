@@ -418,13 +418,13 @@ describe('DatabaseAdapter', () => {
       })
     })
 
-    it('keeps a minConfidence of 0 as a filter (CSL-5553)', async () => {
+    it('keeps a minConfidence of 0 as a filter', async () => {
       prisma.agentLearning.findMany.mockResolvedValue([])
       await makeAdapter(prisma).getLearnings({ minConfidence: 0 })
       expect(prisma.agentLearning.findMany.mock.calls[0][0].where.confidence).toEqual({ gte: 0 })
     })
 
-    it('returns no rows for a limit of 0 without querying (CSL-5621)', async () => {
+    it('returns no rows for a limit of 0 without querying', async () => {
       expect(await makeAdapter(prisma).getLearnings({ projectId: 'p1', limit: 0 })).toEqual([])
       expect(prisma.agentLearning.findMany).not.toHaveBeenCalled()
     })
@@ -499,7 +499,7 @@ describe('DatabaseAdapter', () => {
       expect(prisma.user.findUnique).toHaveBeenCalledTimes(2)
     })
 
-    it('a cacheTimeout of 0 expires entries immediately instead of falling back to five minutes (CSL-5553)', async () => {
+    it('a cacheTimeout of 0 expires entries immediately instead of falling back to five minutes', async () => {
       vi.useFakeTimers()
       vi.setSystemTime(new Date('2025-01-01T00:00:00Z'))
       prisma.user.findUnique.mockResolvedValue({ id: 'u1', name: 'Ada' })

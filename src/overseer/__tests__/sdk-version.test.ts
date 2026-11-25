@@ -1,4 +1,4 @@
-/** CSL-5589: events report the package's real version, not a hardcoded one. */
+/** Events report the package's real version, not a hardcoded one. */
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OverseerClient, close, flush, init } from "../index";

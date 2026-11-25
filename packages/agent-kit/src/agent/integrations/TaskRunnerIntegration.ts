@@ -589,7 +589,7 @@ export class TaskRunnerIntegration extends EventEmitter {
   private async buildTaskContext(task: EnhancedTask): Promise<Context> {
     return {
       // activeTasks/techStack stay empty: the integration does not know the project's other tasks,
-      // and TaskAgent reads both while breaking a task down (CSL-5540)
+      // and TaskAgent reads both while breaking a task down
       project: task.projectId ? { id: task.projectId, activeTasks: [], techStack: [] } as any : undefined,
       system: {
         platform: process.platform,

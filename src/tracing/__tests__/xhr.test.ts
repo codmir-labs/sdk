@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-/** CSL-5585: XHR requests become http.client spans like fetch. */
+/** XHR requests become http.client spans like fetch. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { close, flush, getClient, init } from "../../overseer/index";
 import { instrumentXhr, parseTraceparent, startSpan } from "../index";

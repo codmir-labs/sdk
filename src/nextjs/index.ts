@@ -177,7 +177,7 @@ export function captureRequestError(
   errorContext: Partial<ErrorContext>,
   request?: Request
 ): string {
-  // CSL-5639: no request object, headers or cookies in the context. The event's `request` (origin, path, method) comes from
+  // No request object, headers or cookies in the context. The event's `request` (origin, path, method) comes from
   // the scope below; the route pattern is `errorContext.routePath`.
   const capture = (): string =>
     coreCaptureException(error, {
@@ -201,7 +201,7 @@ export async function captureRouterError(
     const key = Object.keys(request.headers ?? {}).find((k) => k.toLowerCase() === name);
     return key ? request.headers[key] : undefined;
   };
-  // CSL-5637: origin from Host and X-Forwarded-Proto, path without its query; no header is sent in the event's `request`.
+  // Origin from Host and X-Forwarded-Proto, path without its query; no header is sent in the event's `request`.
   const scope = requestScopeFrom({ url: request.path, method: request.method, host: header("host"), protocol: header("x-forwarded-proto") });
   withRequestScope(scope, () =>
     coreCaptureException(error, {
@@ -238,7 +238,7 @@ export {
   type SeverityLevel,
 } from "../overseer/index";
 
-// Alias for Sentry compatibility
+// The same functions under the plain names an error-tracking SDK usually exports
 export const captureException = coreCaptureException;
 export const captureMessage = coreCaptureMessage;
 export const setUser = coreSetUser;

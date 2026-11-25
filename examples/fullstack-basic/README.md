@@ -96,20 +96,20 @@ still arrives.
 `schemas.mjs` is a copy of the platform's Zod schemas (source commit in its header). If the platform's wire format
 changes, the smoke fails here first.
 
-## Point it at testing
+## Point it at Codmir
 
 Nothing in the code changes, only the env:
 
-1. In the Codmir project on testing, open **Settings > Codmir SDK** and copy the client key.
+1. In your Codmir project, open **Settings > Codmir SDK** and copy the client key.
 2. Run the app against it:
 
    ```bash
-   CODMIR_DSN=https://testing.codmir.com/api/overseer CODMIR_CLIENT_KEY=<the key> npm start
+   CODMIR_DSN=<your Codmir address>/api/overseer CODMIR_CLIENT_KEY=<the key> npm start
    ```
 
 3. Open http://localhost:3000, type something, press Throw, and call `/api/demo` and `/api/boom`.
 
-What will show in that project once CSL-5614 (the private replay bucket) and CSL-5615 (the Overseer views) land:
+What will show in that project once the private replay bucket and the Overseer views land:
 
 - **Issues:** two new issues, `Server demo error: /api/boom` and `Browser demo error: Throw button`. The browser one
   links to its replay (`tags.replay_id`).

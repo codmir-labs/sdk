@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-/** CSL-5584: `browserTracing` on the browser `init`: default on with a sample rate, off without one. */
+/** `browserTracing` on the browser `init`: default on with a sample rate, off without one. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const INGEST = "https://ingest.example.test/api/overseer";

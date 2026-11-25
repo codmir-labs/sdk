@@ -1,4 +1,4 @@
-/** CSL-5375: `apiKey` is an alias of `clientKey` (the name @codmir/overseer used), in the root entry and every framework init. */
+/** `apiKey` is an alias of `clientKey` (the name @codmir/overseer used), in the root entry and every framework init. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Root from "../index";
 import * as Nextjs from "../nextjs/index";

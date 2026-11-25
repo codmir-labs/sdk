@@ -99,7 +99,7 @@ type ErrorMiddleware = (
 
 export interface ExpressConfig extends OverseerConfig {
   /**
-   * @deprecated Ignored since CSL-5639: a request body is never put in an error report, because it may hold
+   * @deprecated Ignored: a request body is never put in an error report, because it may hold
    * credentials and personal data. Kept so existing `init({ captureRequestBody })` calls still type-check.
    */
   captureRequestBody?: boolean;
@@ -167,16 +167,16 @@ export function init(config: ExpressConfig = {}): void {
   coreInit(coreConfig);
   isInitialized = true;
 
-  // Tracing: outgoing fetches become child spans and carry traceparent (CSL-5575).
+  // Tracing: outgoing fetches become child spans and carry traceparent.
   instrumentFetch({ breadcrumbs: false });
 }
 
-/** CSL-5639: the request's path, never its query string or fragment: a breadcrumb or transaction name is an event field too. */
+/** The request's path, never its query string or fragment: a breadcrumb or transaction name is an event field too. */
 function pathOnly(req: ExpressRequest): string {
   return (req.originalUrl || req.url).split(/[?#]/)[0] || "/";
 }
 
-/** CSL-5637: origin and path of the request, and its method. Never the query string, headers or cookies (the Host header only names the origin). */
+/** Origin and path of the request, and its method. Never the query string, headers or cookies (the Host header only names the origin). */
 function scopeOf(req: ExpressRequest): RequestScope {
   const host = req.headers.host;
   return requestScopeFrom({
@@ -230,7 +230,7 @@ export function requestHandler(): RequestMiddleware {
       }
     }
 
-    // Everything downstream, async tail included, captures under this request (CSL-5637).
+    // Everything downstream, async tail included, captures under this request.
     installNodeTracingContext();
     withRequestScope(scopeOf(req), () => next());
   };
@@ -260,7 +260,7 @@ export function errorHandler(): ErrorMiddleware {
     _res: ExpressResponse,
     next: NextFunction
   ): void => {
-    // CSL-5639: never the request's headers, cookies, query, params or body. The event's `request` (origin, path, method)
+    // Never the request's headers, cookies, query, params or body. The event's `request` (origin, path, method)
     // comes from the scope below; the route pattern is the one safe thing to add.
     const requestContext: Record<string, unknown> = { mechanism: "express-error-handler" };
     if (typeof req.route?.path === "string") requestContext.route = `${req.baseUrl ?? ""}${req.route.path}`;
@@ -313,7 +313,7 @@ export function errorHandler(): ErrorMiddleware {
 export function tracingHandler(): RequestMiddleware {
   return (req: ExpressRequest, res: ExpressResponse, next: NextFunction): void => {
     // Node has async context; the browser-safe default stack would mix up concurrent requests. The one shared
-    // strategy is installed on the first request any server wrapper sees, and never again (CSL-5593).
+    // strategy is installed on the first request any server wrapper sees, and never again.
     installNodeTracingContext();
     const startTime = req._codmir?.startTime ?? Date.now();
     const header = req.headers["traceparent"];

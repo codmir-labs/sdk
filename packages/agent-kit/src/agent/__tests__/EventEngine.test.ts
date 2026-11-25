@@ -23,7 +23,7 @@ async function emitAndFlush(event: any) {
   await eventEngine.flushQueue()
 }
 
-describe('EventEngine delivery (CSL-5624)', () => {
+describe('EventEngine delivery', () => {
   afterEach(async () => {
     for (const [type, handler] of registered.splice(0)) eventEngine.off(type, handler)
     await eventEngine.flushQueue()
@@ -107,7 +107,7 @@ describe('EventEngine delivery (CSL-5624)', () => {
   })
 })
 
-describe('EventEngine handler failures (CSL-5624 round 2)', () => {
+describe('EventEngine handler failures (round 2)', () => {
   const unhandled = vi.fn()
 
   afterEach(async () => {

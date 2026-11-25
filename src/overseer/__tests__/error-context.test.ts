@@ -1,6 +1,6 @@
 /**
- * CSL-5636: captureException sends browser/os/runtime/device contexts and source lines in Node, and parses every common
- * stack format. Field names are the ones platform-v2's ingest allowlist reads (`apps/api/src/lib/overseer/event-context.ts`).
+ * captureException sends browser/os/runtime/device contexts and source lines in Node, and parses every common
+ * stack format. Field names are the ones the platform's ingest allowlist reads.
  */
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { release, tmpdir } from "node:os";
@@ -13,7 +13,7 @@ import { resetEnvContexts } from "../runtime-context";
 
 let dir: string;
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "csl5636-"));
+  dir = mkdtempSync(join(tmpdir(), "error-context-"));
   clearSourceCache();
   resetEnvContexts();
 });

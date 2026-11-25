@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-/** CSL-5584: pageload and navigation root transactions in the browser. */
+/** Pageload and navigation root transactions in the browser. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { close, flush, init } from "../../overseer/index";
 import { getActiveSpan, instrumentFetch, startSpan } from "../index";
@@ -216,7 +216,7 @@ describe("idle and final timeouts", () => {
   });
 });
 
-describe("a startSpan that never settles (CSL-5592)", () => {
+describe("a startSpan that never settles", () => {
   it("does not stay active after a navigation replaces its root", async () => {
     start(1);
     void startSpan({ op: "function", name: "hung" }, () => new Promise<void>(() => {}));

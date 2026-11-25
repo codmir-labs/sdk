@@ -1,5 +1,5 @@
 /**
- * Browser root transactions (CSL-5584): one `pageload` transaction for the document and one `navigation`
+ * Browser root transactions: one `pageload` transaction for the document and one `navigation`
  * transaction per client-side route change, so `fetch` calls made outside any `startSpan` still land in a trace.
  *
  * A root stays the active span until it goes idle (no open child span for `idleTimeout` ms) or `finalTimeout`

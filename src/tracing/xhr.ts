@@ -42,7 +42,7 @@ export function instrumentXhr(options: InstrumentXhrOptions = {}): () => void {
 
   const open: PatchedOpen = function (this: XMLHttpRequest, method: string, url: string | URL) {
     const fullUrl = String(url);
-    // The breadcrumb names origin and path only: a query or fragment can hold a token (CSL-5640).
+    // The breadcrumb names origin and path only: a query or fragment can hold a token.
     states.set(this, { rawMethod: String(method), method: String(method).toUpperCase(), rawUrl: scrubUrl(fullUrl), url: resolveUrl(fullUrl), startTime: 0, hasTraceparent: false });
     // eslint-disable-next-line prefer-rest-params -- forwards every XHR open() argument unchanged
     return (originalOpen as (...args: unknown[]) => void).apply(this, arguments as unknown as unknown[]);

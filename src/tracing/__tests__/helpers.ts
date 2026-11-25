@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-// Copied from platform-v2 packages/types/src/api/analytics.ts (`TransactionEventSchema`, `SpanSchema`,
-// `TraceIdSchema`, `SpanIdSchema`), as of commit 4c49b06f9 (platform-v2 PR #835). Keep in sync by hand.
+// Copied from the platform's analytics schemas (`TransactionEventSchema`, `SpanSchema`,
+// `TraceIdSchema`, `SpanIdSchema`). Keep in sync by hand.
 const TraceIdSchema = z
   .string()
   .regex(/^[0-9a-f]{32}$/, "trace_id must be 32 lowercase hex characters")

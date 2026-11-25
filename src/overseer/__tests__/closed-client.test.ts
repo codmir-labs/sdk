@@ -1,5 +1,5 @@
 /**
- * CSL-7688: close() made one last send and, when that failed, scheduled retries, so a closed client kept posting
+ * close() made one last send and, when that failed, scheduled retries, so a closed client kept posting
  * with backoff; and init() replaced the client without closing it, so the old one kept retrying too. On Node 18 the
  * node-smoke test's server.close() waited on that traffic and timed out. These tests pin the fix.
  */
@@ -38,7 +38,7 @@ function client(dsn = A): OverseerClient {
 
 const to = (base: string) => calls.filter((url) => url.startsWith(base));
 
-describe("a closed client sends nothing more (CSL-7688)", () => {
+describe("a closed client sends nothing more", () => {
   it("an open client retries a failed batch, so the cases below are not empty", async () => {
     const c = client();
     c.captureException(new Error("boom"));

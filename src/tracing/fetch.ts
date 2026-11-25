@@ -39,7 +39,7 @@ export function instrumentFetch(options: InstrumentFetchOptions = {}): () => voi
 
   const wrapped: PatchedFetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const fullUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    // The breadcrumb names origin and path only: a query or fragment can hold a token (CSL-5640).
+    // The breadcrumb names origin and path only: a query or fragment can hold a token.
     const rawUrl = scrubUrl(fullUrl);
     const method = (init?.method || (typeof input === "object" && "method" in input ? input.method : "") || "GET").toUpperCase();
     const url = resolveUrl(fullUrl);

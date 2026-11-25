@@ -257,7 +257,7 @@ export class ContextManager extends EventEmitter {
         { name: 'intent_analysis', available: true, performance: 0.8, lastChecked: new Date().toISOString() },
         { name: 'codebase_analysis', available: true, performance: 0.85, lastChecked: new Date().toISOString() },
         // AgentEngine builds actions that require these; ActionExecutor rejects an action whose
-        // required capability is not advertised here (CSL-5546)
+        // required capability is not advertised here
         { name: 'ticket_creation', available: true, performance: 0.9, lastChecked: new Date().toISOString() },
         { name: 'task_creation', available: true, performance: 0.9, lastChecked: new Date().toISOString() },
         { name: 'project_planning', available: true, performance: 0.8, lastChecked: new Date().toISOString() },

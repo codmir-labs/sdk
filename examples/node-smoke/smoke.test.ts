@@ -9,10 +9,9 @@ import { main, runSmoke } from "./smoke.mjs";
 
 /**
  * A local stand-in for the platform's POST /v1/overseer/ingest and /v1/overseer/replay (served under /api/v1/overseer here).
- * The required fields below are the minimum copied from codmir-labs/platform-v2 `origin/development` @ 7ad8cc79e41066cfdc771883a9a6f1191aa770fa:
- *   packages/types/src/api/overseer-replay.ts (ReplaySegmentUploadSchema), packages/types/src/api/analytics.ts (TransactionEventSchema, SpanSchema),
- *   apps/api/src/routes/v1/overseer.ts (the key is read from `x-overseer-key`; an error is stored only as { type, event, group }).
- * Not imported: the platform repo is private and this SDK takes no dependency on @codmir/types.
+ * The required fields below are the minimum copied from the platform's schemas (ReplaySegmentUploadSchema, TransactionEventSchema,
+ * SpanSchema) and its ingest route (the key is read from `x-overseer-key`; an error is stored only as { type, event, group }).
+ * Not imported: the platform's code is private and this SDK takes no dependency on @codmir/types.
  */
 const KEY = "smoke-test-key-9f3a";
 const BASE_PATH = "/api/v1/overseer";
@@ -87,7 +86,7 @@ beforeEach(async () => {
 afterEach(async () => {
   overseer.close();
   // Node 19+ server.close() drops idle keep-alive sockets itself; Node 18 waits out keepAliveTimeout (5 s) per test
-  // without this. src/overseer/__tests__/close-7688.test.ts pins that the SDK stops sending after close() (CSL-7688).
+  // without this. src/overseer/__tests__/closed-client.test.ts pins that the SDK stops sending after close().
   server.closeIdleConnections();
   await new Promise<void>((r) => server.close(() => r()));
 });
@@ -95,7 +94,7 @@ afterEach(async () => {
 const dsn = () => `http://127.0.0.1:${(server.address() as AddressInfo).port}${BASE_PATH}`;
 const sdk = { overseer, tracing, replay };
 
-describe("node smoke (CSL-5628)", () => {
+describe("node smoke", () => {
   it("sends an error, a transaction and a replay segment on the platform paths with the key header, and exits 0", async () => {
     const lines: string[] = [];
     const out = await runSmoke({ dsn: dsn(), key: KEY, sdk, runId: "t1", log: (l: string) => lines.push(l) });
@@ -112,7 +111,7 @@ describe("node smoke (CSL-5628)", () => {
     expect(error.event.tags).toMatchObject({ smoke: "t1" });
     expect(tx.spans).toHaveLength(1);
 
-    // CSL-5636: the error carries where it ran, and the source around its in-app frames (read from smoke.mjs itself).
+    // The error carries where it ran, and the source around its in-app frames (read from smoke.mjs itself).
     expect(error.event.contexts).toMatchObject({ runtime: { name: "node", version: process.versions.node }, os: { name: process.platform } });
     const inApp = (error.event.exception.stacktrace as any[]).filter((f) => f.in_app);
     expect(inApp.length).toBeGreaterThan(0);

@@ -91,7 +91,7 @@ describe("grouping", () => {
 
   it("keeps one redacted sample, the user agent as a family, and no raw query", () => {
     const m = make();
-    m.request({ method: "GET", path: "/a?token=SECRETVALUE1&e=jo@x.com", status: 500, userAgent: "Mozilla/5.0 Chrome/120 Safari/537" });
+    m.request({ method: "GET", path: "/a?token=SECRETVALUE1&e=jo@example.com", status: 500, userAgent: "Mozilla/5.0 Chrome/120 Safari/537" });
     const f = m.findings()[0];
     expect(JSON.stringify(f)).not.toMatch(/SECRETVALUE1|jo@x\.com|Mozilla/);
     expect(f.families).toEqual({ browser: 1 });

@@ -1,5 +1,5 @@
 /**
- * CSL-5375: `npm install @codmir/sdk` is the error SDK. The root entry exports init and captureException,
+ * `npm install @codmir/sdk` is the error SDK. The root entry exports init and captureException,
  * wired to the same core as `@codmir/sdk/overseer`. The dist tests need `npm run build` first (CI builds before test).
  */
 import { execFileSync } from "node:child_process";
@@ -86,7 +86,7 @@ describe.skipIf(!hasDist)("root entry (built dist)", () => {
   });
 
   // nanoid 5 is ESM-only: a bare require("nanoid") throws ERR_REQUIRE_ESM on Node 18 and 20 before 20.19.
-  // The SDK has no nanoid dependency any more (CSL-5616), so no output may name it.
+  // The SDK has no nanoid dependency any more, so no output may name it.
   it("does not require nanoid from the CJS output", () => {
     const dir = fileURLToPath(dist);
     const files = readdirSync(dir, { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".cjs"));

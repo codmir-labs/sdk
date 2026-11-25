@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-/** CSL-5636: the browser side: contexts from userAgentData and the userAgent, a query-free request url, and no source lines. */
+/** The browser side: contexts from userAgentData and the userAgent, a query-free request url, and no source lines. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OverseerClient, type OverseerEvent } from "../index";
 import { parseUserAgent, resetEnvContexts } from "../runtime-context";

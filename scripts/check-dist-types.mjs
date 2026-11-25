@@ -1,4 +1,4 @@
-// Run after `npm run build`: every file an export points at must exist in dist (CSL-5601).
+// Run after `npm run build`: every file an export points at must exist in dist.
 import { existsSync, readFileSync } from "node:fs";
 
 const root = new URL("../", import.meta.url);
