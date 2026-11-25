@@ -65,7 +65,7 @@ npm install @codmir/sdk
 - [Configuration](#configuration): [core options](#core-options), [integration options](#integration-options), [delivery and limits](#delivery-and-limits)
 - [Verify your setup](#verify-your-setup)
 - [Bug reporting](#bug-reporting)
-- [Feedback](#feedback): [what is sent](#what-is-sent), [the results](#the-results), [deleting](#deleting-and-listing)
+- [Feedback](#feedback): [what is sent](#what-is-sent), [the results](#the-results), [deleting](#deleting-and-listing), [what became of it](#what-became-of-it)
 - [API client](#api-client)
 - [TypeScript](#typescript)
 - [Bundle size](#bundle-size)
@@ -240,7 +240,7 @@ Each import is its own bundle, so a page that only reports errors never loads th
 | `@codmir/sdk/react-native` | `init` with a global JS error handler, `createErrorBoundary`, screen and app-state breadcrumbs | React Native |
 | `@codmir/sdk/verify` | `verify`, `quickVerify`, `printVerifyResult` | Anywhere |
 | `@codmir/sdk/report` | `Codmir.reportBug`, `searchBugs`, `upvote`, `captureException` | Anywhere |
-| `@codmir/sdk/feedback` | `sendFeedback`, `deleteFeedback`, `listFeedback`: what a visitor says, sent with the replay, the error and the failed request of their session | Anywhere (a browser, React Native, a worker, Node 18+) |
+| `@codmir/sdk/feedback` | `sendFeedback`, `deleteFeedback`, `listFeedback`, `feedbackStatus`, `answerFeedback`: what a visitor says, what became of it, sent with the replay, the error and the failed request of their session | Anywhere (a browser, React Native, a worker, Node 18+) |
 | `@codmir/sdk/client` | `CodmirClient` | Server side (it holds an API key) |
 | `@codmir/sdk/types` | API types, `CodmirApiError`, `CreateTicketSchema`, `CreateAgentTaskSchema` | Anywhere |
 
@@ -1685,7 +1685,7 @@ the server's limits is left out, and the words are never cut: more than 2,000 ch
 | Key | Where it comes from |
 | --- | --- |
 | `text` | What the person typed, trimmed. 1 to 2,000 characters |
-| `replyWhenFixed` | `replyWhenFixed`, when it is a boolean. A wish only: the server keeps it, and nothing is sent back yet |
+| `replyWhenFixed` | `replyWhenFixed`, when it is a boolean. A wish only: the server keeps it, and the SDK sends nothing by itself. Read the state of the entry with [`feedbackStatus`](#what-became-of-it) and show the visitor what became of it |
 | `replayId` | The id the running [replay](#session-replay) reports, when it is a uuid. `replayId` overrides it, `replayId: false` leaves it out |
 | `eventId` | The id of the last **error** the SDK queued in the last 10 minutes (not one that was sampled out, dropped by `beforeSend` or captured while `enabled` is false, and not a message). `eventId` overrides it, `eventId: false` leaves it out |
 | `failed` | `{ method, path, status, at }` of the newest `fetch` or XHR breadcrumb of the last 5 minutes with a status of 400 or more, to the page's own origin or a `tracePropagationTargets` match, and not one of the SDK's own requests. A request that failed without an answer is not one. `failedRequest` overrides it, `failedRequest: false` leaves it out |
@@ -1741,6 +1741,62 @@ await deleteFeedback(id);             // the stored token; or deleteFeedback(id,
 `204` and `404` both forget the stored receipt (the server says `404` for every reason, so `not_found` can mean it is
 already gone). A network error keeps it for another try. See [`examples/feedback`](examples/feedback) for a page with a
 plain form that shows every result in words.
+
+### What became of it
+
+Two more calls bring the loop back to the person who spoke. Both need the receipt's token (the stored one on a page, a given
+one on a server), both send only the key, the token, the id and, for the answer, one boolean.
+
+```ts
+import { feedbackStatus, answerFeedback, listFeedback } from '@codmir/sdk/feedback';
+
+// once per page view, for the newest few
+for (const { id } of listFeedback().slice(0, 3)) {
+  const s = await feedbackStatus(id);
+  if (s.ok && s.state === 'fixed') {
+    note.textContent = s.release ? `Fixed in ${s.release}.` : 'Fixed.';
+    reply.textContent = s.reply ?? '';          // text, never HTML
+  }
+}
+
+await answerFeedback(id, true);                 // "It works now"; false is "Still broken"
+```
+
+`feedbackStatus(id, reporterToken?)` resolves `{ ok: true, state, release, fixedAt, reply, answer }`:
+
+| `state` | Meaning | `release`, `fixedAt`, `reply`, `answer` |
+| --- | --- | --- |
+| `received` | Kept, tied to nothing yet | all `null` |
+| `known` | Tied to at least one issue that is not resolved | all `null` |
+| `fixed` | Every live issue it is tied to is resolved. It can go back to `known` | the release (200 characters at most), the time (ISO), the reply (1,000 at most) and the visitor's answer, `better` or `not_better`, each `null` when there is none |
+
+`answerFeedback(id, better, reporterToken?)` sends `{ "better": true | false }` and resolves the same object with the
+`answer` set. A second answer replaces the first. Answers are never merged: the last one counts, and an answer sent while
+another is on its way waits for it, so they arrive in order.
+
+Neither call throws or rejects, and neither ever changes the stored receipts: a `404` may be an older server with no such
+door, so nothing is forgotten (only `deleteFeedback` forgets). Each field of the answer is checked: an unknown `state`, a
+body that is not JSON or one over 8 KB is `unavailable` with the status; a field of the wrong type or over its limit becomes
+`null`, and the four are `null` unless the state is `fixed`.
+
+| `reason` | When | `status` | Do |
+| --- | --- | --- | --- |
+| `not_configured` | No `init()`, `enabled: false`, no DSN or no key. No network | none | Nothing: the feature is off |
+| `not_found` | No id, or no token (no request); or `404`: a wrong token, another project's entry, one that is gone, or an older server | none, or 404 | Show nothing; keep the receipt |
+| `unauthorized` | The key is missing, unknown or inactive | 401 | Check `clientKey` |
+| `rate_limited` | Reads: 30 per address per 10 minutes. Answers: 5. `retryAfterMs` from `Retry-After` | 429 | Try on the next page view |
+| `not_fixed` | (`answerFeedback`) The entry is not fixed yet, or not any more | 409 | Hide the buttons |
+| `refused` | (`answerFeedback`) `better` is not a boolean (no request), or any other 4xx, `400` and `413` included | none, or the status | A bug in the call |
+| `unavailable` | 5xx (`503` when the server can not count), any other 4xx of a read, a network error, the timeout, or an answer that is not the door's | the status, when there was one | Try on the next page view |
+
+The requests have no cookies (`credentials: "omit"`), no `keepalive`, the read is never cached (`cache: "no-store"`), the
+token is in a header and never in a URL, there is no retry, no timer and no polling, and they make no breadcrumb, no span and
+no `traceparent`; the 10 second timeout is the same. On a page, two `feedbackStatus` calls for the same id and token while
+the first is in flight are one request and one result; on a server they are never merged.
+
+**Limits:** ask once per page view, for the newest few entries (`listFeedback().slice(0, 3)`), never in a loop and never on a
+timer. The reply is the server's text: put it in with `textContent`, never as HTML. A `not_found` keeps the receipt. See
+[`examples/feedback`](examples/feedback): its page shows each state in words and, when fixed, `It works now` and `Still broken`.
 
 ## API client
 
@@ -1861,7 +1917,7 @@ is tree-shaken, then compressed with gzip level 9. Importing less can only make 
 | `@codmir/sdk/logs` | 19.3 kB | 8.4 kB |
 | `@codmir/sdk/logs/node` | 19.6 kB | 8.6 kB, with the line parsers and the redaction they use |
 | `@codmir/sdk/logs/parse` | 12.2 kB | 5.4 kB |
-| `@codmir/sdk/feedback` | 5.4 kB | 2.6 kB, with the URL helpers it shares with tracing and the SDK version |
+| `@codmir/sdk/feedback` | 7.7 kB | 3.2 kB, with the URL helpers it shares with tracing and the SDK version |
 | `codmir-logs` (the command, a Node program, not a page's bundle) | 46.6 kB | 19.5 kB |
 
 rrweb is a separate chunk that loads only when `startReplay()` decides to record. The log monitor loads the error client
@@ -2031,7 +2087,7 @@ To [`packages/agent-kit`](packages/agent-kit), a private workspace in this repo 
 | [`src/replay/`](src/replay) | The rrweb recorder, privacy mapping and segment upload |
 | [`src/browser/`](src/browser), [`src/nextjs/`](src/nextjs), [`src/express/`](src/express), [`src/hono/`](src/hono), [`src/remix/`](src/remix), [`src/react-native/`](src/react-native) | Framework integrations |
 | [`src/report/`](src/report) | The bug reporting client |
-| [`src/feedback/`](src/feedback) | `sendFeedback`, `deleteFeedback`, `listFeedback`: what a visitor says, with the session it is about |
+| [`src/feedback/`](src/feedback) | `sendFeedback`, `deleteFeedback`, `listFeedback`, `feedbackStatus`, `answerFeedback`: what a visitor says, with the session it is about, and what became of it |
 | [`src/verify/`](src/verify) | The setup check |
 | [`src/client.ts`](src/client.ts), [`src/types.ts`](src/types.ts) | The API client, its types and Zod schemas |
 | [`examples/fullstack-basic/`](examples/fullstack-basic) | An Express app and a page that send an error, a 3-span trace and a masked replay to a local capture server, checked against the platform's schemas |
