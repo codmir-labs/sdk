@@ -22,6 +22,7 @@ beforeEach(() => {
     vi.fn(async (_url: string, init?: RequestInit) => {
       for (const wire of (JSON.parse(String(init?.body)) as { events: Array<{ type: string; event?: Sent }> }).events) {
         if (wire.type === "error" && wire.event) sent.push(wire.event);
+        else if (wire.type === "message") sent.push(wire as unknown as Sent);
       }
       return new Response("{}", { status: 200 });
     }),
@@ -74,19 +75,20 @@ async function flow(rid: "a" | "b" | "c", barrier: { one: Barrier; two: Barrier 
   await Promise.reject(new Error("no")).catch(() => capture(`${rid}:rejected`));
   extra();
   capture(`${rid}:end`);
+  overseer.captureMessage(`${rid}:message`);
 }
 
 const barriers = () => ({ one: new Barrier(3), two: new Barrier(3) });
 
 /** The same expectations for every framework: who each event belongs to. */
 function expectOwners(ownerOfB: { before: string | undefined; after: string | undefined }, c: string | undefined): void {
-  for (const when of ["start", "await", "timeout", "rejected", "end"]) {
+  for (const when of ["start", "await", "timeout", "rejected", "end", "message"]) {
     expect(userOf(`a:${when}`), `a:${when}`).toBe("a");
     expect(userOf(`c:${when}`), `c:${when}`).toBe(c);
   }
   expect(userOf("b:start")).toBe(ownerOfB.before);
   expect(userOf("b:await")).toBe(ownerOfB.before);
-  for (const m of ["b:after-setUser", "b:timeout", "b:rejected", "b:end"]) expect(userOf(m), m).toBe(ownerOfB.after);
+  for (const m of ["b:after-setUser", "b:timeout", "b:rejected", "b:end", "b:message"]) expect(userOf(m), m).toBe(ownerOfB.after);
 }
 
 describe("express", () => {
