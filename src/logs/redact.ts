@@ -140,18 +140,18 @@ function pass(text: string, extra?: readonly RegExp[]): string {
 /** Longest name (a release, a service) that is kept. */
 const MAX_NAME = 64;
 const W = "[A-Za-z0-9]{1,20}";
-// Not 13 digits in a row: that is a card number or an id, not a commit.
-const COMMIT = "(?!\\d{13})[0-9a-fA-F]{7,40}";
+// At the end of a shape. Not 13 digits or more and nothing else: that is a card number or an id, not a commit.
+const COMMIT = "(?!\\d{13,}$)[0-9a-fA-F]{7,40}";
 const TAIL_WORD = `(?:${W}|[0-9a-fA-F]{21,40})`;
 const VER = `(?:v?\\d{1,9}\\.\\d{1,9}(?:\\.\\d{1,9})?|v\\d{1,9}(?:\\.\\d{1,9}){3})(?:[-+]${TAIL_WORD}(?:[.-]${TAIL_WORD}){0,5})?`;
 const NPM = "[a-z0-9][a-z0-9._-]{0,29}";
 const LOWER = "[a-z][a-z0-9]{0,19}";
 // The whole value, one shape or another. Nothing here holds an `@` outside `name@`, a colon or a `?`.
 const NAME_SHAPE = new RegExp(
-  `^(?:${COMMIT}|(?:dpl|prj)_(?![A-Za-z0-9]*\\d{13})[A-Za-z0-9]{6,60}|${HEX}{8}(?:-${HEX}{4}){3}-${HEX}{12}|${VER}|(?:@[a-z0-9][a-z0-9._-]{0,19}/)?${NPM}@(?:${VER}|${COMMIT})|(?:${W}[-_./]){1,4}${COMMIT}|20\\d{6}(?:[-.T_]?(?:\\d{4}|\\d{6}))?|1[6-9]\\d{8}(?:\\d{3})?|${LOWER}(?:[-_./](?:${LOWER}|\\d{1,4})){0,7})$`,
+  `^(?:${COMMIT}|(?:dpl|prj)_(?![A-Za-z0-9]*\\d{13})[A-Za-z0-9]{6,60}|${HEX}{8}(?:-${HEX}{4}){3}-${HEX}{12}|${VER}|(?:@[a-z0-9][a-z0-9._-]{0,19}/)?${NPM}@(?:${VER}|${COMMIT})|(?:${W}[-_./]){1,4}${COMMIT}|20\\d{6}(?:[-.T_]?(?:\\d{4}|\\d{6}))?|1[6-9]\\d{8}(?:\\d{3})?|${LOWER}(?:[-_./](?:${LOWER}|\\d{1,9})){0,7})$`,
 );
 const FOUR_PART = /^v\d+\.\d+\.\d+\.\d+/;
-const MASKED = new RegExp(`${PLACEHOLDER}|\\[q\\]`);
+const MASKED = new RegExp(`${PLACEHOLDER}|\\[q\\]|/:id(?![A-Za-z0-9])`);
 
 /** The secret patterns a shape can hold (it has no space, colon, equals sign or `?`: a cookie, a pair, a bearer token and a query are none of its business). */
 const secretShaped = (s: string): boolean => s.search(JWT) >= 0 || s.search(PREFIXED) >= 0;

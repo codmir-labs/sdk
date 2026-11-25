@@ -93,6 +93,16 @@ describe("what is sent, and when", () => {
     expect(m.stats().cloud).toMatchObject({ sent: 2 });
   });
 
+  it("sends no release or service an app's own pattern matches, not even the ones of the options", async () => {
+    const m = createLogMonitor({ release: "ORDER-123456", service: "acme-api", redact: [/ORDER-\d{6}/, /acme/], cloud: { apiKey: "osk_testkey0123456789", dsn: url } });
+    monitors.push(m);
+    fail(m);
+    m.record({ level: "error", message: "stock is empty", release: "ORDER-654321", service: "acme-worker" });
+    await m.flush();
+    expect(events()).toHaveLength(2);
+    expect(hits[0].raw).not.toMatch(/ORDER-\d{6}|acme/);
+  });
+
   it("does not send it again within the hour, sends it again after", async () => {
     const m = make();
     fail(m);

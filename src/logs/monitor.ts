@@ -86,7 +86,10 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
   const batchMs = num(opts.batchMinutes, 15, 1, MAX_BATCH_MINUTES) * 60_000;
   const noiseTests = (opts.noise ?? []).map((n) => (typeof n === "string" ? (label: string) => label.toLowerCase().includes(n.toLowerCase()) : (label: string) => new RegExp(n.source, n.flags.replace(/[gy]/g, "")).test(label)));
   const store = opts.store;
-  const cloud: Cloud | null = opts.cloud ? createCloud(opts.cloud, { service: nameOf(opts.service, extra) || undefined, release: nameOf(opts.release, extra) || undefined, environment: typeof opts.cloud === "object" ? opts.cloud.environment : undefined }) : null;
+  // The app's own names, cleaned once: they are the ones of nearly every hit.
+  const ownRelease = nameOf(opts.release, extra);
+  const ownService = nameOf(opts.service, extra);
+  const cloud: Cloud | null = opts.cloud ? createCloud(opts.cloud, { service: ownService || undefined, release: ownRelease || undefined, environment: typeof opts.cloud === "object" ? opts.cloud.environment : undefined }) : null;
 
   const groups = new Map<string, Group>();
   const marks = new Map<string, MarkOptions>();
@@ -141,10 +144,11 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
     g.total += 1;
     if (ms < g.firstMs || g.total === 1) g.firstMs = ms;
     if (ms > g.lastMs || g.total === 1) g.lastMs = ms;
-    const r = nameOf(release ?? opts.release, extra);
-    if (r && g.releases.length < MAX_RELEASES && !g.releases.includes(r)) g.releases.push(r);
-    const sv = g.service ? "" : nameOf(service ?? opts.service, extra);
-    if (sv) g.service = sv;
+    if (g.releases.length < MAX_RELEASES) {
+      const r = typeof release === "string" ? nameOf(release, extra) : ownRelease;
+      if (r && !g.releases.includes(r)) g.releases.push(r);
+    }
+    if (!g.service) g.service = (typeof service === "string" ? nameOf(service, extra) : ownService) || undefined;
   };
 
   const judge = (g: Group, hits: number): Judgement => {
@@ -336,7 +340,7 @@ export function createLogMonitor(options: LogMonitorOptions = {}): LogMonitor {
     if (!cloud) return;
     const p = guard(() => {
       const chosen = cloud.select(candidates, now);
-      return cloud.send(chosen.map((c) => findingEvent(c.finding, { environment: undefined, release: opts.release, hits: c.sinceSent })));
+      return cloud.send(chosen.map((c) => findingEvent(c.finding, { environment: undefined, release: ownRelease, hits: c.sinceSent })));
     });
     if (p) track(p.catch(() => false));
   };

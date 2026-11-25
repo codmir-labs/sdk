@@ -13,6 +13,9 @@ const KEPT: Array<[string, string]> = [
   ["a scoped version", "@acme/web@2.0.1-rc.1"],
   ["a commit", C1],
   ["a short commit", "8daf9ff"],
+  ["a short commit of digits", "1234567"],
+  ["a commit that begins with 13 digits", "1234567890123abcdef0123456789abcdef01234"],
+  ["a build number after a slash", "builds/45210"],
   ["name@commit", `my-app@${C1}`],
   ["words-commit", `main-${C1}`],
   ["words/commit", `release/2026.11/${C1}`],
@@ -95,6 +98,8 @@ const EMPTY: Array<[string, unknown]> = [
   ["a card", "4242424242424242"],
   ["a card in a dpl id", "dpl_4242424242424242"],
   ["a card after words", "main-4242424242424242"],
+  ["a path id", "app/cabcdefghijklmnopqrstuvwx"],
+  ["an ip made by the cut to 64", `${"word ".repeat(11)}1.2.3.4567`],
   ["a mask", "[secret]"],
   ["a mask in words", "web-[hex]"],
   ["an old release", "my-app@[hex]"],
@@ -216,7 +221,7 @@ describe("a release and a service in the monitor", () => {
     await m.flush();
     await m.stop();
     const old = JSON.parse(JSON.stringify(store.state)) as LogState & { groups: Array<{ releases: string[]; service?: string }> };
-    old.groups[0].releases = ["[hex]", "my-app@[hex]", "web@1.4.0", "[hex]"];
+    old.groups[0].releases = ["[hex]", "my-app@[hex]", "web@1.4.0", "web@1.4.0", "[hex]"];
     old.groups[0].service = "[token]";
     const again = make({ store: new MemStore(old) });
     const f = again.findings();

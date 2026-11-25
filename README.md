@@ -1187,10 +1187,10 @@ Redaction runs before anything is kept, and again on the event. It is stable: `r
 your own patterns with `redact: [/ORDER-\d{6}/]`; every match becomes `[redacted]`.
 
 A release and a service are names you chose, so they are not masked as secrets: `web@1.4.0`, a commit, `main-<commit>`, a
-version, a date stamp and plain words are kept as they are (a commit is two releases, not one). What is personal or secret
-(an email address, an IP address, a JWT, a token, a `key=value` pair, a prefixed secret) or what your own `redact` patterns
-match is no name: it is dropped, and the finding has no `release` or `service`. A key such as `sk_live_…` is masked
-only with its separator and its length, so `skipped_records` and `npm-mirror-service` stay words in a message.
+version, a date stamp and plain words stay as they are, and two commits are two releases. What is personal or secret (an
+email address, an IP address, a JWT, a token, a `key=value` pair, a prefixed secret), or what your own `redact` patterns
+match, is no name: it is dropped, and the finding has no `release` or `service`. A key such as `sk_live_…` is masked only
+with its separator and its length, so `skipped_records` and `npm-mirror-service` stay words in a message.
 
 <details>
 <summary><b>Log monitor options, limits and cost</b></summary>
