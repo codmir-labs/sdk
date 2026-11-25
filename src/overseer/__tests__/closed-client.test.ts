@@ -1,5 +1,5 @@
 /**
- * Close() made one last send and, when that failed, scheduled retries, so a closed client kept posting
+ * close() made one last send and, when that failed, scheduled retries, so a closed client kept posting
  * with backoff; and init() replaced the client without closing it, so the old one kept retrying too. On Node 18 the
  * node-smoke test's server.close() waited on that traffic and timed out. These tests pin the fix.
  */

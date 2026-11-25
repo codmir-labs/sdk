@@ -58,6 +58,8 @@ const PRIVATE_HASHES = new Set([
   "90e63f21915cd861",
   "5de1b57c2822de4d",
   "51b071861befe742",
+  "ff11e8f120400b8f",
+  "8b44391cb28ca42b",
 ]);
 
 // person-email: an address at a name reserved for examples, or one of the project's own role addresses.

@@ -260,7 +260,7 @@ export function errorHandler(): ErrorMiddleware {
     _res: ExpressResponse,
     next: NextFunction
   ): void => {
-    // never the request's headers, cookies, query, params or body. The event's `request` (origin, path, method)
+    // Never the request's headers, cookies, query, params or body. The event's `request` (origin, path, method)
     // comes from the scope below; the route pattern is the one safe thing to add.
     const requestContext: Record<string, unknown> = { mechanism: "express-error-handler" };
     if (typeof req.route?.path === "string") requestContext.route = `${req.baseUrl ?? ""}${req.route.path}`;
