@@ -1,4 +1,4 @@
-/** CSL-5586: the behaviour every server wrapper (Next.js, Hono, Remix) shares, run against each one's adapter. */
+/** The behaviour every server wrapper (Next.js, Hono, Remix) shares, run against each one's adapter. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { close, flush, init } from "../../overseer/index";
 import { formatTraceparent, generateSpanId, generateTraceId, getActiveSpan, startSpan } from "../index";

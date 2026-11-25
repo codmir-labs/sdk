@@ -1,5 +1,5 @@
 /**
- * Web vitals for the pageload transaction (CSL-5587, CSL-5599): LCP, CLS and INP from `PerformanceObserver`,
+ * Web vitals for the pageload transaction: LCP, CLS and INP from `PerformanceObserver`,
  * TTFB and FCP from the navigation and paint timing entries, no dependency.
  *
  * `read()` is a snapshot of what is known at that moment. The pageload transaction ends when the page goes idle,

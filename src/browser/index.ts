@@ -57,7 +57,7 @@ export interface BrowserConfig extends OverseerConfig {
   /** Track XHR/fetch requests as breadcrumbs */
   trackRequests?: boolean;
   /**
-   * Pageload and navigation transactions (CSL-5584). Default: on when `tracesSampleRate` is above 0, otherwise
+   * Pageload and navigation transactions. Default: on when `tracesSampleRate` is above 0, otherwise
    * off. `true` or an options object turns it on (sampling still follows `tracesSampleRate`); `false` turns it off.
    */
   browserTracing?: boolean | BrowserTracingOptions;
@@ -201,10 +201,10 @@ function getElementDescription(el: HTMLElement): string {
 }
 
 function setupRequestTracking(): void {
-  // Fetch: breadcrumbs plus http.client spans and traceparent propagation (CSL-5575).
+  // Fetch: breadcrumbs plus http.client spans and traceparent propagation.
   instrumentFetch({ breadcrumbs: true });
 
-  // XHR: breadcrumbs plus http.client spans and traceparent propagation (CSL-5585).
+  // XHR: breadcrumbs plus http.client spans and traceparent propagation.
   instrumentXhr({ breadcrumbs: true });
 }
 

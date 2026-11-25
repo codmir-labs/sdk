@@ -1,4 +1,4 @@
-/** CSL-5593: Express and the other server wrappers share one async context strategy, installed once. */
+/** Express and the other server wrappers share one async context strategy, installed once. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 

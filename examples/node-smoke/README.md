@@ -1,7 +1,7 @@
 # Node smoke
 
 Sends one error, one trace (a transaction with one child span) and one replay segment into a Codmir project, then
-checks that each was accepted (CSL-5628). It is the Node half of the "SDK in a sample app reports an error, a trace
+checks that each was accepted. It is the Node half of the "SDK in a sample app reports an error, a trace
 and a session replay" check; the browser recorder is covered by [`../fullstack-basic`](../fullstack-basic).
 
 ## Run

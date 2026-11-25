@@ -2,7 +2,7 @@ import type { StackFrame } from "./index";
 import { isNode, nodeBuiltin } from "./runtime-context";
 
 /**
- * CSL-5636: source lines around an in-app frame, Node only. At most 3 frames; 5 lines before and after the frame's
+ * Source lines around an in-app frame, Node only. At most 3 frames; 5 lines before and after the frame's
  * line; each line cut to 240 characters; a file over 1 MB is not read; each file is read once per process (the cache
  * holds the lines, or null for an unreadable file). Any error means no lines for that frame. Synchronous, because it
  * runs while the event is built and the file is one the process just ran.

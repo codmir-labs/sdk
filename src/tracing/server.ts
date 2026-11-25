@@ -1,5 +1,5 @@
 /**
- * Shared core of the server request tracing wrappers (CSL-5586): `@codmir/sdk/nextjs/server`, `/hono` and
+ * Shared core of the server request tracing wrappers: `@codmir/sdk/nextjs/server`, `/hono` and
  * `/remix/server`. Node only: it installs AsyncLocalStorage as the active-span store so concurrent requests
  * never see each other's span. Not re-exported from `tracing/index` because that entry is also bundled for
  * browsers, which have no `node:async_hooks`.
@@ -16,7 +16,7 @@ import type { Span, Transaction } from "./span";
 let als: AsyncLocalStorage<Span> | undefined;
 
 /**
- * The one place a Node async context strategy is installed (CSL-5593): Express, Next.js, Hono and Remix all call
+ * The one place a Node async context strategy is installed: Express, Next.js, Hono and Remix all call
  * this on their first request. Idempotent, so any mix of wrappers in one process shares one AsyncLocalStorage and
  * agrees on the active span. Node 18 has no `globalThis.crypto`, so ids need `randomFillSync` too.
  */
@@ -26,7 +26,7 @@ export function installNodeTracingContext(): void {
   const store = new AsyncLocalStorage<Span>();
   als = store;
   setContextStrategy({ get: () => store.getStore(), run: (span, fn) => store.run(span, fn) });
-  // CSL-5637: the request an error is captured under rides the same install, so it is per async flow too.
+  // The request an error is captured under rides the same install, so it is per async flow too.
   const requests = new AsyncLocalStorage<RequestScope>();
   setRequestScopeStrategy({ get: () => requests.getStore(), run: (scope, fn) => requests.run(scope, fn) });
 }
@@ -37,7 +37,7 @@ export interface ServerRequestInfo {
   route: string;
   /** The incoming `traceparent` header value, if any. */
   traceparent?: string | null;
-  /** The request URL (CSL-5637): errors captured while `fn` runs carry its origin and path, never its query. */
+  /** The request URL: errors captured while `fn` runs carry its origin and path, never its query. */
   url?: string | null;
 }
 

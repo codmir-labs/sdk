@@ -33,7 +33,7 @@ export { CodmirClient, default } from "./client";
 // Overseer (Error Tracking)
 export * as Overseer from "./overseer/index";
 
-// The error SDK at the root (CSL-5375): `import { init, captureException } from "@codmir/sdk"`.
+// The error SDK at the root: `import { init, captureException } from "@codmir/sdk"`.
 // Same functions and the same singleton client as `@codmir/sdk/overseer`.
 export {
   init,

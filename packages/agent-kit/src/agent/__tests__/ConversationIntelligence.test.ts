@@ -158,7 +158,7 @@ describe('ConversationIntelligence', () => {
       expect(withSecondary.analysis.intent.confidence).toBeCloseTo(0.78)
     })
 
-    // Fixed (CSL-5548), was: calculateIntentConfidence looks the primary intent up in a table
+    // Fixed, was: calculateIntentConfidence looks the primary intent up in a table
     // that has no 'general' entry, so `keywordMatches / keywords.length` is 0 / 0 and the intent
     // confidence of every unclassified conversation is NaN (ConversationIntelligence.ts:533).
     it('has a base confidence of 0.5 for an unclassified conversation (BUG: NaN)', async () => {
@@ -360,7 +360,7 @@ describe('ConversationIntelligence', () => {
       expect(types).not.toContain('gather_information')
     })
 
-    // Fixed (CSL-5547), was: indicatesCodeAnalysisNeed's keyword list contains an empty
+    // Fixed, was: indicatesCodeAnalysisNeed's keyword list contains an empty
     // string (ConversationIntelligence.ts:510), and `text.includes('')` is always true, so an
     // 'analyze_code' need is predicted for every conversation, including small talk.
     it('does not predict a code-analysis need for small talk (BUG: empty keyword matches everything)', async () => {
@@ -480,7 +480,7 @@ describe('ConversationIntelligence', () => {
       expect(analysis.completeness).toBeCloseTo(0.4)
     })
 
-    // Fixed (CSL-5549), was: assessClarity and assessCompleteness divide by the number of
+    // Fixed, was: assessClarity and assessCompleteness divide by the number of
     // user messages. A conversation with no user message gives 0 / 0 = NaN, which survives the
     // Math.max/Math.min clamp and ends up in the analysis.
     it('gives a finite clarity and completeness when the conversation has no user message (BUG: NaN)', async () => {
@@ -610,7 +610,7 @@ describe('ConversationIntelligence', () => {
       expect(result.confidence).toBe(ci.getInsights().confidence)
     })
 
-    // Fixed (CSL-5550), was: extractTaskDescription (and extractCodeRequirements) read
+    // Fixed, was: extractTaskDescription (and extractCodeRequirements) read
     // `analysis.summary`, which ConversationAnalysis never sets, so the description is always the
     // fixed placeholder and never reflects the conversation.
     it('extractTaskDescription reflects the conversation (BUG: always the placeholder)', async () => {

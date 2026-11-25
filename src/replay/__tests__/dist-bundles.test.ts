@@ -1,5 +1,5 @@
 /**
- * CSL-5612: rrweb is loaded only by `@codmir/sdk/replay`. The root, /browser, /nextjs and /overseer bundles
+ * rrweb is loaded only by `@codmir/sdk/replay`. The root, /browser, /nextjs and /overseer bundles
  * (and every chunk they import) must not mention it. Needs `npm run build` first; CI runs this after the build.
  */
 import { existsSync, readFileSync } from "node:fs";

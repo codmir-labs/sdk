@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-/** CSL-5640: the nextjs navigation breadcrumbs (page load, pushState, replaceState, popstate) keep origin and path only. */
+/** The nextjs navigation breadcrumbs (page load, pushState, replaceState, popstate) keep origin and path only. */
 import { beforeAll, describe, expect, it } from "vitest";
 import * as nav from "../../nextjs/index";
 import { captureException, type OverseerEvent } from "../index";

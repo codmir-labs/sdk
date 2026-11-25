@@ -14,7 +14,7 @@ const chars = (r: () => number, alphabet: string, n: number): string => Array.fr
 const ALNUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 const TABLE: Array<[string, string, string]> = [
-  ["email", "contact jane.doe+x@example.co.uk now", "contact [email] now"],
+  ["email", "contact jane.doe+x@mail.example.com now", "contact [email] now"],
   ["ipv4", "from 192.168.1.20 failed", "from [ip] failed"],
   ["ipv6 compressed", "client 2001:db8::1 refused", "client [ip] refused"],
   ["ipv6 loopback", "listening on ::1", "listening on [ip]"],
@@ -46,7 +46,7 @@ describe("redact: table", () => {
   }
 
   it("takes any value without throwing", () => {
-    for (const v of [undefined, null, 0, NaN, {}, [], Symbol.iterator.toString(), new Error("boom: token=abc123"), { a: { b: "x@y.zz" } }, "\u0000\uD800"]) {
+    for (const v of [undefined, null, 0, NaN, {}, [], Symbol.iterator.toString(), new Error("boom: token=abc123"), { a: { b: "x@y.example" } }, "\u0000\uD800"]) {
       expect(typeof redact(v)).toBe("string");
     }
     const cyclic: Record<string, unknown> = {};
@@ -62,8 +62,8 @@ describe("redact: table", () => {
   });
 
   it("applies your own patterns first and keeps them stable", () => {
-    const own = [/ORDER-\d{6}/g];
-    const once = redact("failed ORDER-123456 for jane@example.com", own);
+    const own = [/order-\d{6}/g];
+    const once = redact("failed order-123456 for jane@example.com", own);
     expect(once).toBe("failed [redacted] for [email]");
     expect(redact(once, own)).toBe(once);
   });

@@ -2,7 +2,7 @@
  * @codmir/sdk/replay - Session Replay
  *
  * Records the page with rrweb (loaded lazily, only by this entry), masks inputs by default, and uploads
- * segments to Codmir (CSL-5612). Wire contract: `ReplaySegmentUploadSchema` in platform-v2 `@codmir/types`.
+ * segments to Codmir. Wire contract: `ReplaySegmentUploadSchema` in the platform's `@codmir/types`.
  *
  * Two ways in:
  * - `startReplay()` after `init()`: reads the client's `replaysSessionSampleRate` (default 0) and

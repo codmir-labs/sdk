@@ -1,5 +1,5 @@
 /**
- * @codmir/sdk/nextjs/server (CSL-5586): `http.server` transactions for Next.js App Router route handlers and
+ * @codmir/sdk/nextjs/server: `http.server` transactions for Next.js App Router route handlers and
  * middleware. Node runtime only: it needs `node:async_hooks`, so do not import it from an Edge route
  * (`export const runtime = "edge"`) or from Edge middleware; Next 15.5+ Node.js middleware is fine.
  *

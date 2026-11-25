@@ -221,7 +221,7 @@ describe("fileSink", () => {
 describe("expressLogs", () => {
   const fake = (over: Partial<{ originalUrl: string; route: { path?: unknown }; baseUrl: string }> = {}) => {
     const res = Object.assign(new EventEmitter(), { statusCode: 500 });
-    const req = { method: "GET", originalUrl: "/orders/12?token=abc&email=a@b.co", url: "/orders/12?token=abc", headers: { "user-agent": "curl/8.4" }, ...over };
+    const req = { method: "GET", originalUrl: "/orders/12?token=abc&email=a@example.com", url: "/orders/12?token=abc", headers: { "user-agent": "curl/8.4" }, ...over };
     return { req, res };
   };
   const spy = () => {
@@ -277,7 +277,7 @@ describe("honoLogs", () => {
       throw new Error("handler broke");
     });
     app.onError((_e, c) => c.text("failed", 500));
-    expect((await app.request("/users/5?token=abc&e=a@b.co", { headers: { "user-agent": "Mozilla/5.0 Chrome/1 Safari/1" } })).status).toBe(200);
+    expect((await app.request("/users/5?token=abc&e=a@example.com", { headers: { "user-agent": "Mozilla/5.0 Chrome/1 Safari/1" } })).status).toBe(200);
     expect((await app.request("/boom?secret=1")).status).toBe(500);
     expect((await app.request("/nope?x=1")).status).toBe(404);
     expect(seen.map((r) => [r.method, r.path, r.status])).toEqual([

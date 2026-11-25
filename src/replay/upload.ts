@@ -1,6 +1,6 @@
 /**
- * Segment upload for session replay (CSL-5612). Wire contract: `ReplaySegmentUploadSchema` in platform-v2
- * `@codmir/types` (CSL-5611), mirrored in `__tests__/helpers.ts`. Nothing here throws into the page.
+ * Segment upload for session replay. Wire contract: `ReplaySegmentUploadSchema` in the platform's
+ * `@codmir/types`, mirrored in `__tests__/helpers.ts`. Nothing here throws into the page.
  */
 
 import { scrubUrl } from "../overseer/url-scrub";

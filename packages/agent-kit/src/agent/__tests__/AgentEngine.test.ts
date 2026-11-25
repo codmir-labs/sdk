@@ -262,7 +262,7 @@ describe('AgentEngine', () => {
       expect(seen).toEqual(['context_built', 'decisions_made:1/1', 'processing_complete:1'])
     })
 
-    it('emits decision_made for each decision it keeps (CSL-5552)', async () => {
+    it('emits decision_made for each decision it keeps', async () => {
       const engine = make()
       await engine.initialize()
       const seen: Decision[] = []
@@ -273,7 +273,7 @@ describe('AgentEngine', () => {
       expect(seen).toEqual(result.decisions)
     })
 
-    it('emits learning_generated for each learning it extracts (CSL-5552)', async () => {
+    it('emits learning_generated for each learning it extracts', async () => {
       const engine = make({ learningEnabled: true })
       await engine.initialize()
       const extracted = [{ id: 'l1', description: 'a' }, { id: 'l2', description: 'b' }]
@@ -286,7 +286,7 @@ describe('AgentEngine', () => {
       expect(seen).toEqual(extracted)
     })
 
-    it('emits no learning_generated when learning is disabled (CSL-5552)', async () => {
+    it('emits no learning_generated when learning is disabled', async () => {
       const engine = make({ learningEnabled: false })
       await engine.initialize()
       const seen: unknown[] = []
@@ -388,7 +388,7 @@ describe('AgentEngine', () => {
         expect(result.actions[0].result!.output.error).toContain('Missing required capabilities: ticket_creation')
       })
 
-      it('completes the ticket action it creates from a bug report (CSL-5546)', async () => {
+      it('completes the ticket action it creates from a bug report', async () => {
         const engine = make()
         await engine.initialize()
         const result = await run(engine, conversation(BUG_REPORT))

@@ -1,5 +1,5 @@
 /**
- * CSL-5637: the request a server handler is serving, so an error captured inside it carries `request.url` (origin and
+ * The request a server handler is serving, so an error captured inside it carries `request.url` (origin and
  * path) and `request.method`. Never the query string, a fragment, credentials, headers, cookies or a body.
  *
  * Browser-safe: this module imports nothing from Node. The storage is a strategy, like the tracing context's: the

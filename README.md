@@ -1996,6 +1996,7 @@ npm test
 | `npm run lint` | ESLint over `src/` |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run check:dist` | Every file the `exports` map points at exists in `dist` |
+| `npm run check:words` | No ticket key, private name or personal address in a tracked file or its name; CI runs it |
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, and report bugs in
 [GitHub Issues](https://github.com/codmir-labs/sdk/issues).

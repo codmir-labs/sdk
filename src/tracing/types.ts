@@ -1,6 +1,6 @@
 /**
- * Wire types for tracing (CSL-5575). They mirror `SpanSchema` and `TransactionEventSchema` in platform-v2
- * packages/types/src/api/analytics.ts (commit 4c49b06f9); the tests validate against a copy of that schema.
+ * Wire types for tracing. They mirror `SpanSchema` and `TransactionEventSchema` in the platform's
+ * analytics schemas; the tests validate against a copy of that schema.
  */
 
 export type SpanStatus = "ok" | "error" | "cancelled" | "unknown";

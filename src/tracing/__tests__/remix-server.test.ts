@@ -1,4 +1,4 @@
-/** CSL-5586: Remix loader/action and request-handler wrappers open an http.server transaction. */
+/** Remix loader/action and request-handler wrappers open an http.server transaction. */
 import { describe, expect, it } from "vitest";
 import { withCodmirRequestHandler, withCodmirTracing } from "../../remix/server";
 import { flush } from "../../overseer/index";

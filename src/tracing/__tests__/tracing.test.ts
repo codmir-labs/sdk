@@ -1,4 +1,4 @@
-/** CSL-5575: spans, sampling, traceparent propagation and fetch instrumentation. */
+/** spans, sampling, traceparent propagation and fetch instrumentation. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { close, flush, init } from "../../overseer/index";
 import { setRandomFill } from "../propagation";

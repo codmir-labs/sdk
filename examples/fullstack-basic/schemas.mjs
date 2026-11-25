@@ -1,11 +1,11 @@
 /**
  * Wire schemas the capture server validates against: Zod copies of the platform's own contracts.
  *
- * Source: codmir-labs/platform-v2 `origin/development` @ 7ad8cc79e41066cfdc771883a9a6f1191aa770fa
- *   - packages/types/src/api/overseer-replay.ts  (ReplaySegmentUploadSchema, ReplayUploadResponseSchema)
- *   - packages/types/src/api/overseer-ingest.ts  (error event shapes)
- *   - packages/types/src/api/analytics.ts        (TelemetryIngestBodySchema, TransactionEventSchema)
- * Copied, not imported: the platform repo is private. When those files change, change this one too.
+ * Source: the platform's schemas for
+ *   - the replay segment upload (ReplaySegmentUploadSchema, ReplayUploadResponseSchema)
+ *   - the error event shapes
+ *   - the telemetry envelope (TelemetryIngestBodySchema, TransactionEventSchema)
+ * Copied, not imported: the platform's code is private. When those schemas change, change this file too.
  */
 import { z } from "zod";
 

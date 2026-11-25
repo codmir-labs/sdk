@@ -1,7 +1,7 @@
 import type { StackFrame } from "./index";
 
 /**
- * CSL-5636: stack string -> frames, for every engine's format. Top frame first, as the engine prints them.
+ * Stack string -> frames, for every engine's format. Top frame first, as the engine prints them.
  *
  * - V8 (Node, Chrome, Edge): `at fn (file:l:c)`, `at file:l:c`, `at async fn (file:l:c)`, `at new Foo (file:l:c)`,
  *   `at fn (eval at g (file:l:c), <anonymous>:l:c)`, `at fn (native)`, `at fn (<anonymous>)`.

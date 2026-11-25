@@ -1,5 +1,5 @@
 /**
- * @codmir/sdk/remix/server (CSL-5586): `http.server` transactions for Remix. Node only.
+ * @codmir/sdk/remix/server: `http.server` transactions for Remix. Node only.
  *
  * ```ts
  * // server.ts: the whole request, loaders and actions included

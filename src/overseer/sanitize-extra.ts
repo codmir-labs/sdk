@@ -1,5 +1,5 @@
 /**
- * CSL-5639: the one place an event's `extra` is cleaned, at the core `captureException` boundary, so an integration
+ * The one place an event's `extra` is cleaned, at the core `captureException` boundary, so an integration
  * (or a caller) can never put a request, its headers, cookies, authorization, query, params or body on the wire.
  * What is wanted from a request is `event.request` (origin, path, method) and a route pattern, set elsewhere.
  *

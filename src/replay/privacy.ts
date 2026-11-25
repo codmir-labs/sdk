@@ -1,5 +1,5 @@
 /**
- * Privacy config for the rrweb recorder (CSL-5612). Inputs are masked by default, and a password field is masked
+ * Privacy config for the rrweb recorder. Inputs are masked by default, and a password field is masked
  * whatever the config says: `maskInputOptions.password` is forced on after the user's options are applied.
  */
 

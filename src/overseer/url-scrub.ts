@@ -1,7 +1,7 @@
 /**
- * CSL-5640: a URL as an event field keeps its origin and path and nothing after them. A query string or fragment can hold
+ * A URL as an event field keeps its origin and path and nothing after them. A query string or fragment can hold
  * `access_token=`, a reset code or an OAuth `#access_token=`, and a breadcrumb or transaction would carry it with every error.
- * Browser-safe: no Node import. Same rule as the request scope's `requestScopeFrom` (CSL-5637).
+ * Browser-safe: no Node import. Same rule as the request scope's `requestScopeFrom`.
  */
 
 /**

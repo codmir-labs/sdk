@@ -212,7 +212,7 @@ const result = await ticketAgent.createTicketAutonomously({
 
 // Analyze existing ticket
 const analysis = await ticketAgent.analyzeTicket({
-  ticketId: 'TICKET-123',
+  ticketId: 'ticket-123',
   context,
   includeRecommendations: true
 })
@@ -225,7 +225,7 @@ const taskAgent = sdk.agents.taskAgent
 
 // Break down complex task
 const breakdown = await taskAgent.breakdownTask({
-  taskId: 'TASK-456',
+  taskId: 'task-456',
   description: 'Implement new feature',
   context,
   maxDepth: 3,
@@ -234,7 +234,7 @@ const breakdown = await taskAgent.breakdownTask({
 
 // Monitor task execution
 const monitoring = await taskAgent.monitorTaskExecution({
-  taskId: 'TASK-456',
+  taskId: 'task-456',
   context,
   realTime: true
 })
@@ -340,7 +340,7 @@ const taskIntel = sdk.intelligence.task
 
 // Analyze task complexity
 const analysis = await taskIntel.analyzeTask({
-  taskId: 'TASK-789',
+  taskId: 'task-789',
   description: taskDescription,
   context,
   includeSubtasks: true
@@ -361,14 +361,14 @@ const projectIntel = sdk.intelligence.project
 
 // Get project overview
 const overview = await projectIntel.getProjectOverview({
-  projectId: 'PROJ-123',
+  projectId: 'proj-123',
   context,
   includeMetrics: true
 })
 
 // Analyze project health
 const health = await projectIntel.analyzeProjectHealth({
-  projectId: 'PROJ-123',
+  projectId: 'proj-123',
   context,
   depth: 'comprehensive'
 })

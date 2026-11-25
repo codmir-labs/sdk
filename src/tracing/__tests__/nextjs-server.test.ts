@@ -1,4 +1,4 @@
-/** CSL-5586: Next.js App Router wrappers open an http.server transaction. */
+/** Next.js App Router wrappers open an http.server transaction. */
 import { describe, expect, it } from "vitest";
 import { withCodmirMiddleware, withCodmirTracing } from "../../nextjs/server";
 import { flush } from "../../overseer/index";

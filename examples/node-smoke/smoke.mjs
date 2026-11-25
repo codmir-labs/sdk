@@ -1,5 +1,5 @@
 /**
- * Node smoke for @codmir/sdk (CSL-5628): sends ONE error, ONE transaction with a child span and ONE replay segment
+ * Node smoke for @codmir/sdk: sends ONE error, ONE transaction with a child span and ONE replay segment
  * to a Codmir project and checks that each was accepted.
  *
  *   CODMIR_DSN=<base> CODMIR_KEY=<project key> npm run smoke

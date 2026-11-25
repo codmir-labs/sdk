@@ -165,7 +165,7 @@ describe("a drain's records: every rule, fed three ways", () => {
   });
 
   it("no id, address, referer, host or query is kept, shown or sent", async () => {
-    const secrets = ["SECRET-REQ-ID-77", "203.0.113.9", "https://ref.example/page", "secret-host.example.com", "token=hunter2", "ja3digestABC", "ja4digestDEF", "rule_SECRETRULE"];
+    const secrets = ["secret-req-id-77", "203.0.113.9", "https://ref.example/page", "secret-host.example.com", "token=hunter2", "ja3digestABC", "ja4digestDEF", "rule_SECRETRULE"];
     const states: LogState[] = [];
     const m = createLogMonitor({ store: { load: () => undefined, save: (s) => void states.push(s) } });
     const records = [

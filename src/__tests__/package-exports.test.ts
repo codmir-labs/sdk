@@ -12,7 +12,7 @@ function leafFiles(node: unknown): string[] {
   return Object.values(node as Record<string, unknown>).flatMap(leafFiles);
 }
 
-// CSL-5590: @codmir/sdk is the error, tracing and replay SDK. Agent, council, serverless and runtime
+// @codmir/sdk is the error, tracing and replay SDK. Agent, council, serverless and runtime
 // code lives in the private @codmir/agent-kit workspace and must not leak back into the published exports.
 const CORE_SUBPATHS = [
   ".",
@@ -54,7 +54,7 @@ describe("@codmir/sdk package exports", () => {
     }
   });
 
-  // CSL-5601: the published 2.0.1 shipped 0 declarations because `build` had no --dts.
+  // The published 2.0.1 shipped 0 declarations because `build` had no --dts.
   it("builds with --dts so the declarations exist", () => {
     expect(pkg.scripts.build).toContain("--dts");
   });

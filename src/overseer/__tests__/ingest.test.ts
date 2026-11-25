@@ -1,5 +1,5 @@
 /**
- * CSL-5492: @codmir/sdk 2.0.1 posted flat events the deployed server silently dropped, never checked `res.ok`,
+ * @codmir/sdk 2.0.1 posted flat events the deployed server silently dropped, never checked `res.ok`,
  * lost events on unload and defaulted its endpoint to the customer's own origin. These tests pin the fix.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,9 +7,8 @@ import { z } from "zod";
 import { OverseerClient } from "../index";
 import { buildBody, retryDelayMs, sdkFingerprint, toWireEvent, MAX_QUEUE_SIZE, RETRY_MAX_MS } from "../transport";
 
-// Copied from platform-v2 packages/types/src/api/overseer-ingest.ts (codmir-labs/platform-v2 #803,
-// `OverseerWrapperErrorEventSchema`) and apps/api/src/lib/overseer/store-errors.ts (`IngestedError`), plus the
-// envelope in packages/types/src/api/analytics.ts (`TelemetryIngestBodySchema`). Keep in sync by hand.
+// Copied from the platform's error ingest schema (`OverseerWrapperErrorEventSchema`) and its stored shape
+// (`IngestedError`), plus the envelope (`TelemetryIngestBodySchema`). Keep in sync by hand.
 const WrapperErrorEventSchema = z.object({
   type: z.literal("error"),
   event: z
@@ -127,8 +126,8 @@ describe("wire shape (criterion 1)", () => {
     expect(wire.exception).toBeUndefined();
   });
 
-  it("fingerprints like the platform's sdkFingerprint and ErrorTracker.generateFingerprint", () => {
-    // Port of apps/api/src/__tests__/overseer-ingest-sdk-5492.test.ts "fingerprints the way ErrorTracker groups".
+  it("fingerprints like the platform's sdkFingerprint and its error grouping", () => {
+    // Port of the platform's own test of the same name, "fingerprints the way ErrorTracker groups".
     // There, ErrorTracker produced this array for the stack below; here it is written out because @codmir/overseer
     // is not a dependency of the SDK: name, first in-app `file:line`, message with digits -> <N>.
     const expectedFromErrorTracker = ["Error", "/srv/app/src/checkout.ts:42", "order <N> not found"];

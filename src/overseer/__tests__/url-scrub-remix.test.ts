@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-/** CSL-5640: the remix navigation breadcrumbs (page load, pushState, replaceState, popstate) keep origin and path only. */
+/** The remix navigation breadcrumbs (page load, pushState, replaceState, popstate) keep origin and path only. */
 import { beforeAll, describe, expect, it } from "vitest";
 import * as nav from "../../remix/index";
 import { captureException, type OverseerEvent } from "../index";

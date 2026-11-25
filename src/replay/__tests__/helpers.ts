@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-// Copied from platform-v2 packages/types/src/api/overseer-replay.ts (CSL-5611, merged in platform-v2 7ad8cc79e, origin/development):
+// Copied from the platform's replay schemas:
 // `ReplaySegmentUploadSchema`, `ReplayUploadResponseSchema`. Keep in sync by hand.
 const ReplayEventSchema = z.object({ type: z.number(), timestamp: z.number() }).passthrough();
 
