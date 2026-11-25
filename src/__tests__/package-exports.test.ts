@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as {
@@ -64,6 +64,20 @@ describe("@codmir/sdk package exports", () => {
       const cond = target as Record<string, { types: string; default: string }>;
       expect(cond.import.types, subpath).toBe(cond.import.default.replace(/\.js$/, ".d.ts"));
       expect(cond.require.types, subpath).toBe(cond.require.default.replace(/\.cjs$/, ".d.cts"));
+    }
+  });
+
+  // Releases go through the release job of the CI workflow (semantic-release): a version below npm `latest` is refused
+  // there. A script that runs `npm publish` by hand would skip that check.
+  it("has no script that publishes to npm by hand", () => {
+    const PUBLISH = /\b(?:npm|pnpm|yarn)\s+publish\b/;
+    for (const [name, command] of Object.entries(pkg.scripts)) expect(command, `package.json script ${name}`).not.toMatch(PUBLISH);
+    const files = (dir: URL): URL[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+        entry.isDirectory() ? files(new URL(`${entry.name}/`, dir)) : [new URL(entry.name, dir)],
+      );
+    for (const file of files(new URL("../../scripts/", import.meta.url))) {
+      expect(readFileSync(file, "utf8"), file.pathname).not.toMatch(PUBLISH);
     }
   });
 });

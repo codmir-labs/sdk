@@ -47,6 +47,11 @@ Use [GitHub Issues](https://github.com/codmir-labs/sdk/issues) to report bugs. I
 - No `any` types without justification
 - Run `npm run lint` before committing
 
+## Releases
+
+Releases go through the release job of the CI workflow, run by a maintainer on `main`, and nothing else. Do not
+publish to npm from a machine; no script in this repository does (see "Releasing" in the README).
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under the Apache 2.0 License.

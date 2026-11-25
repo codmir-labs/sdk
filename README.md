@@ -1968,7 +1968,7 @@ To [`packages/agent-kit`](packages/agent-kit), a private workspace in this repo 
 | [`examples/log-read/`](examples/log-read) | Nine small logs (JSON lines, pino, Vercel, Railway, the journal, an access log, text, a container's output) with one planted bug, and `codmir-logs` finding it with the network refused |
 | [`examples/nextjs-build/`](examples/nextjs-build) | A Next.js app that imports `@codmir/sdk/nextjs` in a client component, `app/error.tsx`, `pages/_app.tsx` and an `instrumentation.ts` next to a middleware, and must build |
 | [`packages/agent-kit/`](packages/agent-kit) | `@codmir/agent-kit`: agent runtime, council, serverless, task-runner protocol, AI-call monitoring, MCP client and framework task helpers; private, never published |
-| [`scripts/`](scripts) | `check-dist-types.mjs` (every export target exists after a build) and `publish.sh` (manual publish) |
+| [`scripts/`](scripts) | `check-dist-types.mjs`: every export target exists after a build |
 | [`docs/assets/`](docs/assets) | This page's hero and icons |
 | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Typecheck, lint, tests, build and dist checks on Node 18, 20 and 22, and the example smoke and the Next.js build smoke on Node 20, on every push and pull request to `main`; the release job, with semantic-release, runs only when a maintainer dispatches the workflow by hand ([Releasing](#releasing)) |
 | [`.github/release/`](.github/release) | `no-downgrade.cjs`, the semantic-release plugin that refuses a version not above npm `latest`, and the tests of it and of the release job |
@@ -2007,7 +2007,7 @@ A push or a merge to `main` runs the CI checks and never releases. A maintainer 
 Actions, run the **CI** workflow on `main` (**Run workflow**, or `gh workflow run ci.yml --ref main`). Once the build
 matrix passes, the release job runs semantic-release. It takes the next version from the conventional commits since
 the last `v*` tag, updates `CHANGELOG.md` and `package.json`, tags the release, publishes it to npm and creates a
-GitHub release.
+GitHub release. Releases go through that workflow and nothing else: no script of this repository publishes to npm.
 
 The release refuses any version that is not above the npm `latest` of `@codmir/sdk`, prereleases included. The check
 is [`.github/release/no-downgrade.cjs`](.github/release/no-downgrade.cjs), a semantic-release plugin listed in the
