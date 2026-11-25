@@ -160,9 +160,12 @@ async function probe(client: OverseerClient, config: OverseerConfig, where: stri
     }).catch(() => null);
     if (!res) return `Could not reach ${where}.`;
     if (!res.ok) return refusal(where, res.status);
-    const [dropped] = await readDroppedEvents(res);
+    const said = await answerOf(res);
+    if (!said) return `${where} answered ${res.status}, but not the way the ingest address does.`;
+    const [dropped] = await readDroppedEvents({ json: async () => said });
     if (!dropped) return { id: event.id };
-    return `${where} answered ${res.status} but dropped the event${/^[a-z_]{1,40}$/.test(String(dropped.reason)) ? ` (${dropped.reason})` : ""}.`;
+    const reason = /^[a-z_]{1,40}$/.test(String(dropped.reason)) ? dropped.reason : "";
+    return `${where} ${DROPPED.get(reason) ?? `answered ${res.status} but dropped the event`}${reason ? ` (${reason})` : ""}.`;
   };
   try {
     return await Promise.race([ask(), late]);
@@ -171,6 +174,25 @@ async function probe(client: OverseerClient, config: OverseerConfig, where: stri
     controller.abort();
   }
 }
+
+/** The JSON object the server answered, `{}` for an empty answer, `null` for anything else (a page, say). */
+async function answerOf(res: Response): Promise<object | null> {
+  try {
+    const text = await res.text();
+    const said: unknown = text.trim() ? JSON.parse(text) : {};
+    return typeof said === "object" ? said : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Why an event that was answered 2xx was not stored, in words. */
+const DROPPED = new Map([
+  ["no_project_key", "does not know this client key"],
+  ["payment_required", "has no card on file for this project"],
+  ["insufficient_credits", "has no balance left for this project"],
+  ["unsupported_type", "does not store messages, so the key could not be checked"],
+]);
 
 /** The scheme, host and port of a web address, or "" for anything else. Never a path, query or credentials. */
 function originOf(dsn: string): string {

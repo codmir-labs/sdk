@@ -170,11 +170,27 @@ describe("it fails, in one sentence, when", () => {
     expect(hits).toHaveLength(0);
   });
 
-  it("the answer says the event was dropped", async () => {
-    answer = { status: 200, body: '{"droppedEvents":[{"index":0,"reason":"payment_required"}]}' };
+  // A key the server does not know is answered 200, with the event dropped.
+  it.each([
+    ["no_project_key", "does not know this client key (no_project_key)."],
+    ["payment_required", "has no card on file for this project (payment_required)."],
+    ["insufficient_credits", "has no balance left for this project (insufficient_credits)."],
+    ["unsupported_type", "does not store messages, so the key could not be checked (unsupported_type)."],
+    ["store_failed", "answered 200 but dropped the event (store_failed)."],
+    ["constructor", "answered 200 but dropped the event (constructor)."],
+    ["Bearer osk_secret", "answered 200 but dropped the event."],
+  ])("the answer says the event was dropped: %s", async (reason, words) => {
+    answer = { status: 200, body: JSON.stringify({ received: true, processed: 1, droppedEvents: [{ index: 0, reason, type: "message" }] }) };
     const r = await verify({ dsn: `${url}/v`, clientKey: KEY });
     expect(r.success).toBe(false);
-    expect(sentence(r)).toBe(`${url} answered 200 but dropped the event (payment_required).`);
+    expect(sentence(r)).toBe(`${url} ${words}`);
+  });
+
+  it.each([["a page", "<!doctype html><title>Hello</title>"], ["a word", '"ok"'], ["null", "null"], ["half of it", '{"received":tr']])("the answer is %s", async (_what, body) => {
+    answer = { status: 200, body };
+    const r = await verify({ dsn: `${url}/v`, clientKey: KEY });
+    expect(r.success).toBe(false);
+    expect(sentence(r)).toBe(`${url} answered 200, but not the way the ingest address does.`);
   });
 
   it("the dsn is not a web address", async () => {
@@ -202,6 +218,11 @@ describe("it succeeds when the server took the event", () => {
     expect(wire).toMatchObject({ id: r.eventId, message: "Codmir SDK setup verified", tags: { source: "sdk-verify" } });
     expect(timers()).toBeLessThanOrEqual(before);
     expect(printVerifyResult(r)).toContain("[OK]   Connection verified");
+  });
+
+  it.each([["the real one", '{"received":true,"processed":1,"breakdown":{"errors":0}}'], ["an empty one", ""], ["an empty list", '{"droppedEvents":[]}']])("2xx with %s", async (_what, body) => {
+    answer = { status: 200, body };
+    expect(await verify({ dsn: `${url}/v`, clientKey: KEY })).toMatchObject({ success: true });
   });
 
   it("two at once are two requests and two answers", async () => {

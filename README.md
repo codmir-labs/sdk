@@ -1571,7 +1571,7 @@ Codmir SDK Verification
 =======================
 [OK]   Initialize SDK ..................... 0ms
 [OK]   Send test event .................... 1ms
-[FAIL] https://www.codmir.com refused the client key (status 401): check that it is this project's key.
+[FAIL] https://www.codmir.com does not know this client key (no_project_key).
 ```
 
 > [!NOTE]
@@ -1579,9 +1579,10 @@ Codmir SDK Verification
 > own and reads the answer to that message. It succeeds only when the server answers 2xx and did not refuse the event;
 > it fails when there is no `clientKey` (the SDK reads no environment variable for it, so pass your own), the server
 > answers 401 or 403 (key refused), 402 (the project has no balance), 404 (nothing at that address), 429 or another 4xx
-> or 5xx, the host can not be reached, no answer comes within `timeout`, the answer says it dropped the event, or the
-> config drops it before it is sent (`enabled: false`, `sampleRate: 0`, a `beforeSend` that returns `null`). It does
-> not retry. It never touches the client your app made (its tags, user, queue, breadcrumbs and replay stay as they
+> or 5xx, the host can not be reached, no answer comes within `timeout`, the answer is not the ingest address's, the
+> answer says the event was dropped (the Codmir server answers 200 to a key it does not know and to a project with no
+> card or no balance, and names the reason), or the config drops it before it is sent (`enabled: false`,
+> `sampleRate: 0`, a `beforeSend` that returns `null`). It does not retry. It never touches the client your app made (its tags, user, queue, breadcrumbs and replay stay as they
 > were), starts no listener or patch and leaves no timer behind, so it is safe to call inside your app. The client your
 > app made stays initialised. `quickVerify(key, { dsn })` gives only the yes or no; a DSN alone carries no key, so
 > `quickVerify(dsn)` is `false`.
