@@ -44,7 +44,7 @@ describe("cause frames use the app origins", () => {
   it("an aggregate whose inner frames are on the init caller's CDN origin has in-app causes, a fingerprint and a culprit from them", async () => {
     const wire = capture(await anyFailure(at(`${CDN}/app/main.js:10:5`), at(`${CDN}/app/main.js:20:5`)), {}, `${CDN}/app/boot.js:1:1`);
     expect(wire.event.exception.causes!.map((c) => c.stacktrace![0]!.in_app)).toEqual([true, true]);
-    expect(wire.group.fingerprint[1]).toBe(`${CDN}/app/main.js:10`);
+    expect(wire.group.fingerprint[1]).toBe("/app/main.js:load");
     expect(wire.group.culprit).toBe(`${CDN}/app/main.js:10`);
   });
 

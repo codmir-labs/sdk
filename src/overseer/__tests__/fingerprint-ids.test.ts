@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { sdkFingerprint } from "../transport";
+import { legacyFingerprint } from "../transport";
+
+// The masks of the key before v2. They are the legacy key's, which travels as `group.legacyFingerprint`; the message
+// of a key with no frame is folded by the log monitor's rules first (see grouping-v2.test.ts).
 
 const base = { id: "x", type: "error", timestamp: "t", level: "error" };
-const fp = (value: string) => sdkFingerprint({ ...base, exception: { type: "Error", value } });
+const fp = (value: string) => legacyFingerprint({ ...base, exception: { type: "Error", value } });
 
-describe("fingerprint masks ids before digits", () => {
+describe("the legacy fingerprint masks ids before digits", () => {
   it("gives one fingerprint to messages that differ only by a UUID", () => {
     const a = fp("User 3f2a9c1e-8b7d-4e6f-a5b4-c3d2e1f0a9b8 not found");
     const b = fp("User 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d not found");

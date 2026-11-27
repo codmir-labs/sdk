@@ -37,6 +37,7 @@ import { callerOrigin, normalizeOrigins, parseStackTrace } from "./stack";
 import { collectCauses } from "./causes";
 import { installProcessErrors } from "./process-errors";
 import { userForWire } from "./user-pii";
+import { setAppRoot } from "./frame-file";
 import {
   DEFAULT_DSN,
   KEEPALIVE_MAX_BYTES,
@@ -393,6 +394,14 @@ class OverseerClient {
     // The page origin of the code that called `init()`: its frames are the app's even when the bundle sits on a CDN.
     const caller = callerOrigin(new Error().stack);
     if (caller && !this.config.inAppOrigins.includes(caller)) this.config.inAppOrigins.push(caller);
+    // The app root a Node frame's path is made relative to in the group key.
+    if (typeof process !== "undefined" && typeof process.cwd === "function") {
+      try {
+        setAppRoot(process.cwd());
+      } catch {
+        // a deleted working directory: no root
+      }
+    }
 
     if (this.config.debug) {
       console.log("[Overseer] Initialized", {

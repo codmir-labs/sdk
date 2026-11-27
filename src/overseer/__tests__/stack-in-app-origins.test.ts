@@ -11,7 +11,7 @@ afterEach(() => vi.unstubAllGlobals());
 const EXT = "chrome-extension://nkbihfbeogaeaoehlefnkodbefgpgknn/inpage.js:1:23456";
 const GTM = "https://www.googletagmanager.com/gtm.js:240:7";
 const APP = `${PAGE}/static/js/main.js:1:9912`;
-const stack = (...locs: string[]) => `TypeError: Failed to fetch\n${locs.map((l, i) => `    at fn${i} (${l})`).join("\n")}`;
+const stack = (...locs: string[]) => `TypeError: Failed to fetch\n${locs.map((l, i) => `    at render${i} (${l})`).join("\n")}`;
 
 type Wire = { group: { fingerprint: string[]; culprit?: string }; event: { exception: { stacktrace: Array<{ filename?: string; in_app?: boolean }> } } };
 function captureFrom(origins: string[] | undefined, errStack: string, initStack?: string): Wire {
@@ -46,7 +46,7 @@ describe("extension frames are never app code", () => {
   it("an extension that wraps fetch does not own the app's group or culprit", () => {
     page();
     const w = captureFrom(undefined, stack(EXT, APP));
-    expect(w.group.fingerprint[1]).toBe(`${PAGE}/static/js/main.js:1`);
+    expect(w.group.fingerprint[1]).toBe("/static/js/main.js:render1");
     expect(w.group.culprit).toBe(`${PAGE}/static/js/main.js:1`);
   });
 });
@@ -56,7 +56,7 @@ describe("in a browser, an http(s) frame is app code only on an app origin", () 
     page();
     const w = captureFrom(undefined, stack(GTM, APP));
     expect(w.event.exception.stacktrace.map((f) => f.in_app)).toEqual([false, true]);
-    expect(w.group.fingerprint[1]).toBe(`${PAGE}/static/js/main.js:1`);
+    expect(w.group.fingerprint[1]).toBe("/static/js/main.js:render1");
     expect(w.group.culprit).toBe(`${PAGE}/static/js/main.js:1`);
   });
 
@@ -65,7 +65,7 @@ describe("in a browser, an http(s) frame is app code only on an app origin", () 
     const cdn = "https://cdn.example.net/assets/app.js:1:500";
     expect(callerOrigin(`Error\n    at OverseerClient.init (${cdn})\n    at init (${cdn})\n    at boot (${cdn})`)).toBe("https://cdn.example.net");
     const w = captureFrom(undefined, stack(GTM, cdn), `Error\n    at OverseerClient.init (${cdn})\n    at boot (${cdn})`);
-    expect(w.group.fingerprint[1]).toBe("https://cdn.example.net/assets/app.js:1");
+    expect(w.group.fingerprint[1]).toBe("/assets/app.js:render1");
     expect(w.group.culprit).toBe("https://cdn.example.net/assets/app.js:1");
   });
 
@@ -79,7 +79,7 @@ describe("in a browser, an http(s) frame is app code only on an app origin", () 
     const cdn = "https://static.example.com/app.js:1:500";
     // not listed: the CDN frame is third-party, so the group has no frame and keys on type and message
     expect(captureFrom(undefined, stack(GTM, cdn)).group.fingerprint).toHaveLength(2);
-    expect(captureFrom(["https://static.example.com/x/y", "nonsense"], stack(GTM, cdn)).group.fingerprint[1]).toBe("https://static.example.com/app.js:1");
+    expect(captureFrom(["https://static.example.com/x/y", "nonsense"], stack(GTM, cdn)).group.fingerprint[1]).toBe("/app.js:render1");
   });
 
   it("a frame on the page's own origin is app code", () => {

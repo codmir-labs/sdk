@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { OverseerClient } from "../index";
-import { buildBody, retryDelayMs, sdkFingerprint, toWireEvent, MAX_QUEUE_SIZE, RETRY_MAX_MS } from "../transport";
+import { buildBody, legacyFingerprint, retryDelayMs, sdkFingerprint, toWireEvent, MAX_QUEUE_SIZE, RETRY_MAX_MS } from "../transport";
 
 // Copied from the platform's error ingest schema (`OverseerWrapperErrorEventSchema`) and its stored shape
 // (`IngestedError`), plus the envelope (`TelemetryIngestBodySchema`). Keep in sync by hand.
@@ -109,7 +109,8 @@ describe("wire shape (criterion 1)", () => {
       environment: "production",
       release: "1.2.3",
       tags: { region: "eu" },
-      fingerprint: ["TypeError", "/srv/app/src/checkout.ts:42", "Cannot read properties of undefined (reading 'id')"],
+      // v2: the type and the in-app frame as file and function; no line, no message.
+      fingerprint: ["TypeError", "/srv/app/src/checkout.ts:handleCheckout"],
     });
     expect(typeof wire.event.id).toBe("string");
     // The SDK's other fields stay alongside.
@@ -118,6 +119,8 @@ describe("wire shape (criterion 1)", () => {
     expect(wire.event.breadcrumbs).toHaveLength(1);
     expect(wire.group).toEqual({
       fingerprint: wire.event.fingerprint,
+      // The key before v2, so the platform can find an issue that was created before it.
+      legacyFingerprint: ["TypeError", "/srv/app/src/checkout.ts:42", ERROR_MESSAGE.replace(/\d+/g, "<N>")],
       message: ERROR_MESSAGE,
       culprit: "/srv/app/src/checkout.ts:42",
       level: "error",
@@ -144,27 +147,30 @@ describe("wire shape (criterion 1)", () => {
         ],
       },
     };
-    expect(sdkFingerprint(flat)).toEqual(expectedFromErrorTracker);
+    // The platform's own copy for an event that carries no fingerprint stays this rule, which the SDK keeps as the
+    // legacy key; the key the SDK sends in `fingerprint` is the v2 one.
+    expect(legacyFingerprint(flat)).toEqual(expectedFromErrorTracker);
+    expect(sdkFingerprint(flat)).toEqual(["Error", "/srv/app/src/checkout.ts:handleCheckout"]);
   });
 
   it("masks digits and 8+ hex runs, slices to 100, and skips frames that are not in_app", () => {
     const base = { id: "x", type: "error", timestamp: "t", level: "error" };
-    const fp = sdkFingerprint({
-      ...base,
-      exception: {
-        type: "Error",
-        value: "user deadbeef12 got 404 " + "z".repeat(200),
-        stacktrace: [
-          { filename: "/node_modules/a.js", lineno: 1, in_app: false },
-          { filename: "/app/b.ts", lineno: 7, in_app: true },
-        ],
-      },
-    });
+    const value = "user deadbeef12 got 404 " + "z".repeat(200);
+    const stacktrace = [
+      { filename: "/node_modules/a.js", lineno: 1, in_app: false },
+      { filename: "/app/b.ts", function: "load", lineno: 7, in_app: true },
+    ];
+    // With a frame the message is not in the key, and a frame that is not in_app is skipped.
+    expect(sdkFingerprint({ ...base, exception: { type: "Error", value, stacktrace } })).toEqual(["Error", "/app/b.ts:load"]);
+    // Without one the message is, masked as before: legacy shows the whole chain.
+    const fp = legacyFingerprint({ ...base, exception: { type: "Error", value, stacktrace } });
     expect(fp[0]).toBe("Error");
     expect(fp[1]).toBe("/app/b.ts:7");
     // deadbeef12 is one run of 10 hex characters, so it masks to <ID> before digits are masked.
     expect(fp[2].startsWith("user <ID> got <N> zzz")).toBe(true);
     expect(fp[2]).toHaveLength(100);
+    // With no frame the message is folded (see grouping-v2.test.ts): the hex run and the number are masked.
+    expect(sdkFingerprint({ ...base, exception: { type: "Error", value: "user deadbeef12 got 404" } })).toEqual(["Error", "user [hex] got #"]);
     // 1001 and 2002 differ only in digits: same group.
     const a = sdkFingerprint({ ...base, exception: { type: "E", value: "order 1001 not found" } });
     const b = sdkFingerprint({ ...base, exception: { type: "E", value: "order 2002 not found" } });

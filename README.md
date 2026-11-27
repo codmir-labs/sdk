@@ -432,10 +432,11 @@ x-overseer-key: osk_example
           "runtime": { "name": "node", "version": "22.22.1" },
           "os": { "name": "linux", "version": "7.0.0-43-generic" }
         },
-        "fingerprint": ["TypeError", "/srv/app/src/checkout.js:42", "Card <N> declined for order <N>"]
+        "fingerprint": ["TypeError", "src/checkout.js:chargeCard", "src/checkout.js:placeOrder"]
       },
       "group": {
-        "fingerprint": ["TypeError", "/srv/app/src/checkout.js:42", "Card <N> declined for order <N>"],
+        "fingerprint": ["TypeError", "src/checkout.js:chargeCard", "src/checkout.js:placeOrder"],
+        "legacyFingerprint": ["TypeError", "/srv/app/src/checkout.js:42", "Card <N> declined for order <N>"],
         "message": "Card 4242 declined for order 1234",
         "culprit": "/srv/app/src/checkout.js:42",
         "level": "error"
@@ -450,13 +451,68 @@ x-overseer-key: osk_example
 
 </details>
 
-6. **Grouping.** The fingerprint is the error type, the `file:line` of the first in-app frame, and the message with
-   UUIDs masked as `<UUID>`, then runs of 8 or more hex characters with at least one letter as `<ID>`, then digits as `<N>`, cut to 100
-   characters. Two declined cards
-   with different numbers group together. When the error has `causes`, the frame and message come from the top error if it
-   has an in-app frame, else from the first cause that has one, and a fourth part is added: the type of the root cause (the
-   deepest `cause` link). Wrapped errors thrown at one line therefore group once by their root cause, and every
-   `Promise.any` failure by where its first inner error came from. Set `event.fingerprint` in `beforeSend` to group your own way.
+6. **Grouping.** An issue is where the error happens, not what it says. The fingerprint (`group.fingerprint`, and
+   `event.fingerprint`) is:
+   - the error type;
+   - the first 3 in-app frames, each as `<file>:<function>`;
+   - when the error has `causes`, the type of the root cause (the deepest `cause` link) as the last part.
+
+   The frames come from the top error if it has an in-app frame, else from the first cause that has one. Fewer than 3
+   in-app frames gives fewer parts. The example above is `["TypeError", "src/checkout.js:chargeCard",
+   "src/checkout.js:placeOrder"]`: the app root is `/srv/app`, where the process ran when `init()` was called.
+
+   **Why not the line.** A line number moves with any edit above it, so every deploy that touched the top of a file made
+   the same recurring bug a new issue, ticket and fix. The function name does not move. An anonymous function is keyed
+   by its trimmed source line when the frame has one (in Node the first three in-app frames do), and by its line number
+   only when it has nothing else.
+
+   **Why not the message.** The same bug reads differently in Chrome, Firefox, Safari and Hermes, and carries whatever
+   the user typed: an email, a slug, a quoted value, an id, a date. With a frame to say where, the message is left out.
+   An error with no in-app frame has nothing else, so it keeps its message, folded like a log line is: quoted values,
+   dates, times, durations, short hashes, numbers and emails folded, a URL cut to its path, then UUIDs, long hex runs and
+   digits masked, cut to 100 characters. The repeat cap (`rateLimit`) groups a `captureMessage` the same way.
+
+   **The file is normalized, for the key only** (the frames that are sent keep theirs):
+   - an `http(s)` URL keeps its path: no scheme, host, query or fragment, so tenant hosts, `www` and the apex, preview
+     aliases and `?v=` cache-busters are one;
+   - `file://` and Hermes' `address at ` prefixes are dropped;
+   - the iOS app container, an Android app-data directory and an `app.asar/` prefix become `app:///`, so one install or
+     OS user is the same as another;
+   - a Node absolute path inside the app root (`process.cwd()` at `init()`) is made relative to it;
+   - `/releases/<id>/` becomes `/releases/<release>/`;
+   - a content hash before the extension is removed: a `.` or `-` segment of 8 or more characters made of hex digits, or
+     of letters and digits with at least one of each, so `main.3f2a9c1e.js` is `main.js` and `index-8f2a1b3c.js` is
+     `index.js`; or Rollup's (and so Vite's): exactly the last 8 characters of the name, after a `-` or `.`, made of
+     letters, digits, `_` and `-` with at least one digit or upper-case letter, so `index-Dx_9lC-p.js` is `index.js`.
+     `.chunk`, `.bundle` and `.min` before `.js`, `.mjs` or `.cjs` are part of the extension, so
+     `main.3f2a9c1e.chunk.js` is `main.chunk.js`. `index-header.js`, `vendor-react.js` and `app-settings.js` keep their
+     names.
+
+   A function name loses `async `, `new `, `[as x]`, generic receivers such as `Object.` and `Module.`, and Firefox's
+   `promise callback*`.
+
+   **Minified bundles.** A minifier renames functions, and differently in every build (`p`, `x`, `C`, then `s`, `x`,
+   `_`), so a function name there would start a new group on each deploy. A frame whose function looks mangled keys as
+   its normalized file alone: a name of 1 or 2 characters (letters, digits, `_`, `$`), or of 3 on line 1 or 2 at a
+   column above 1000, deep inside a one-line bundle. So does an anonymous frame with no source line on line 1 or 2 at a
+   column above 1000, whose line number says nothing there. In a method name such as `e.charge`, a mangled class name
+   before the method is dropped by the same rule and the method name is kept (`charge`), because a minifier renames
+   classes and not properties; a class name that does not look mangled (`OrderService.charge`) stays. Only a mangled
+   function name, not a dropped class name, adds the message below. When any of the key's frames is one of these, the folded
+   message (as above) is added after the frame parts, so two different errors in one bundle stay apart and each stays
+   stable across deploys, with no source map. To get frame-based grouping back, keep the names in the bundler: esbuild
+   `keepNames`, terser `keep_fnames` and `keep_classnames`. Source maps are not used for grouping yet.
+
+   **The legacy key and the one-time move.** Releases before this one keyed on the type, the first in-app frame's
+   `file:line` and the masked message. Every error still carries that key as `group.legacyFingerprint`, so the platform
+   can attach a new event to an issue created before: it falls back to `legacyFingerprint` when no issue has the new key.
+   That is the one-time move: the first error of a bug after the upgrade finds its old issue by the legacy key and
+   carries on under the new one, so an open issue keeps its ticket and history. A bug whose old issue no longer matches
+   its legacy key (its line or message had changed since) starts one new issue. The platform's own copy of the
+   fingerprint, for events that carry none (an older SDK's), stays the old rule.
+
+   Set `event.fingerprint` in `beforeSend` to group your own way: it wins, and then no `legacyFingerprint` is sent. The
+   culprit is for display and is unchanged: the frame the fingerprint uses, printed `file:line`.
 7. **Delivery.** A 2xx ends it. A network error, a 5xx, 408 or 429 puts the batch back and retries after 1 s, 2 s,
    4 s ... up to 60 s, honouring `Retry-After`. Any other 4xx drops the batch, because sending it again cannot help.
 
@@ -2148,10 +2204,13 @@ Source lines are read for the first three in-app frames with an absolute path or
 <details>
 <summary><b>Errors group too much or too little</b></summary>
 
-The fingerprint is the error type, the first in-app frame's `file:line` and the message with digits masked; for an error
-with a `cause` or `AggregateError.errors` it also ends with the root cause's type, and takes the frame and message from the
-first cause that has an in-app frame when the error itself has none. Set
-`event.fingerprint` in `beforeSend` to choose your own grouping; it wins over the computed one.
+The fingerprint is the error type and the first 3 in-app frames as `<file>:<function>`, with the root cause's type
+last when the error has a `cause` or is an `AggregateError`. There is no line number and, when a frame exists, no message,
+so one bug stays one issue across deploys, browsers and user input; two throw sites, or one helper called from two
+routes, stay two. Too much in one issue: the frames are in your own code, so look at what the first three in-app frames
+share, and set `event.fingerprint` in `beforeSend` to split it. Too many issues: a frameless error groups by its message,
+so give it a stack or set `event.fingerprint`; a file whose name differs by more than a
+content hash or a path prefix is a different file; a minified build whose function names are mangled keys on the file and the message, so keep the names (esbuild `keepNames`, terser `keep_fnames` and `keep_classnames`). `event.fingerprint` set in `beforeSend` wins over the computed one.
 
 </details>
 
