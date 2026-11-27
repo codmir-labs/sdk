@@ -189,7 +189,35 @@ describe("the on-error buffer is capped in bytes", () => {
     }
   }, 120_000);
 
-  it("a generation that fills the cap alone gets an early checkout, and the older one is dropped when it begins", async () => {
+  it("the early checkout starts at half the cap: from 30 s to 120 s the table page holds between 40% and 100% of the cap, and always opens with a Meta and a FullSnapshot", async () => {
+    table.setup();
+    const { recorder } = await startRecorder({ sessionSampleRate: 0, errorSampleRate: 1 });
+    const history = recorder as unknown as Held;
+    const held: Record<number, number> = {};
+    let n = 0;
+    let rotations = 0;
+    let generation = history.curBuffer;
+    for (let second = 1; second <= 120; second++) {
+      await advance(1000);
+      table.tick(++n);
+      await advance(0);
+      if (history.curBuffer !== generation) rotations++;
+      generation = history.curBuffer;
+      if (second < 30) continue;
+      held[second] = heldBytes(recorder);
+      const events = history.prevBuffer.concat(history.curBuffer) as Array<{ type: number }>;
+      expect(events[0].type).toBe(META);
+      expect(events[1].type).toBe(FULL_SNAPSHOT);
+    }
+    const sampled = Object.values(held);
+    console.log("[buffer-cap] table 30-120 s", JSON.stringify({ min: Math.min(...sampled), max: Math.max(...sampled), generationsIn120s: rotations }));
+    for (const bytes of sampled) {
+      expect(bytes).toBeLessThanOrEqual(MAX_BUFFER_BYTES);
+      expect(bytes).toBeGreaterThanOrEqual(MAX_BUFFER_BYTES * 0.4);
+    }
+  }, 120_000);
+
+  it("a generation that reaches half the cap gets an early checkout, and the older one is dropped when the two pass the cap", async () => {
     const { recorder } = await startRecorder({ sessionSampleRate: 0, errorSampleRate: 1 });
     const { record } = await import("@rrweb/record");
     const checkout = vi.spyOn(record, "takeFullSnapshot");
@@ -201,7 +229,6 @@ describe("the on-error buffer is capped in bytes", () => {
       await advance(0);
     }
     expect(checkout).toHaveBeenCalledWith(true);
-    expect(held.prevBuffer).toEqual([]);
     expect(held.curBuffer[0]).not.toBe(first);
     expect((held.curBuffer[0] as { type: number }).type).toBe(META);
     expect(heldBytes(recorder)).toBeLessThanOrEqual(MAX_BUFFER_BYTES);
@@ -248,6 +275,17 @@ describe("an error sends two uploads at a time", () => {
     expect(events[1].type).toBe(FULL_SNAPSHOT);
     expect(bytesOf(events)).toBeLessThanOrEqual(MAX_BUFFER_BYTES + events.length);
   }, 120_000);
+
+  for (const seconds of [31, 97]) {
+    it(`on the table page at ${seconds} s the replay it sends opens with a Meta and a FullSnapshot`, async () => {
+      await errorAfter(seconds);
+      while (open.length > 0) await release();
+      const events = replayCalls().flatMap((c) => c.body.events as Array<{ type: number }>);
+      expect(events[0].type).toBe(META);
+      expect(events[1].type).toBe(FULL_SNAPSHOT);
+      expect(bytesOf(events)).toBeLessThanOrEqual(MAX_BUFFER_BYTES + events.length);
+    }, 120_000);
+  }
 
   it("with three chunks, the third starts when one of the first two settles, never before", async () => {
     await errorAfter(63); // 3.9 MB of history, just under the cap: three chunks of at most 1.8 MB
@@ -369,6 +407,60 @@ describe("segments waiting for a slot and the page hide", () => {
     await release(new Response(JSON.stringify({ stored: false, reason: "payment_required" }), { status: 202 }));
     expect(sequence()).toEqual([0, 1]);
     await release();
+    await advance(60_000);
+    expect(sequence()).toEqual([0, 1]);
+  });
+});
+
+describe("a request slot is freed on every path", () => {
+  it("a request that rejects frees its slot: the next waiting segment is still sent", async () => {
+    const real = await vi.importActual<typeof import("../upload")>("../upload");
+    const postSegment = vi.fn(real.postSegment);
+    vi.resetModules();
+    vi.doMock("../upload", () => ({ ...real, postSegment }));
+    try {
+      postSegment.mockImplementationOnce(() => Promise.reject(new Error("rejected")));
+      hold = true;
+      const { recorder } = await startRecorder({ sessionSampleRate: 1, maxSegmentEvents: 1, upload: { url: REPLAY_URL, key: "osk_test" } });
+      for (let i = 0; i < 6; i++) {
+        recorder.addCustomEvent("one", { i });
+        await advance(0);
+      }
+      // the first request rejected at once, so its slot was free for the third segment while the second is still open
+      expect(postSegment.mock.calls.length).toBeGreaterThanOrEqual(3);
+      expect(sequence().slice(0, 2)).toEqual([1, 2]);
+      while (open.length > 0) await release();
+      await advance(60_000);
+      const sent = sequence();
+      expect(sent.length).toBeGreaterThanOrEqual(5);
+      expect(sent).toEqual(sent.map((_, i) => i + 1)); // none skipped but the rejected one
+    } finally {
+      vi.doUnmock("../upload");
+    }
+  });
+});
+
+describe("a snapshot too large for one request halts the replay", () => {
+  it("none of the segments waiting for a slot is sent afterwards", async () => {
+    hold = true;
+    const { recorder } = await startRecorder({ sessionSampleRate: 1, maxSegmentEvents: 1, upload: { url: REPLAY_URL, key: "osk_test" } });
+    for (let i = 0; i < 6; i++) {
+      recorder.addCustomEvent("one", { i });
+      await advance(0);
+    }
+    const held = recorder as unknown as { waiting: unknown[]; halted: boolean };
+    expect(sequence()).toEqual([0, 1]);
+    expect(held.waiting.length).toBeGreaterThanOrEqual(4);
+    // a text node over the size of one request: the next full snapshot cannot be sent in pieces
+    const big = document.createElement("p");
+    big.textContent = "x".repeat(upload.TARGET_BODY_BYTES + 100_000);
+    document.body.appendChild(big);
+    const { record } = await import("@rrweb/record");
+    record.takeFullSnapshot(true);
+    await advance(1000);
+    expect(held.halted).toBe(true);
+    expect(held.waiting).toEqual([]);
+    while (open.length > 0) await release();
     await advance(60_000);
     expect(sequence()).toEqual([0, 1]);
   });

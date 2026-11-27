@@ -264,8 +264,10 @@ const MAX_SESSION_SEGMENTS = 500;
 /** At most this many requests of one recorder are in flight at once (the retry queue's one request counts); the rest wait their turn. */
 const MAX_UPLOADS_IN_FLIGHT = 2;
 
-/** An early checkout needs the generation to have grown this far past its snapshot, so a snapshot near the cap cannot loop. */
-const MIN_GROWTH_FOR_CHECKOUT = MAX_BUFFER_BYTES / 2;
+/** An early checkout is requested when the current generation reaches this, so the two generations stay within the cap... */
+const CHECKOUT_AT_BYTES = MAX_BUFFER_BYTES / 2;
+/** ...and only when it has grown this far past its snapshot, so a large snapshot cannot loop. */
+const MIN_GROWTH_FOR_CHECKOUT = MAX_BUFFER_BYTES / 4;
 
 /** The newest `max` of `list`, kept in place. */
 function keepNewest<T>(list: T[], max: number): void {
@@ -647,8 +649,8 @@ export class ReplayRecorder {
         this.prevBuffer = [];
         this.prevBytes = 0;
       }
-      // The current generation alone is over it: start a new one (rrweb's own checkout is minutes away at worst).
-      if (this.curBytes > MAX_BUFFER_BYTES && this.curBytes - this.curHeadBytes > MIN_GROWTH_FOR_CHECKOUT) this.requestCheckout();
+      // The current generation is half the cap: start a new one, so the older keeps about half the cap of history at a rotation.
+      if (this.curBytes >= CHECKOUT_AT_BYTES && this.curBytes - this.curHeadBytes > MIN_GROWTH_FOR_CHECKOUT) this.requestCheckout();
       return;
     }
     if (this.mode === "idle" || this.halted) return;
@@ -884,15 +886,25 @@ export class ReplayRecorder {
   private send(segment: QueuedSegment, hiding: boolean): void {
     const upload = this.config.upload;
     if (!upload) return;
+    const body = this.bodyOf(segment); // before the slot is counted: a throw here must not leak it
     if (!hiding) this.inFlight++;
-    void postSegment(upload, this.bodyOf(segment), hiding, true, this.hideRun ?? undefined).then((outcome) => {
-      if (!hiding) this.inFlight--;
-      if (typeof outcome === "object") this.enqueue(segment, outcome.delayMs);
-      else this.settle(segment, outcome, hiding);
-      if (hiding) return;
-      this.pump();
-      this.drain();
-    });
+    void postSegment(upload, body, hiding, true, this.hideRun ?? undefined).then(
+      (outcome) => {
+        if (!hiding) this.inFlight--;
+        if (typeof outcome === "object") this.enqueue(segment, outcome.delayMs);
+        else this.settle(segment, outcome, hiding);
+        if (hiding) return;
+        this.pump();
+        this.drain();
+      },
+      () => {
+        // postSegment does not reject; if it ever does, the slot is freed like an answered one's
+        if (!hiding) this.inFlight--;
+        if (hiding) return;
+        this.pump();
+        this.drain();
+      },
+    );
   }
 
   private bodyOf(segment: QueuedSegment) {
