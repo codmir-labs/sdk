@@ -49,13 +49,17 @@ function stackStrategy(): ContextStrategy {
 }
 
 /**
- * The strategy is one per process, in a `Symbol.for` slot: a bundler may load this module more than once (Next.js:
- * instrumentation and each route), and a span made active by one copy must be the active span of the others.
+ * The strategy, the default stack and the standing root are one per process, in `Symbol.for` slots: a bundler may load
+ * this module more than once (Next.js: instrumentation and each route; each entry point of this package is its own file
+ * too), and a span made active by one copy must be the active span of the others, error capture included.
  */
 const STRATEGY_SLOT = Symbol.for("codmir.tracing.strategy");
-const slots = globalThis as Record<symbol, ContextStrategy | undefined>;
-const ownDefault: ContextStrategy = stackStrategy();
-const strategy = (): ContextStrategy => slots[STRATEGY_SLOT] ?? ownDefault;
+const DEFAULT_SLOT = Symbol.for("codmir.tracing.default");
+const ROOT_SLOT = Symbol.for("codmir.tracing.root");
+const slots = globalThis as Record<symbol, unknown>;
+const strategy = (): ContextStrategy =>
+  (slots[STRATEGY_SLOT] as ContextStrategy | undefined) ??
+  ((slots[DEFAULT_SLOT] as ContextStrategy | undefined) ?? (slots[DEFAULT_SLOT] = stackStrategy())) as ContextStrategy;
 
 export function setContextStrategy(next: ContextStrategy): void {
   slots[STRATEGY_SLOT] = next;
@@ -71,15 +75,13 @@ export function releaseTrace(root: Span): Span[] {
 }
 
 /** A root that stays active until cleared, for the browser's pageload and navigation transactions. */
-let standingRoot: Span | undefined;
-
 export function setStandingRoot(span: Span | undefined): void {
-  standingRoot = span;
+  slots[ROOT_SLOT] = span;
 }
 
 /** The span in scope, else the standing root, so work started outside any `startSpan` still nests under the page. */
 export function getActiveSpan(): Span | undefined {
-  return strategy().get() ?? standingRoot;
+  return strategy().get() ?? (slots[ROOT_SLOT] as Span | undefined);
 }
 
 /** Runs `fn` with `span` as the active span, without ending it. */

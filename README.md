@@ -1140,6 +1140,12 @@ const total = await startSpan({ name: 'checkout', op: 'function' }, async (span)
   span when `fn` returns, throws or settles; a throw or rejection marks it `error` and propagates unchanged.
 - When a root ends, it and its finished children are queued as one `transaction` event on the same transport as
   errors. At most 1,000 spans go in one transaction. `beforeSend` does not see transactions.
+- An error captured inside a span carries that span's `trace_id` and `span_id` in `contexts.trace`, sampled or not, so
+  an issue links to its trace and the errors of two services in one trace can be joined. Outside any span, and with
+  tracing off, it carries none. A `contexts.trace` you pass in the capture context wins:
+  `captureException(err, { contexts: { trace: { trace_id, span_id } } })`. In a browser, the pageload and navigation
+  transactions count as the active span between `startSpan` calls. It is the same through every entry point and the
+  Express, Next.js, Hono and Remix wrappers, where it is the request's span.
 - `startTransaction({ name, op, traceparent })` starts a root you end yourself, continuing an incoming trace:
 
 ```ts
