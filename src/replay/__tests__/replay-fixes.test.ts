@@ -280,9 +280,9 @@ describe("upload budgets count UTF-8 bytes", () => {
     await settle();
     click();
     await vi.advanceTimersByTimeAsync(35_000);
-    // The page's snapshot is over one request, so the replay cannot play and nothing of it is sent (see snapshot-recovery.test.ts).
+    // This page's FullSnapshot is about 1.4 million characters (under TARGET_BODY_BYTES, 1.8 MB) but about 2.8 million UTF-8
+    // bytes (over it), so no request at all means the budget counts bytes: a count of characters would have sent it.
     expect(replayCalls()).toHaveLength(0);
-    for (const call of replayCalls()) expect(utf8(call.raw)).toBeLessThanOrEqual(MAX);
   });
 
   it("sends a hiding post over 60 KB of UTF-8 without keepalive, and a small one with it", async () => {

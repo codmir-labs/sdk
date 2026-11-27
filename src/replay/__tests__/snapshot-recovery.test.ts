@@ -4,7 +4,7 @@
  * followed by a fresh one, and a snapshot too big for one request ends the replay. `fetch` is stubbed, the clock is
  * fake, rrweb is the real recorder.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const recordCalls = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 
@@ -53,11 +53,19 @@ beforeEach(() => {
   vi.spyOn(navigator, "onLine", "get").mockImplementation(() => online);
   document.head.innerHTML = "";
   document.body.innerHTML = "<p>a page</p>";
+  vi.clearAllTimers();
+});
+
+// One fake clock for the whole file: rrweb keeps `Date.now` from the moment it is first loaded, so a clock replaced per
+// test would leave it timestamping with a dead one, and its periodic checkout (which reads those timestamps) would never fire.
+beforeAll(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"] });
+});
+afterAll(() => {
+  vi.useRealTimers();
 });
 
 afterEach(() => {
-  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -241,5 +249,45 @@ describe("a lost segment is followed by a fresh full snapshot", () => {
     online = true;
     window.dispatchEvent(new Event("online"));
     expect(snapshot).not.toHaveBeenCalled();
+  });
+});
+
+describe("recovery is bounded", () => {
+  const unauthorized = () => new Response(JSON.stringify({ error: "Invalid key" }), { status: 401 });
+
+  it("takes 3 recovery snapshots for a server answering 401, then none, and resumes at the next checkout", async () => {
+    const { recorder, snapshot } = await start({ maxSegmentEvents: 1000 });
+    respond = unauthorized;
+    for (let i = 0; i < 12; i++) {
+      click();
+      await tick(); // 12 ticks of 30 s, every segment answered 401
+    }
+    expect(snapshot).toHaveBeenCalledTimes(3);
+    for (let i = 0; i < 4; i++) {
+      click();
+      await tick();
+    }
+    expect(snapshot).toHaveBeenCalledTimes(3);
+    const before = calls.length;
+
+    // rrweb's periodic checkout arrives on its own with the next event past SESSION_CHECKOUT_MS
+    respond = ok;
+    await tick(300_000);
+    click();
+    await tick();
+    const stored = calls.slice(before).filter((c) => c.body.events.length > 0);
+    expect(stored.length).toBeGreaterThan(0);
+    expect(types(stored[0]).slice(0, 2)).toEqual([META, FULL_SNAPSHOT]);
+    expect(snapshot).toHaveBeenCalledTimes(3); // the checkout is rrweb's own, not a recovery
+
+    // a stored segment reset the count: a later single loss recovers at once
+    respond = () => {
+      throw new TypeError("Failed to fetch");
+    };
+    click();
+    await tick();
+    await tick(1_100);
+    expect(snapshot).toHaveBeenCalledTimes(4);
+    recorder.stop();
   });
 });

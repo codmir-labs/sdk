@@ -237,6 +237,9 @@ export const SESSION_CHECKOUT_MS = 300_000;
 type Mode = "idle" | "session" | "buffer" | "post-error";
 type RrwebRecord = typeof import("@rrweb/record").record;
 
+/** Recovery snapshots taken with no stored segment in between; past this a loss waits for the next periodic checkout. */
+const MAX_RECOVERY_SNAPSHOTS = 3;
+
 /** The page is known to be offline (`navigator.onLine` is a hint: only a `false` is believed). */
 function isOffline(): boolean {
   return typeof navigator !== "undefined" && navigator.onLine === false;
@@ -280,6 +283,10 @@ export class ReplayRecorder {
   private epoch = 0;
   /** A segment was lost and no fresh full snapshot has been taken yet (the page is offline, or the loss is just known). */
   private recoveryPending = false;
+  /** Recovery snapshots taken since a segment of this replay was last stored. */
+  private recoveries = 0;
+  /** The cap was hit: what is recorded is dropped until rrweb's next periodic checkout, which costs no extra serialisation. */
+  private awaitingCheckout = false;
   /** A FullSnapshot did not fit one request: this replay cannot play from there, so it records and uploads no more. */
   private halted = false;
   private segmentTimer: ReturnType<typeof setInterval> | null = null;
@@ -428,6 +435,8 @@ export class ReplayRecorder {
     this.curBuffer = [];
     this.pendingErrorIds = [];
     this.recoveryPending = false;
+    this.recoveries = 0;
+    this.awaitingCheckout = false;
   }
 
   private async boot(generation: number): Promise<void> {
@@ -484,6 +493,12 @@ export class ReplayRecorder {
       return;
     }
     if (this.mode === "idle" || this.halted) return;
+    if (this.awaitingCheckout) {
+      // Without the lost state nothing recorded can play: drop it until the periodic checkout, then resume from it.
+      if (!(isCheckout && event.type === RRWEB_META)) return;
+      this.awaitingCheckout = false;
+      this.epoch++; // a segment sent before the checkout is older than it
+    }
     this.events.push(event);
     if (this.events.length >= this.config.maxSegmentEvents) this.flushSegment();
   }
@@ -597,6 +612,8 @@ export class ReplayRecorder {
         const middle = Math.ceil(events.length / 2);
         this.upload(counter, replayId, sequenceNumber, events.slice(0, middle), [], hiding, epoch);
         this.upload(counter, replayId, counter.next++, events.slice(middle), errorIds, hiding, epoch);
+      } else if (outcome === "stored") {
+        if (replayId === this.replayId) this.recoveries = 0;
       } else if (outcome === "failed") {
         this.segmentLost(replayId, epoch);
       }
@@ -621,6 +638,13 @@ export class ReplayRecorder {
   private segmentLost(replayId: string, epoch: number): void {
     if (replayId !== this.replayId || epoch !== this.epoch || this.recoveryPending || this.halted) return;
     if (this.mode !== "session" && this.mode !== "post-error") return;
+    if (this.awaitingCheckout) return;
+    if (this.recoveries >= MAX_RECOVERY_SNAPSHOTS) {
+      // Nothing is getting through (a wrong key, a failing server, a dead network): no more snapshots until the next checkout.
+      this.awaitingCheckout = true;
+      this.events = [];
+      return;
+    }
     this.recoveryPending = true;
     if (!isOffline()) this.recover();
   }
@@ -630,6 +654,7 @@ export class ReplayRecorder {
     this.recoveryPending = false;
     if (this.mode !== "session" && this.mode !== "post-error") return;
     this.epoch++;
+    this.recoveries++;
     this.events = [];
     try {
       this.record?.takeFullSnapshot(true);
@@ -655,6 +680,8 @@ export class ReplayRecorder {
     this.curBuffer = [];
     this.pendingErrorIds = [];
     this.recoveryPending = false;
+    this.recoveries = 0;
+    this.awaitingCheckout = false;
     if (typeof window !== "undefined") window.removeEventListener("pagehide", this.onPageHide);
     if (typeof window !== "undefined") window.removeEventListener("online", this.onOnline);
     if (typeof document !== "undefined") document.removeEventListener("visibilitychange", this.onHide);

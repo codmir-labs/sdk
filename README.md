@@ -1185,7 +1185,9 @@ neither rate hit.
 
 A session takes a full snapshot every 5 minutes, and a segment that did not arrive (a failed upload, or one event the
 server refused as too large) is followed by a fresh snapshot, taken once the page is back online, so a replay is never
-lost for good to one segment. A page whose snapshot is over the limit of one request (about 1.8 MB) cannot be played, so
+lost for good to one segment. At most 3 such snapshots are taken with no segment stored in between; after that a loss
+waits for the next periodic snapshot, so a wrong key or a long outage never makes the page serialise more often than
+normal recording does. A page whose snapshot is over the limit of one request (about 1.8 MB) cannot be played, so
 nothing of that replay is uploaded and recording stops; `upload.debug` prints one line saying so.
 
 Privacy is on by default: every input is masked, a picked radio button or checkbox is not recorded, `[data-private]`
