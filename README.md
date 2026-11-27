@@ -202,6 +202,28 @@ cleaned copy in `extra.thrown` (secret keys dropped, depth capped). A string is 
 error the stack starts at your call to `captureException`, never inside the SDK, so two such captures from two functions are two places; a global
 handler's rejection with no error in it has no frames, and a window `error` with none has the one frame the event names.
 
+**Release and environment.** Set `release` and `environment` yourself and they are used as given. When you set neither, a
+server reads the host, each value trimmed and the first non-empty one winning:
+
+- release: `CODMIR_RELEASE`, `VERCEL_GIT_COMMIT_SHA`, `RAILWAY_GIT_COMMIT_SHA`, `RENDER_GIT_COMMIT`, `SOURCE_VERSION`
+  (Heroku), `CF_PAGES_COMMIT_SHA`, `COMMIT_REF` (Netlify), `GITHUB_SHA`; else `unknown`;
+- environment: `CODMIR_ENVIRONMENT`, `VERCEL_ENV`, `NODE_ENV`; else `development`.
+
+Nothing is read where there is no `process` (browsers, workers, React Native). In `@codmir/sdk/nextjs` a browser build
+also reads `NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA` and `NEXT_PUBLIC_VERCEL_ENV`, which Vercel exposes to client bundles when
+system environment variables are exposed. Any other browser bundle passes the value from a build-time variable:
+
+```ts
+// Vite
+init({
+  clientKey: 'osk_your_client_key',
+  release: import.meta.env.VITE_RELEASE,
+  environment: import.meta.env.MODE,
+});
+```
+
+With `debug: true`, `init` logs once when the release is still `unknown`.
+
 **3. Check the setup** with [`verify()`](#verify-your-setup), then pick your framework below.
 
 > [!TIP]
@@ -1617,8 +1639,8 @@ Leave it off unless you serve that manifest.
 | `apiKey` | none | Alias of `clientKey`; `clientKey` wins when both are set |
 | `overseerKey` | none | Deprecated alias of `clientKey` |
 | `dsn` | `https://www.codmir.com/api/v1/overseer` once a key is set | Where events go: errors to `<dsn>/ingest`, replay to `<dsn>/replay`. A DSN ending in `/ingest` is used as it is |
-| `environment` | `'development'` | On every event and request (the request field is cut to 32 characters) |
-| `release` | `'unknown'` | Your release version (request field cut to 64 characters) |
+| `environment` | the first set of `CODMIR_ENVIRONMENT`, `VERCEL_ENV`, `NODE_ENV`, else `'development'` | On every event and request (the request field is cut to 32 characters) |
+| `release` | the first set of `CODMIR_RELEASE`, `VERCEL_GIT_COMMIT_SHA`, `RAILWAY_GIT_COMMIT_SHA`, `RENDER_GIT_COMMIT`, `SOURCE_VERSION`, `CF_PAGES_COMMIT_SHA`, `COMMIT_REF`, `GITHUB_SHA`, else `'unknown'` | Your release version (request field cut to 64 characters) |
 | `service` | none | Service name on each request (cut to 64 characters) |
 | `enabled` | `true` | `false` makes every capture a no-op that returns `''` |
 | `debug` | `false` | Logs `[Overseer]` lines: init, failed sends, retries, events the server dropped |
