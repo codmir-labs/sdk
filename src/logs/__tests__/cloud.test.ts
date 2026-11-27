@@ -237,11 +237,11 @@ describe("it never hurts the app", () => {
     fail(down);
     await down.flush();
     expect(down.stats().cloud).toMatchObject({ sent: 1, refused: 0, waiting: 1 });
-    answer = 200; // the client still holds it, and sends it along with the next one
+    answer = 200; // the client still holds it, and sends it again as it was, ahead of the next one
     fail(down, "another failure");
     await down.flush();
     expect(down.stats().cloud).toMatchObject({ sent: 2, refused: 0, waiting: 0 });
-    expect(hits.at(-1)!.events).toHaveLength(2);
+    expect(hits.slice(-2).map((h) => h.events.length)).toEqual([1, 1]);
   });
 
   it("is off by default: nothing is sent, nothing is loaded", async () => {

@@ -272,6 +272,16 @@ describe("delivery (criterion 3)", () => {
     c.close();
   });
 
+  it("keeps the delay at its cap while a 429 goes on, with no limit on tries", async () => {
+    const c = client();
+    respond = () => new Response("slow down", { status: 429 });
+    c.captureException(nodeError());
+    await c.flush();
+    for (let i = 0; i < 20; i++) await vi.advanceTimersByTimeAsync(RETRY_MAX_MS);
+    expect(calls.length).toBeGreaterThanOrEqual(14);
+    c.close();
+  });
+
   it("honours Retry-After on a 429 when it is longer than the backoff", async () => {
     const c = client();
     respond = () => new Response("slow down", { status: 429, headers: { "retry-after": "10" } });

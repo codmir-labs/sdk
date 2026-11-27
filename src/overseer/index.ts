@@ -52,6 +52,8 @@ import {
   requestTimeoutMs,
   readDroppedEvents,
   retryDelayMs,
+  MAX_SERVER_ERROR_ATTEMPTS,
+  MAX_EVENT_AGE_MS,
   sdkFingerprint,
   utf8Bytes,
   withoutOldestBreadcrumbs,
@@ -111,7 +113,7 @@ export interface OverseerConfig {
   /**
    * Called when the server did not take events: a batch it refused (`status` 401 for a wrong key, say), or events it
    * dropped out of a batch it answered 200 to (`reason`, such as `payment_required`), or that the client gave up on
-   * (`status` 0: the queue was full, the client was closed before the last try went through, `beforeSend` threw, or `rateLimit` held the event back, reason `rate_limited`, or an event could not be written as JSON, reason `unserializable`). They are not sent again.
+   * (`status` 0: the queue was full, the client was closed before the last try went through, `beforeSend` threw, or `rateLimit` held the event back, reason `rate_limited`, or an event could not be written as JSON, reason `unserializable`, or an event was still unsent after 24 hours, reason `expired`), or an event the server kept answering with a 5xx while it took other requests, alone in its batch (its `status`, reason `retry_exhausted`; an outage drops nothing). They are not sent again.
    * `eventIds` are the ids `captureEvent` returned for those events, when they are known.
    */
   onDropped?: (dropped: { events: number; status: number; reason?: string; eventIds?: string[] }) => void;
@@ -303,6 +305,25 @@ function signalAccepted(signal: AbortSignal): boolean {
   }
 }
 
+/** A batch kept whole for its next try: the same events in the same order, so its ids, and the server's key for it, stay the same. */
+interface PendingBatch {
+  events: QueuedEvent[];
+  /** Answers of 5xx this batch has had; a half of a split starts at 0. */
+  failures: number;
+  /** Status of the last 5xx. */
+  status: number;
+  /** How many 2xx answers the client had had when this batch last got a 5xx: a 2xx since then is evidence that the server takes other requests. */
+  okAtFail: number;
+  /** Set aside after {@link MAX_SERVER_ERROR_ATTEMPTS} answers of 5xx with no 2xx to anything else in between: sent again only when nothing else waits. */
+  deferred: boolean;
+}
+
+type SendOutcome =
+  | { kind: "ok" }
+  | { kind: "drop" }
+  | { kind: "too_large" }
+  | { kind: "retry"; retryAfterMs?: number; serverStatus?: number };
+
 /** What marks a value in the registry slot as one of this SDK's clients. A symbol, so a copy of the SDK recognises another's. */
 const CLIENT_MARKER = Symbol.for("codmir.overseer.client.marker");
 
@@ -330,6 +351,12 @@ class OverseerClient {
   private patchRuntime: PatchRuntime | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryAttempt = 0;
+  // Answers of 2xx this client has had, to any request. A 5xx counts against a batch only while this goes up.
+  private okSeq = 0;
+  // Batches that failed with an answer a retry could cure. Each is resent as it is, ahead of anything in `eventQueue`.
+  private pendingBatches: PendingBatch[] = [];
+  // When each queued event was queued, for the 24 hour limit; it follows an event that is cut down to fit.
+  private queuedAt = new WeakMap<object, number>();
   // Once closed, the client never schedules a retry.
   private closed = false;
   private flushing: Promise<boolean> | null = null;
@@ -953,6 +980,7 @@ class OverseerClient {
 
   private enqueue(event: QueuedEvent): void {
     this.eventQueue.push(event);
+    this.queuedAt.set(event, Date.now());
     try {
       this.queuedBytes += wireEventBytes(event) + 1;
     } catch {
@@ -982,14 +1010,22 @@ class OverseerClient {
     if (this.config.debug) console.log("[Overseer]", ...args);
   }
 
-  /** Keeps the queue at MAX_QUEUE_SIZE by dropping the oldest events. */
+  /** Keeps what is waiting, pending batches and queue together, at MAX_QUEUE_SIZE by dropping the oldest events. */
   private trimQueue(): void {
-    const excess = this.eventQueue.length - MAX_QUEUE_SIZE;
-    if (excess > 0) {
-      const lost = this.eventQueue.splice(0, excess);
-      this.log(`Queue full (${MAX_QUEUE_SIZE}); dropped ${excess} oldest event(s)`);
-      this.tellDropped(excess, 0, "queue_full", lost);
+    let excess = this.eventQueue.length + this.pendingBatches.reduce((n, b) => n + b.events.length, 0) - MAX_QUEUE_SIZE;
+    if (excess <= 0) return;
+    const lost: QueuedEvent[] = [];
+    // The oldest are in the pending batches, which go ahead of the queue.
+    while (excess > 0 && this.pendingBatches.length > 0) {
+      const head = this.pendingBatches[0];
+      const cut = head.events.splice(0, excess);
+      excess -= cut.length;
+      lost.push(...cut);
+      if (head.events.length === 0) this.pendingBatches.shift();
     }
+    if (excess > 0) lost.push(...this.eventQueue.splice(0, excess));
+    this.log(`Queue full (${MAX_QUEUE_SIZE}); dropped ${lost.length} oldest event(s)`);
+    this.tellDropped(lost.length, 0, "queue_full", lost);
   }
 
   private async drain(): Promise<boolean> {
@@ -1005,12 +1041,26 @@ class OverseerClient {
     // Lowered when the server answers 413 to a batch: the halves go out first and the rest of this drain stays small.
     let maxEvents = MAX_BATCH_EVENTS;
     const retriedSmaller = new WeakSet<object>();
-    while (this.eventQueue.length > 0) {
-      const batch = this.takeBatch(maxEvents);
+    while (this.pendingBatches.length > 0 || this.eventQueue.length > 0) {
+      this.dropExpired();
+      // A batch that failed goes first, as it was; only then is a new one cut from the queue. A deferred batch waits for both.
+      const fresh = this.pendingBatches.findIndex((b) => !b.deferred);
+      const resent =
+        fresh >= 0
+          ? this.pendingBatches.splice(fresh, 1)[0]
+          : this.eventQueue.length === 0
+            ? this.pendingBatches.shift()
+            : undefined;
+      const batch = resent ? resent.events : this.takeBatch(maxEvents);
       if (batch.length === 0) continue; // everything it looked at was too large and has been dropped
       const outcome = await this.sendBatch(batch);
       if (outcome.kind === "too_large") {
-        if (batch.length > 1) {
+        if (resent) {
+          if (batch.length > 1) {
+            this.pendingBatches.unshift(...this.halves(batch));
+            continue;
+          }
+        } else if (batch.length > 1) {
           maxEvents = Math.ceil(batch.length / 2);
           this.eventQueue.unshift(...batch);
           continue;
@@ -1020,6 +1070,8 @@ class OverseerClient {
         const smaller = retriedSmaller.has(event) ? null : withoutOldestBreadcrumbs(event, Math.ceil((crumbs?.length ?? 0) / 2));
         if (smaller) {
           retriedSmaller.add(smaller);
+          const at = this.queuedAt.get(event);
+          if (at !== undefined) this.queuedAt.set(smaller, at);
           this.eventQueue.unshift(smaller);
         } else {
           this.log("Server refused a single event as too large; dropping it");
@@ -1039,14 +1091,84 @@ class OverseerClient {
         this.flushOpen = false;
         return false;
       }
-      this.eventQueue.unshift(...batch);
-      this.trimQueue();
+      if (this.refused(batch, resent, outcome.serverStatus)) {
+        this.retryAttempt = 0;
+        continue;
+      }
       this.scheduleRetry(outcome.retryAfterMs);
       this.flushOpen = false;
       return false;
     }
     this.flushOpen = false;
     return true;
+  }
+
+  /** The two halves of a batch, each a batch of its own with a fresh count. */
+  private halves(batch: QueuedEvent[]): PendingBatch[] {
+    const mid = Math.ceil(batch.length / 2);
+    const half = (events: QueuedEvent[]): PendingBatch => ({ events, failures: 0, status: 0, okAtFail: this.okSeq, deferred: false });
+    return [half(batch.slice(0, mid)), half(batch.slice(mid))];
+  }
+
+  /**
+   * Keeps a batch that failed, whole, for its next try. An answer of 5xx counts against it, but it is the batch's fault
+   * only while the server takes other requests:
+   * - {@link MAX_SERVER_ERROR_ATTEMPTS} such answers and a 2xx to something else since the previous one: a batch of several
+   *   is split in half, a single event is dropped as `retry_exhausted`, and the next try need not wait (true is returned);
+   * - the same count with no 2xx in between: the server may be failing everything, so the batch is deferred, whole.
+   */
+  private refused(batch: QueuedEvent[], before: PendingBatch | undefined, serverStatus: number | undefined): boolean {
+    const failures = (before?.failures ?? 0) + (serverStatus === undefined ? 0 : 1);
+    const status = serverStatus ?? before?.status ?? 0;
+    const entry: PendingBatch = {
+      events: batch,
+      failures,
+      status,
+      okAtFail: serverStatus === undefined ? (before?.okAtFail ?? this.okSeq) : this.okSeq,
+      deferred: serverStatus === undefined && before?.deferred === true,
+    };
+    let acted = false;
+    if (serverStatus !== undefined && failures >= MAX_SERVER_ERROR_ATTEMPTS) {
+      if (this.okSeq > (before?.okAtFail ?? this.okSeq)) {
+        acted = true;
+        if (batch.length > 1) {
+          this.log(`Batch of ${batch.length} event(s) got ${failures} answers of 5xx while the server took other requests; splitting it`);
+          this.pendingBatches.unshift(...this.halves(batch));
+        } else {
+          this.log(`Event got ${failures} answers of 5xx while the server took other requests; dropping it`);
+          this.tellDropped(1, status, "retry_exhausted", batch);
+        }
+      } else {
+        this.log(`Batch of ${batch.length} event(s) got ${failures} answers of 5xx and nothing else was answered; setting it aside`);
+        entry.deferred = true;
+      }
+    }
+    if (!acted) {
+      if (entry.deferred) this.pendingBatches.push(entry);
+      else this.pendingBatches.unshift(entry);
+    }
+    this.trimQueue();
+    return acted;
+  }
+
+  /** Drops, and reports as `expired`, every event that has waited longer than {@link MAX_EVENT_AGE_MS}, queued or in a pending batch. */
+  private dropExpired(): void {
+    const limit = Date.now() - MAX_EVENT_AGE_MS;
+    const expired: QueuedEvent[] = [];
+    const live = (event: QueuedEvent): boolean => {
+      if ((this.queuedAt.get(event) ?? Infinity) >= limit) return true;
+      expired.push(event);
+      return false;
+    };
+    if (this.eventQueue.some((e) => !((this.queuedAt.get(e) ?? Infinity) >= limit))) this.eventQueue = this.eventQueue.filter(live);
+    for (const batch of this.pendingBatches) {
+      if (batch.events.some((e) => !((this.queuedAt.get(e) ?? Infinity) >= limit))) batch.events = batch.events.filter(live);
+    }
+    this.pendingBatches = this.pendingBatches.filter((b) => b.events.length > 0);
+    if (expired.length > 0) {
+      this.log(`Dropped ${expired.length} event(s) unsent for over 24 hours`);
+      this.tellDropped(expired.length, 0, "expired", expired);
+    }
   }
 
   /**
@@ -1078,6 +1200,8 @@ class OverseerClient {
         event = fitted;
         size = wireEventBytes(fitted);
         this.eventQueue[0] = fitted;
+        const at = this.queuedAt.get(event);
+        if (at !== undefined) this.queuedAt.set(fitted, at);
       }
       const added = size + (batch.length > 0 ? 1 : 0);
       if (batch.length > 0 && bytes + added > MAX_BATCH_BYTES) break;
@@ -1140,7 +1264,7 @@ class OverseerClient {
 
   private async sendBatch(
     events: QueuedEvent[],
-  ): Promise<{ kind: "ok" } | { kind: "drop" } | { kind: "too_large" } | { kind: "retry"; retryAfterMs?: number }> {
+  ): Promise<SendOutcome> {
     if (!this.config.dsn) {
       this.log("No DSN configured, events:", events);
       return { kind: "ok" };
@@ -1152,7 +1276,7 @@ class OverseerClient {
     const abort = typeof AbortController === "function" ? new AbortController() : null;
     const signal = abort && signalAccepted(abort.signal) ? abort.signal : undefined;
     let deadline: ReturnType<typeof setTimeout> | undefined;
-    const timedOut = new Promise<{ kind: "retry" }>((resolve) => {
+    const timedOut = new Promise<SendOutcome>((resolve) => {
       deadline = setTimeout(() => {
         this.log(`No answer in ${limit} ms; retrying`);
         resolve({ kind: "retry" });
@@ -1171,7 +1295,7 @@ class OverseerClient {
   private async sendBatchOnce(
     events: QueuedEvent[],
     signal: AbortSignal | undefined,
-  ): Promise<{ kind: "ok" } | { kind: "drop" } | { kind: "too_large" } | { kind: "retry"; retryAfterMs?: number }> {
+  ): Promise<SendOutcome> {
     let res: Response;
     try {
       res = await fetch(this.endpoint(), {
@@ -1186,6 +1310,7 @@ class OverseerClient {
     }
 
     if (res.ok) {
+      this.okSeq++;
       if (this.config.debug || this.config.onDropped) {
         const dropped = await readDroppedEvents(res);
         if (dropped.length > 0) {
@@ -1206,7 +1331,11 @@ class OverseerClient {
       return { kind: "drop" };
     }
     const retryAfter = Number(res.headers?.get?.("retry-after"));
-    return { kind: "retry", retryAfterMs: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : undefined };
+    return {
+      kind: "retry",
+      retryAfterMs: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : undefined,
+      ...(res.status >= 500 ? { serverStatus: res.status } : {}),
+    };
   }
 
   /**
@@ -1215,11 +1344,27 @@ class OverseerClient {
    * telemetry key only from that header or `Authorization`, so a beacon would arrive unkeyed and have its errors dropped.
    */
   private flushOnHide(): void {
-    if (!this.config.dsn || this.eventQueue.length === 0 || typeof fetch !== "function") return;
+    if (!this.config.dsn || (this.eventQueue.length === 0 && this.pendingBatches.length === 0) || typeof fetch !== "function") return;
     this.queuedBytes = 0;
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
+    }
+
+    // A pending batch is one unit: sent first, as it is, if its body fits the budget, and otherwise it stays pending.
+    // It is never cut again, so its ids, and the server's key for it, do not change.
+    // A deferred batch stays where it is: the server was failing everything it was sent.
+    for (const unit of this.pendingBatches.filter((b) => !b.deferred)) {
+      let body: string;
+      try {
+        body = this.body(unit.events);
+      } catch {
+        continue; // the next drain finds out which event cannot be written
+      }
+      const release = claimKeepalive(utf8Bytes(body));
+      if (!release) continue;
+      this.pendingBatches.splice(this.pendingBatches.indexOf(unit), 1);
+      this.sendOnHide(unit.events, body, release, unit);
     }
 
     while (this.eventQueue.length > 0) {
@@ -1243,20 +1388,9 @@ class OverseerClient {
       // flush sends it, without keepalive, if the page lives.
       const release = claimKeepalive(utf8Bytes(body));
       if (!release) break;
-      const batch = this.eventQueue.splice(0, n);
-      fetch(this.endpoint(), {
-        method: "POST",
-        headers: this.requestHeaders(),
-        body,
-        keepalive: true,
-      })
-        .then((res) => {
-          if (!res.ok && isRetryableStatus(res.status)) this.requeue(batch);
-        })
-        .catch(() => this.requeue(batch))
-        .finally(release);
+      this.sendOnHide(this.eventQueue.splice(0, n), body, release);
     }
-    if (this.eventQueue.length > 0) {
+    if (this.eventQueue.length > 0 || this.pendingBatches.length > 0) {
       this.queuedBytes = this.eventQueue.reduce((sum, event) => {
         try {
           return sum + wireEventBytes(event) + 1;
@@ -1264,13 +1398,34 @@ class OverseerClient {
           return sum;
         }
       }, 0);
-      if (!this.flushTimer && !this.retryTimer) this.flushTimer = setTimeout(() => this.flushQuietly(), 1000);
+      this.armFlush();
     }
   }
 
-  private requeue(batch: QueuedEvent[]): void {
-    this.eventQueue.unshift(...batch);
-    this.trimQueue();
+  /** One keepalive request for a batch. When the server does not take it for a reason a retry could cure, it becomes a pending batch, whole. */
+  private sendOnHide(batch: QueuedEvent[], body: string, release: () => void, before?: PendingBatch): void {
+    const failed = (status?: number): void => {
+      if (this.refused(batch, before, status !== undefined && status >= 500 ? status : undefined)) this.retryAttempt = 0;
+      this.armFlush();
+    };
+    fetch(this.endpoint(), {
+      method: "POST",
+      headers: this.requestHeaders(),
+      body,
+      keepalive: true,
+    })
+      .then((res) => {
+        if (res.ok) this.okSeq++;
+        else if (isRetryableStatus(res.status)) failed(res.status);
+      })
+      .catch(() => failed())
+      .finally(release);
+  }
+
+  /** Sends what is waiting a second from now, unless a send or a retry is already due. */
+  private armFlush(): void {
+    if (this.closed || this.flushTimer || this.retryTimer) return;
+    this.flushTimer = setTimeout(() => this.flushQuietly(), 1000);
   }
 
   getClientKey(): string {

@@ -154,8 +154,9 @@ describe("a refused finding is sent again", () => {
     fail(m, undefined, 2);
     respond = (n) => (n === 2 ? { status: 200, body: { droppedEvents: [{ index: 0, reason: "unparseable" }] } } : { status: 200 });
     await m.flush();
-    expect(hits).toHaveLength(2);
-    expect(hits[1].events).toHaveLength(2); // the old one, still queued, and the new one
+    expect(hits).toHaveLength(3);
+    expect(hits[1].events).toHaveLength(1); // the old one is sent again as it was, and the new one goes behind it
+    expect(hits[2].events).toHaveLength(1);
     expect(m.stats().cloud.refused).toBe(1);
     expect(sentEvents().slice(1).map((e) => tag(e, "hits"))).toEqual(["3", "2"]);
     expect(group(states.at(-1))).toMatchObject({ sentAt: T0 + 61 * MIN, sentTotal: 2 }); // the later send's time; the 3 refused hits are owed
@@ -173,7 +174,7 @@ describe("a refused finding is sent again", () => {
     await m.flush();
     at(61 * MIN);
     fail(m, undefined, 2);
-    respond = (n) => (n === 2 ? { status: 401 } : { status: 200 });
+    respond = (n) => (n === 2 || n === 3 ? { status: 401 } : { status: 200 });
     await m.flush();
     expect(m.stats().cloud).toMatchObject({ refused: 2, today: 0 });
     expect(group(states.at(-1))).toMatchObject({ sentTotal: 0 });
@@ -233,7 +234,7 @@ describe("a refused finding is sent again", () => {
     fail(m, undefined, 2);
     respond = (n) => (n === 2 ? { status: 200, body: { droppedEvents: [{ index: 0, reason: "unparseable" }] } } : { status: 200 });
     await m.flush();
-    expect(hits[1].events).toHaveLength(2);
+    expect(hits[1].events).toHaveLength(1); // the old event, sent again as it was
     expect(m.stats().cloud).toMatchObject({ refused: 1, today: 1 });
   });
 
