@@ -31,11 +31,11 @@ let online: boolean;
 
 const ok = () => new Response(JSON.stringify({ stored: true }), { status: 202 });
 const refused400 = () => new Response("", { status: 400 });
-/** Four segments of an offline page: the first goes to the retry queue, and the fourth is one too many, so the queue is dropped. */
+/** Eleven segments of an offline page: the first goes to the retry queue, and the eleventh is one too many, so the queue is dropped. */
 async function loseSegmentsOffline() {
   online = false;
   respond = offlineError;
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 11; i++) {
     click();
     await tick();
   }
@@ -160,7 +160,7 @@ describe("a snapshot that cannot fit one request", () => {
 describe("a lost segment is followed by a fresh full snapshot", () => {
   it("waits while offline, takes one snapshot on the online event, and no stored segment holds the lost state", async () => {
     const { recorder, snapshot } = await start();
-    await loseSegmentsOffline(); // segment 0 goes out and fails, twice, 1 s apart; 1 to 3 queue behind it and are dropped
+    await loseSegmentsOffline(); // segment 0 goes out and fails, twice, 1 s apart; 1 to 10 queue behind it and are dropped
     expect(calls.map((c) => c.body.segment)).toEqual([0, 0]);
     expect(snapshot).not.toHaveBeenCalled();
 
