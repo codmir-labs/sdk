@@ -208,34 +208,34 @@ describe("a busy server", () => {
 });
 
 describe("an offline browser", () => {
-  it("queues up to 3 segments, sends them in order on the online event and loses none", async () => {
+  it("queues up to 10 segments, sends them in order on the online event and loses none", async () => {
     const { recorder, snapshot } = await start();
     online = false;
     respond = offlineError;
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 10; i++) {
       click();
-      await tick(); // segments 0, 1, 2
+      await tick(); // segments 0 to 9
     }
-    await tick(30_000); // two minutes in; nothing to cut
-    expect(segmentsSent()).toEqual([0, 0]); // 0 tried twice, 1 and 2 behind it, nothing sent while offline
+    await tick(30_000);
+    expect(segmentsSent()).toEqual([0, 0]); // 0 tried twice, 1 to 9 behind it, nothing sent while offline
     expect(snapshot).not.toHaveBeenCalled();
 
     online = true;
     respond = ok;
     window.dispatchEvent(new Event("online"));
-    await tick(100);
-    expect(segmentsSent()).toEqual([0, 0, 0, 1, 2]);
+    await run(5);
+    expect(segmentsSent()).toEqual([0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(snapshot).not.toHaveBeenCalled();
     await run(400);
-    expect(calls).toHaveLength(5); // all stored: nothing is sent again
+    expect(calls).toHaveLength(12); // all stored: nothing is sent again
     recorder.stop();
   });
 
-  it("drops the queue once it would hold a 4th segment, and the recovery snapshot follows", async () => {
+  it("drops the queue once it would hold an 11th segment, and the recovery snapshot follows", async () => {
     const { recorder, snapshot } = await start();
     online = false;
     respond = offlineError;
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 11; i++) {
       click();
       await tick();
     }
@@ -243,14 +243,29 @@ describe("an offline browser", () => {
     online = true;
     respond = ok;
     window.dispatchEvent(new Event("online"));
-    await tick(100);
+    await run(5);
     expect(snapshot).toHaveBeenCalledTimes(1);
     expect(segmentsSent()).toEqual([0, 0]); // the dropped segments are never sent
     click();
     await tick();
-    expect(segmentsSent()).toEqual([0, 0, 4]);
+    expect(segmentsSent()).toEqual([0, 0, 11]);
     expect(calls.at(-1)!.body.events.slice(0, 2).map((e: any) => e.type)).toEqual([4, 2]);
     recorder.stop();
+  });
+
+  it("drains after stop() once the browser is back online, although no online listener is left", async () => {
+    const { recorder } = await start();
+    online = false;
+    respond = offlineError;
+    click();
+    await tick(32_000);
+    expect(segmentsSent()).toEqual([0, 0]);
+    recorder.stop();
+    online = true;
+    respond = ok;
+    await run(30);
+    expect(segmentsSent()).toEqual([0, 0, 0]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("keeps the recovery snapshots capped through a long outage of the server", async () => {
@@ -267,22 +282,30 @@ describe("an offline browser", () => {
 });
 
 describe("a failing server", () => {
-  it("retries once at once, then queues with a 5 s backoff that doubles to 5 minutes and starts over after a stored segment", async () => {
+  it("retries once at once, then queues with a 5 s backoff that doubles, and gives the entry up after 6 attempts from the queue", async () => {
     const { recorder } = await start();
     respond = status(503);
     click();
     await tick();
     const t0 = calls[0].at;
-    await run(1500);
+    await run(400);
     const gaps = calls.slice(1).map((c, i) => c.at - calls[i].at);
-    expect(gaps.slice(0, 9)).toEqual([1000, 5000, 10_000, 20_000, 40_000, 80_000, 160_000, 300_000, 300_000]);
-    expect(new Set(segmentsSent())).toEqual(new Set([0]));
+    expect(gaps.slice(0, 7)).toEqual([1000, 5000, 10_000, 20_000, 40_000, 80_000, 160_000]);
+    expect(calls.filter((c) => c.body.segment === 0)).toHaveLength(8); // 2 at first, 6 from the queue
     expect(calls[0].at).toBe(t0);
+    recorder.stop();
+  });
 
+  it("starts the backoff over at 5 s after a stored segment", async () => {
+    const { recorder } = await start();
+    respond = status(503);
+    click();
+    await tick();
+    await run(10); // tried at 1 s and again 5 s later: the next wait is 10 s
     respond = ok;
-    await run(300); // the next attempt is stored
+    await run(20);
+    expect(calls.at(-1)!.body.segment).toBe(0); // stored
     const stored = calls.length;
-    expect(calls.at(-1)!.body.segment).toBe(0);
 
     respond = status(503);
     click();
@@ -312,29 +335,121 @@ describe("a segment flushed as the page hides", () => {
 });
 
 describe("the queue's lifetime", () => {
-  it("is cleared by stop(): nothing is sent after it", async () => {
+  it("outlives stop(): the queued segments and the final one are sent after it, in order", async () => {
     const { recorder } = await start();
     respond = status(429, { "Retry-After": "60" });
     click();
-    await tick();
-    recorder.stop();
+    await tick(); // segment 0 is limited and waits
+    click();
+    recorder.stop(); // segment 1 is the final one, behind 0
+    expect(segmentsSent()).toEqual([0]);
     respond = ok;
+    await run(90);
+    expect(segmentsSent()).toEqual([0, 0, 1]);
     await run(300);
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(3);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("is cleared by the next on-error buffer's new replay id", async () => {
+  it("ends by itself against a server that never recovers: 6 attempts from the queue, then the entry is lost", async () => {
+    const { recorder } = await start();
+    respond = status(503);
+    click();
+    await tick(32_000); // segment 0: tried twice, queued
+    click();
+    await tick(); // segment 1 waits behind it
+    recorder.stop();
+    await run(1500);
+    expect(calls.filter((c) => c.body.segment === 0)).toHaveLength(2 + 6);
+    expect(vi.getTimerCount()).toBe(0);
+    const sent = calls.length;
+    await tick(30 * 60_000);
+    expect(calls).toHaveLength(sent);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  describe("in on-error mode, with the server asking to wait", () => {
+    const cases: Array<[string, () => Response]> = [
+      ["Retry-After: 60", status(429, { "Retry-After": "60" })],
+      ["no readable header", status(429, { "Retry-After": "soon" })],
+    ];
+    for (const [name, limited] of cases) {
+      it(`keeps the error's replay through the next buffer (${name})`, async () => {
+        const { recorder, snapshot } = await start({ sessionSampleRate: 0, errorSampleRate: 1 });
+        respond = limited;
+        recorder.markError("0123456789abcdef");
+        await tick(100); // the history goes up and is limited
+        const errorReplay = calls[0].body.replay_id;
+        click();
+        await tick(30_000); // the post-error segment joins the queue; a new buffer starts under a new replay id
+        expect(calls).toHaveLength(1);
+        respond = ok;
+        await tick(25_000);
+        expect(calls).toHaveLength(1); // still waiting out the server's minute
+        await tick(20_000);
+        await run(5);
+        const sent = calls.slice(1);
+        expect(sent.length).toBeGreaterThanOrEqual(2);
+        expect(sent.every((c) => c.body.replay_id === errorReplay)).toBe(true);
+        expect(sent.map((c) => c.body.segment)).toEqual(sent.map((_, i) => i));
+        await run(300);
+        expect(calls).toHaveLength(1 + sent.length); // nothing of the new buffer is uploaded
+        expect(snapshot).toHaveBeenCalledTimes(1); // the new buffer's own, none for recovery
+        recorder.stop();
+      });
+    }
+  });
+
+  it("never lets an entry of a newer replay overtake one of the older replay", async () => {
     const { recorder } = await start({ sessionSampleRate: 0, errorSampleRate: 1 });
     respond = status(429, { "Retry-After": "60" });
     recorder.markError("0123456789abcdef");
-    await tick(100); // the buffer goes up and is limited
-    expect(calls.length).toBeGreaterThanOrEqual(1);
-    const before = calls.length;
+    await tick(100);
+    const first = calls[0].body.replay_id;
+    click();
+    await tick(30_000); // post-error segment queued; the second buffer starts
+    click();
+    recorder.markError("fedcba9876543210"); // its history joins the queue, as segment 0 of the new replay
     respond = ok;
-    await tick(30_000); // the post-error window ends and a new replay id starts
-    await run(300);
-    expect(new Set(calls.slice(before).map((c) => c.body.replay_id)).size).toBeLessThanOrEqual(1);
-    expect(calls.slice(before).every((c) => c.body.replay_id !== calls[0].body.replay_id)).toBe(true);
+    await run(70);
+    const sent = calls.slice(1);
+    const order = sent.map((c) => c.body.replay_id === first);
+    expect(order.length).toBeGreaterThanOrEqual(3);
+    expect(order).toEqual([...order].sort((a, b) => Number(b) - Number(a))); // all of the old replay, then the new one
+    expect(sent.filter((c) => c.body.replay_id === first).map((c) => c.body.segment)).toEqual([0, 1]);
+    recorder.stop();
+  });
+});
+
+describe("the online event", () => {
+  it("does not send before the server's time", async () => {
+    const { recorder } = await start();
+    respond = status(429, { "Retry-After": "40" });
+    click();
+    await tick();
+    const limitedAt = calls[0].at;
+    respond = ok;
+    await tick(5000);
+    window.dispatchEvent(new Event("online"));
+    await tick(20_000);
+    expect(calls).toHaveLength(1);
+    await tick(20_000);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].at - limitedAt).toBeGreaterThanOrEqual(40_000);
+    recorder.stop();
+  });
+
+  it("sends at once when the head is waiting out a backoff", async () => {
+    const { recorder } = await start();
+    respond = status(503);
+    click();
+    await tick(32_000); // tried twice, queued with a 5 s backoff
+    expect(calls).toHaveLength(2);
+    respond = ok;
+    await tick(1000);
+    window.dispatchEvent(new Event("online"));
+    await tick(10);
+    expect(calls).toHaveLength(3);
     recorder.stop();
   });
 });
