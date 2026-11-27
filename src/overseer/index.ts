@@ -45,6 +45,8 @@ import {
   DEFAULT_DSN,
   MAX_BATCH_BYTES,
   MAX_BATCH_EVENTS,
+  MAX_QUEUE_BYTES,
+  MAX_QUEUED_TRANSACTIONS,
   MAX_QUEUE_SIZE,
   buildBody,
   fitEventToBytes,
@@ -358,6 +360,8 @@ class OverseerClient {
   private pendingBatches: PendingBatch[] = [];
   // When each queued event was queued, for the 24 hour limit; it follows an event that is cut down to fit.
   private queuedAt = new WeakMap<object, number>();
+  // Wire bytes of each queued event, measured once when it is queued so that trimming never serializes again.
+  private eventBytes = new WeakMap<object, number>();
   // Once closed, the client never schedules a retry.
   private closed = false;
   private flushing: Promise<boolean> | null = null;
@@ -989,11 +993,14 @@ class OverseerClient {
   private enqueue(event: QueuedEvent): void {
     this.eventQueue.push(event);
     this.queuedAt.set(event, Date.now());
+    let bytes = 0;
     try {
-      this.queuedBytes += wireEventBytes(event) + 1;
+      bytes = wireEventBytes(event);
+      this.queuedBytes += bytes + 1;
     } catch {
       // An event that cannot be serialized counts as 0 bytes; the send path meets it as before.
     }
+    this.eventBytes.set(event, bytes);
     this.trimQueue();
 
     // A pending retry will pick this event up; flushing now would skip its backoff.
@@ -1018,21 +1025,54 @@ class OverseerClient {
     if (this.config.debug) console.log("[Overseer]", ...args);
   }
 
-  /** Keeps what is waiting, pending batches and queue together, at MAX_QUEUE_SIZE by dropping the oldest events. */
+  /**
+   * Keeps what is waiting, pending batches and queue together, within three limits: MAX_QUEUE_SIZE events that are not
+   * transactions, MAX_QUEUED_TRANSACTIONS transactions, and MAX_QUEUE_BYTES in all. The oldest event of the type over its
+   * cap goes; over the bytes, the oldest transactions go first and then the oldest of everything else.
+   */
   private trimQueue(): void {
-    let excess = this.eventQueue.length + this.pendingBatches.reduce((n, b) => n + b.events.length, 0) - MAX_QUEUE_SIZE;
-    if (excess <= 0) return;
-    const lost: QueuedEvent[] = [];
-    // The oldest are in the pending batches, which go ahead of the queue.
-    while (excess > 0 && this.pendingBatches.length > 0) {
-      const head = this.pendingBatches[0];
-      const cut = head.events.splice(0, excess);
-      excess -= cut.length;
-      lost.push(...cut);
-      if (head.events.length === 0) this.pendingBatches.shift();
+    const all: QueuedEvent[] = [];
+    for (const batch of this.pendingBatches) all.push(...batch.events);
+    all.push(...this.eventQueue);
+    const isTx = (e: QueuedEvent) => e.type === "transaction";
+    let txCount = 0;
+    let bytes = 0;
+    for (const e of all) {
+      if (isTx(e)) txCount++;
+      bytes += this.eventBytes.get(e) ?? 0;
     }
-    if (excess > 0) lost.push(...this.eventQueue.splice(0, excess));
-    this.log(`Queue full (${MAX_QUEUE_SIZE}); dropped ${lost.length} oldest event(s)`);
+    const otherCount = all.length - txCount;
+    if (txCount <= MAX_QUEUED_TRANSACTIONS && otherCount <= MAX_QUEUE_SIZE && bytes <= MAX_QUEUE_BYTES) return;
+
+    const gone = new Set<QueuedEvent>();
+    const causes = new Map<string, number>();
+    const drop = (e: QueuedEvent, cause: string): void => {
+      gone.add(e);
+      bytes -= this.eventBytes.get(e) ?? 0;
+      const key = `${cause}, ${e.type}`;
+      causes.set(key, (causes.get(key) ?? 0) + 1);
+    };
+    // The oldest are first: the pending batches go ahead of the queue.
+    const dropOldest = (match: (e: QueuedEvent) => boolean, count: number, cause: string): void => {
+      for (let i = 0; i < all.length && count > 0; i++) {
+        if (gone.has(all[i]) || !match(all[i])) continue;
+        drop(all[i], cause);
+        count--;
+      }
+    };
+    dropOldest(isTx, txCount - MAX_QUEUED_TRANSACTIONS, "count cap");
+    dropOldest((e) => !isTx(e), otherCount - MAX_QUEUE_SIZE, "count cap");
+    for (const match of [isTx, (e: QueuedEvent) => !isTx(e)]) {
+      for (let i = 0; i < all.length && bytes > MAX_QUEUE_BYTES; i++) {
+        if (!gone.has(all[i]) && match(all[i])) drop(all[i], "bytes cap");
+      }
+    }
+
+    const lost = all.filter((e) => gone.has(e));
+    for (const batch of this.pendingBatches) batch.events = batch.events.filter((e) => !gone.has(e));
+    this.pendingBatches = this.pendingBatches.filter((b) => b.events.length > 0);
+    this.eventQueue = this.eventQueue.filter((e) => !gone.has(e));
+    for (const [cause, n] of causes) this.log(`Queue full (${cause}); dropped ${n} oldest event(s) of that type`);
     this.tellDropped(lost.length, 0, "queue_full", lost);
   }
 
@@ -1214,6 +1254,7 @@ class OverseerClient {
         event = fitted;
         size = wireEventBytes(fitted);
         this.eventQueue[0] = fitted;
+        this.eventBytes.set(fitted, size);
         const at = this.queuedAt.get(event);
         if (at !== undefined) this.queuedAt.set(fitted, at);
       }
