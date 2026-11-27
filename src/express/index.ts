@@ -46,6 +46,7 @@ import {
   type SeverityLevel,
 } from "../overseer/index";
 import { Stops } from "../overseer/lifecycle";
+import { withHint, crash } from "../overseer/capture-hint";
 import { instrumentFetch } from "../tracing/fetch";
 import { startTransaction, withActiveSpan, type Span } from "../tracing/index";
 import { installNodeTracingContext } from "../tracing/server";
@@ -292,7 +293,7 @@ export function errorHandler(): ErrorMiddleware {
   ): void => {
     // Never the request's headers, cookies, query, params or body. The event's `request` (origin, path, method)
     // comes from the scope below; the route pattern is the one safe thing to add.
-    const requestContext: Record<string, unknown> = { mechanism: "express-error-handler" };
+    const requestContext: Record<string, unknown> = withHint({}, crash("express-error-handler"));
     if (typeof req.route?.path === "string") requestContext.route = `${req.baseUrl ?? ""}${req.route.path}`;
 
     // The request's scope is the one `requestHandler` made, with the user `setUser` or `extractUser` gave it.

@@ -45,7 +45,8 @@ describe("express", () => {
     express.errorHandler()(new Error("boom"), expressReq(), {} as any, () => undefined);
     expectClean();
     expect(events[0]!.request).toEqual({ url: "https://shop.example.com/orders/u-4242", method: "POST" });
-    expect(events[0]!.extra).toMatchObject({ mechanism: "express-error-handler", route: "/api/orders/:id" });
+    expect(events[0]!.extra).toMatchObject({ route: "/api/orders/:id" });
+    expect(events[0]!.exception!.mechanism).toEqual({ type: "express-error-handler", handled: false });
   });
 
   it("requestHandler's breadcrumb has the path only: no query or params", () => {
@@ -64,7 +65,8 @@ describe("next.js", () => {
     nextjs.captureRequestError(new Error("a") as any, { routerKind: "App Router", routePath: "/api/users/[id]", routeType: "route" }, req());
     expectClean();
     expect(events[0]!.request).toEqual({ url: "https://next.example.com/api/users/u-4242", method: "POST" });
-    expect(events[0]!.extra).toMatchObject({ mechanism: "server", route: "/api/users/[id]" });
+    expect(events[0]!.extra).toMatchObject({ route: "/api/users/[id]" });
+    expect(events[0]!.exception!.mechanism).toEqual({ type: "server", handled: false });
   });
 
   it("captureRouterError sends no request object or headers", async () => {
@@ -93,7 +95,10 @@ describe("remix", () => {
     await remix.wrapAction((async () => { throw new Error("action"); }) as any)(args).catch(() => undefined);
     // The captured events carry the breadcrumbs: they must hold no params either.
     expectClean();
-    expect(events.map((e) => (e.extra as any).mechanism)).toEqual(["remix-loader", "remix-action"]);
+    expect(events.map((e) => e.exception!.mechanism)).toEqual([
+      { type: "remix-loader", handled: false },
+      { type: "remix-action", handled: false },
+    ]);
   });
 });
 

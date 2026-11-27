@@ -38,6 +38,7 @@ import {
   type SeverityLevel,
 } from "../overseer/index";
 import { Stops } from "../overseer/lifecycle";
+import { withHint, crash } from "../overseer/capture-hint";
 
 // =============================================================================
 // Types
@@ -93,12 +94,10 @@ export function init(config: ReactNativeConfig = {}): void {
     let working = true;
     const handler = (error: Error, isFatal?: boolean): void => {
       if (working) {
-        coreCaptureException(error, {
-          handled: false,
-          mechanism: "global-error-handler",
-          fatal: isFatal,
-          device: deviceInfo,
-        });
+        coreCaptureException(
+          error,
+          withHint({ device: deviceInfo }, crash("global-error-handler", isFatal ? "fatal" : undefined)),
+        );
       }
 
       // Call original handler
@@ -224,10 +223,10 @@ export function createErrorBoundary(React: any) {
     }
 
     componentDidCatch(error: Error, errorInfo: { componentStack: string }) {
-      coreCaptureException(error, {
-        mechanism: "react-error-boundary",
-        componentStack: errorInfo.componentStack,
-      });
+      coreCaptureException(
+        error,
+        withHint({ componentStack: errorInfo.componentStack }, crash("react-error-boundary")),
+      );
 
       this.props.onError?.(error, errorInfo.componentStack);
     }
