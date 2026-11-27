@@ -456,6 +456,8 @@ class OverseerClient {
     const stack = err.stack ?? syntheticStack(err.name, err.message, caller, hint?.frames);
 
     const causes = collectCauses(error, this.config.inAppOrigins);
+    const conversationId = this.getConversationId();
+    const sessionId = this.getSessionId();
 
     const event: OverseerEvent = {
       id: eventId,
@@ -476,8 +478,8 @@ class OverseerClient {
         // No request, headers, cookies, query, params or body, whatever the caller passed.
         ...(err.thrown === undefined ? {} : sanitizeExtra({ thrown: err.thrown })),
         ...sanitizeExtra(context),
-        conversationId: this.conversationId,
-        sessionId: this.sessionId,
+        conversationId,
+        sessionId,
       },
       breadcrumbs: this.breadcrumbsOf(),
       environment: this.config.environment,
@@ -486,8 +488,8 @@ class OverseerClient {
       ...this.requestOf(),
       contexts: {
         ...envContexts(),
-        conversation: this.conversationId ? { id: this.conversationId } : undefined,
-        session: this.sessionId ? { id: this.sessionId } : undefined,
+        conversation: conversationId ? { id: conversationId } : undefined,
+        session: sessionId ? { id: sessionId } : undefined,
       },
     };
 
@@ -639,20 +641,30 @@ class OverseerClient {
     // Store in next event context
   }
 
+  /** Inside a request the id is the request's own, and the client's is left alone. */
   setConversationId(conversationId: string | null): void {
-    this.conversationId = conversationId;
+    const scope = getRequestScope();
+    if (scope) scope.conversationId = conversationId;
+    else this.conversationId = conversationId;
   }
 
+  /** The request's conversation id when it has set one, else the client's. */
   getConversationId(): string | null {
-    return this.conversationId;
+    const own = getRequestScope()?.conversationId;
+    return own === undefined ? this.conversationId : own;
   }
 
+  /** Inside a request the id is the request's own, and the client's (which a batch carries) is left alone. */
   setSessionId(sessionId: string | null): void {
-    this.sessionId = sessionId;
+    const scope = getRequestScope();
+    if (scope) scope.sessionId = sessionId;
+    else this.sessionId = sessionId;
   }
 
+  /** The request's session id when it has set one, else the client's. */
   getSessionId(): string | null {
-    return this.sessionId;
+    const own = getRequestScope()?.sessionId;
+    return own === undefined ? this.sessionId : own;
   }
 
   getDsn(): string {
@@ -1085,6 +1097,7 @@ class OverseerClient {
       service: this.config.service,
       environment: this.config.environment,
       release: this.config.release,
+      // The client's own, never a request's: a batch holds events of many requests, and each carries its own in `contexts.session`.
       sessionId: this.sessionId,
     });
   }

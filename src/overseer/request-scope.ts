@@ -7,7 +7,7 @@
  * the caller wraps it in `withRequestScope`; `installNodeTracingContext` (tracing/server.ts) swaps in AsyncLocalStorage,
  * so a capture anywhere in the handler's async tail sees its own request and never another's.
  *
- * The scope also holds the request's user, tags and breadcrumbs, so `setUser`, `setTag`, `setTags` and `addBreadcrumb`
+ * The scope also holds the request's user, tags, breadcrumbs, conversation id and session id, so `setUser`, `setTag`, `setTags`, `addBreadcrumb`, `setConversationId` and `setSessionId`
  * inside a request never reach another one, and an event or transaction takes the process-wide state with the request's on
  * top. Where the scope does not survive an `await` (no `installNodeTracingContext`), a later write is outside it and is the
  * client's.
@@ -29,6 +29,10 @@ export interface RequestScope {
   tags?: Record<string, string>;
   /** The request's own breadcrumbs, at most the newest 100, which an event carries after the process-wide ones. */
   breadcrumbs?: Breadcrumb[];
+  /** The request's conversation id, set by `setConversationId` inside it. `undefined`: not set, so the client's is used; `null`: none. */
+  conversationId?: string | null;
+  /** The request's session id, set by `setSessionId` inside it, read as `conversationId` is. A batch never carries it. */
+  sessionId?: string | null;
   /** Brings `user` up to date at the moment an event is built (Express: `req.user` may have been set since the scope opened). Must not throw. */
   refreshUser?: () => void;
 }
