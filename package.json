@@ -309,6 +309,7 @@
     ],
     "plugins": [
       "@semantic-release/commit-analyzer",
+      "./.github/release/export-guard.cjs",
       "./.github/release/no-downgrade.cjs",
       "./.github/release/public-notes.cjs",
       [
