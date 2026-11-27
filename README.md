@@ -374,7 +374,7 @@ captureException(err, { orderId: 'ord_123', password: 'hunter2', req: { headers:
    SDK's own files, a frame with no `file:line` (`Promise.all (index 0)`, `<anonymous>`, `native`), a browser extension
    (`chrome-extension:`, `moz-extension:`, `safari-extension:`, `safari-web-extension:`) or Deno's `ext:` file, and, in a
    browser, an http(s) script on any origin but the page's own, the one `init()` was called from or one in
-   `inAppOrigins` (a tag manager's script, say). The fingerprint and the culprit use the first in-app frame. A script URL in a frame (`https://`, `blob:`, `webpack-internal:`) keeps its origin and path only,
+   `inAppOrigins` (a tag manager's script, say). The fingerprint and the culprit use the first in-app frame, and the culprit is the frame the fingerprint uses (the top error's, else the first cause's), or the top frame when none is in-app; `causes` frames follow the same origin rules. A script URL in a frame (`https://`, `blob:`, `webpack-internal:`) keeps its origin and path only,
    never the query or fragment, so a token or a `?v=` cache-buster never reaches the culprit or the fingerprint. In
    Node, the first three in-app frames whose file can be read also get `pre_context`, `context_line` and
    `post_context` (5 lines each side). The errors behind it go in `exception.causes`: each entry is
@@ -382,7 +382,7 @@ captureException(err, { orderId: 'ord_123', password: 'hunter2', req: { headers:
    errors, so a `Promise.any` failure sends why each promise failed; `errors` is read from an `AggregateError` only, never from another error that keeps a list there) and `parent` is the index of the entry it hangs from
    (`-1` for the top error). The walk is breadth first, cycle-safe, at most 5 deep, 10 inner errors per `AggregateError` and
    10 entries in all; each entry has at most 30 frames and no source lines, and its message is scrubbed like the top one's.
-   An error with nothing to walk has no `causes`. An error with no frame of its own takes its culprit from the first entry of `causes` that has one.
+   An error with nothing to walk has no `causes`. An error with no frame of its own takes its frame, for the fingerprint and the culprit, from the first entry of `causes` that has one.
 3. **Cleaning.** `sanitizeExtra` drops `password` and `req` from the context, and `addBreadcrumb` already dropped
    `authToken` from the breadcrumb.
 4. **Context.** The user, tags, breadcrumbs, environment, release, SDK name and version and the runtime contexts are

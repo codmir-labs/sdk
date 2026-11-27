@@ -439,7 +439,7 @@ class OverseerClient {
     // Kept in this function (not in a helper): the stack of an error made up for the value starts at the app's call.
     const stack = err.stack ?? syntheticStack(err.name, err.message, caller, hint?.frames);
 
-    const causes = collectCauses(error);
+    const causes = collectCauses(error, this.config.inAppOrigins);
 
     const event: OverseerEvent = {
       id: eventId,
