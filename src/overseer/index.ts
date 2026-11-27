@@ -38,11 +38,11 @@ import { callerOrigin, normalizeOrigins, parseStackTrace } from "./stack";
 import { collectCauses } from "./causes";
 import { installProcessErrors } from "./process-errors";
 import { userForWire } from "./user-pii";
+import { claimKeepalive, KEEPALIVE_MAX_BYTES, onHideFlush } from "./keepalive";
 import { setAppRoot } from "./frame-file";
 import { detectEnvironment, detectRelease } from "./detect";
 import {
   DEFAULT_DSN,
-  KEEPALIVE_MAX_BYTES,
   MAX_BATCH_BYTES,
   MAX_BATCH_EVENTS,
   MAX_QUEUE_SIZE,
@@ -337,6 +337,8 @@ class OverseerClient {
   private flushOpen = false;
   // `beforeSend` hooks that returned a Promise and have not settled; `flush()` waits for them.
   private pendingHooks = new Set<Promise<void>>();
+  // Registered with the keepalive budget so the replay's hide handling runs it first, whichever listener fires first.
+  private unregisterHideFlush: (() => void) | null = null;
   private onPageHide = (): void => this.flushOnHide();
   private onVisibilityChange = (): void => {
     if (typeof document !== "undefined" && document.visibilityState === "hidden") this.flushOnHide();
@@ -419,6 +421,8 @@ class OverseerClient {
       });
     }
 
+    this.unregisterHideFlush?.();
+    this.unregisterHideFlush = onHideFlush(() => this.flushOnHide());
     if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
       window.addEventListener("pagehide", this.onPageHide);
     }
@@ -781,6 +785,8 @@ class OverseerClient {
       this.retryTimer = null;
     }
     this.reportRateDropped();
+    this.unregisterHideFlush?.();
+    this.unregisterHideFlush = null;
     if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
       window.removeEventListener("pagehide", this.onPageHide);
     }
@@ -1231,17 +1237,34 @@ class OverseerClient {
         if (n > 0 && size > KEEPALIVE_MAX_BYTES) break;
         n++;
       }
+      if (n === 0) continue; // everything it looked at was unserializable and has been dropped
+      const body = this.body(this.eventQueue.slice(0, n));
+      // The SDK's keepalive budget is shared with the replay: a batch that does not fit stays queued, and the normal
+      // flush sends it, without keepalive, if the page lives.
+      const release = claimKeepalive(utf8Bytes(body));
+      if (!release) break;
       const batch = this.eventQueue.splice(0, n);
       fetch(this.endpoint(), {
         method: "POST",
         headers: this.requestHeaders(),
-        body: this.body(batch),
+        body,
         keepalive: true,
       })
         .then((res) => {
           if (!res.ok && isRetryableStatus(res.status)) this.requeue(batch);
         })
-        .catch(() => this.requeue(batch));
+        .catch(() => this.requeue(batch))
+        .finally(release);
+    }
+    if (this.eventQueue.length > 0) {
+      this.queuedBytes = this.eventQueue.reduce((sum, event) => {
+        try {
+          return sum + wireEventBytes(event) + 1;
+        } catch {
+          return sum;
+        }
+      }, 0);
+      if (!this.flushTimer && !this.retryTimer) this.flushTimer = setTimeout(() => this.flushQuietly(), 1000);
     }
   }
 

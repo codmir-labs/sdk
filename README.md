@@ -1196,7 +1196,7 @@ order after 5 s, doubling to 5 minutes, and at once when the page comes back onl
 still kept). The queue outlives a replay and `stop()`, so the replay of an error is still sent when its 30 s window has
 ended; an entry is given up after 6 attempts from the queue, so a queue that never succeeds ends by itself. A queue
 that would overflow is dropped, each replay in it as one lost segment, which the fresh snapshot above then covers; a
-segment flushed as the page hides is sent once and never queued.
+page hide sends what waits in the queue, oldest first, then the new segment; a hide send that fails waits in the queue like any other.
 
 Privacy is on by default: every input is masked, a picked radio button or checkbox is not recorded, `[data-private]`
 and `.private` text is masked, `[data-codmir-block]` subtrees are not recorded, and password fields are masked
@@ -1273,6 +1273,7 @@ address and a query of its own stays as it is.
 | --- | --- | --- |
 | `sessionSampleRate` | `replaysSessionSampleRate`, else 0 | Share of sessions that record continuously and upload segments |
 | `errorSampleRate` | `replaysOnErrorSampleRate`, else 1 | Share of the other sessions that keep a rolling buffer for an error |
+| `firstSegmentDelay` | 5,000 ms | In a sampled session the first segment, the one with the full snapshot, is uploaded this long after the replay starts, so a short visit keeps its replay; at least 1,000 and at most `segmentDuration` |
 | `segmentDuration` | 30,000 ms | A segment is uploaded after this long ... |
 | `maxSegmentEvents` | 5,000 | ... or after this many events, whichever comes first |
 | `bufferDuration` | 60,000 ms | History the on-error buffer keeps (between half of this and all of it) |
@@ -1287,18 +1288,22 @@ address and a query of its own stays as it is.
 A selector the browser rejects, or one left unclosed such as `[data-x`, is skipped (with an `[Overseer replay]` message
 when `upload.debug` is on), and the rest of its list still applies.
 
-- **Session mode** (session rate hit): records and uploads a segment every 30 s or 5,000 events.
+- **Session mode** (session rate hit): records and uploads the first segment after `firstSegmentDelay` (5 s), then a
+  segment every 30 s or 5,000 events.
 - **On-error mode** (only the error rate hit): keeps the last 30 to 60 s in memory, uploads it when `captureException`
   runs, keeps recording for 30 s more, uploads that, then goes back to buffering under a new replay id.
   An error captured before the recorder has loaded still leaves the buffer rotating: its id rides on the segment that
   follows it, and the next error uploads the last 30 to 60 s, not everything since the page opened.
 - Each upload is one `POST <dsn>/replay` with `x-overseer-key`, cut to stay under about 1.8 MB (UTF-8) and 10,000 events; a
-  network error, 5xx, 408 or 429 is retried once. When the page hides, a small enough segment goes out with
-  `keepalive`.
+  network error, 5xx, 408 or 429 is retried once. When the page hides, the queue and the new segment go out in order, each with `keepalive`
+  while it fits the budget below; one that does not fit, and every later one, goes without it.
 - An error history over that size is sent as several segments in order; the error's id rides on the last one, which
   ends at the error, so the player lands on the error and not on the end of an earlier chunk.
 - Sizes are counted in UTF-8 bytes, the unit the server limits, so a page in Chinese, Japanese, Korean or Cyrillic is cut
-  as small as one in English. A `keepalive` send is used only when the body is 60,000 UTF-8 bytes or less. A segment the
+  as small as one in English. Browsers refuse `keepalive` requests past 64 KiB of bodies in flight per page, so the SDK keeps one budget of 60,000
+  UTF-8 bytes for the error transport and the replay together: a request takes `keepalive` while its body, plus those of
+  the SDK's keepalive requests still in flight, fits it. At hide the error queue is sent first; an error batch that does
+  not fit stays queued for the normal flush. A segment the
   server still refuses with `413` is not retried: it is cut in two and each half is sent (the first under its own
   segment number, the second under the next free one of that replay, with the error ids), down to one event, which is
   dropped.
@@ -1876,7 +1881,7 @@ Each framework's `init()` takes the core options plus its own:
 | Queue | 1,000 events; the oldest are dropped first | `MAX_QUEUE_SIZE` |
 | Retry | Network error, 5xx, 408 and 429; 1 s doubling to 60 s, or `Retry-After` when longer | `retryDelayMs()`, `isRetryableStatus()` |
 | Not retried | Any other 4xx | `isRetryableStatus()` |
-| Page hide | `pagehide` or `visibilitychange` to hidden sends the queue with `keepalive`, under 60,000 bytes per request | `flushOnHide()` |
+| Page hide | `pagehide` or `visibilitychange` to hidden sends the queue with `keepalive`, within one 60,000-byte budget shared with the replay; a batch that does not fit stays queued | `flushOnHide()` |
 | Breadcrumbs | The last 20 (the server keeps an error's last 20) | `addBreadcrumb()` |
 | Repeated breadcrumb | One identical to the newest (same category, level and message) raises its `data.count` instead of adding another | `addRepeatedBreadcrumb()` |
 | Spans per transaction | 1,000 | `MAX_SPANS_PER_TRANSACTION` |

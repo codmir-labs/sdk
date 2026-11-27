@@ -56,6 +56,7 @@ async function start(config: Record<string, unknown> = {}) {
   const replay = await import("../index");
   const recorder = new replay.ReplayRecorder({
     sessionSampleRate: 1,
+    firstSegmentDelay: 30_000, // these tests count 30 s ticks; the early first segment has its own file
     upload: { url: REPLAY_URL, key: "osk_test" },
     ...config,
   });
@@ -116,14 +117,18 @@ describe("postSegment", () => {
     expect(calls).toHaveLength(2);
   });
 
-  it("sends a hiding segment once and reports every failure as failed", async () => {
+  it("sends a hiding segment once and reports a failure a retry could cure as retry later, a 429 with its Retry-After", async () => {
     const { postSegment } = await import("../upload");
-    for (const code of [429, 503]) {
+    const wanted = { 429: 5000, 503: null } as const;
+    for (const code of [429, 503] as const) {
       calls.length = 0;
       respond = status(code, { "Retry-After": "5" });
-      expect(await postSegment(target, await body(), true)).toBe("failed");
+      expect(await postSegment(target, await body(), true)).toEqual({ outcome: "retry_later", delayMs: wanted[code] });
       expect(calls).toHaveLength(1);
     }
+    calls.length = 0;
+    respond = status(400);
+    expect(await postSegment(target, await body(), true)).toBe("failed");
   });
 });
 
@@ -319,17 +324,19 @@ describe("a failing server", () => {
 });
 
 describe("a segment flushed as the page hides", () => {
-  it("is sent once with keepalive and never queued", async () => {
-    const { recorder } = await start();
+  it("is sent once with keepalive, and a limited one waits in the queue for the page that stays", async () => {
+    const { recorder, snapshot } = await start();
     respond = status(429, { "Retry-After": "5" });
     click();
     window.dispatchEvent(new Event("pagehide"));
     await tick(10);
     expect(calls).toHaveLength(1);
     expect(calls[0].keepalive).toBe(true);
+    respond = ok;
     await run(120);
-    // The page did not go away, so the recorder carries on: the lost segment's replacement is a later number.
-    expect(calls.filter((c) => c.body.segment === 0)).toHaveLength(1);
+    // The page did not go away: the queue sends the same segment once more, and nothing needed a fresh snapshot.
+    expect(calls.filter((c) => c.body.segment === 0)).toHaveLength(2);
+    expect(snapshot).not.toHaveBeenCalled();
     recorder.stop();
   });
 });

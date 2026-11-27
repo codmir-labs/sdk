@@ -84,6 +84,7 @@ async function start(config: Record<string, unknown> = {}) {
   const replay = await import("../index");
   const recorder = new replay.ReplayRecorder({
     sessionSampleRate: 1,
+    firstSegmentDelay: 30_000, // these tests count 30 s ticks; the early first segment has its own file
     upload: { url: REPLAY_URL, key: "osk_test" },
     ...config,
   });
