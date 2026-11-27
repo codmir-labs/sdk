@@ -27,6 +27,7 @@ import type { TransactionEvent } from "../tracing/types";
 import { SDK_INFO } from "../version";
 import { PatchRuntime, type SelfHealingConfig } from "./patch-runtime";
 import { getRequestScope } from "./request-scope";
+import { getActiveSpan } from "../tracing/context";
 import { sanitizeExtra } from "./sanitize-extra";
 import { redactSecrets } from "../logs/redact";
 import { scrubEvent, scrubTags } from "./scrub-text";
@@ -261,6 +262,17 @@ function stringTags(tags: CaptureContext["tags"]): Record<string, string> {
 function fingerprintOf(fingerprint: string | string[]): { fingerprint?: string[] } {
   const list = typeof fingerprint === "string" ? [fingerprint] : fingerprint;
   return list.length ? { fingerprint: [...list] } : {};
+}
+
+/** The active span's trace, sampled or not: what lets the server link an issue to its trace. Nothing outside a span. */
+function traceContext(): { trace?: { trace_id: string; span_id: string } } {
+  try {
+    const span = getActiveSpan();
+    return span ? { trace: { trace_id: span.traceId, span_id: span.spanId } } : {};
+  } catch {
+    // a failing context strategy never breaks error capture
+    return {};
+  }
 }
 
 /** A capture context's contexts, each cleaned like `extra`; the SDK's own `conversation` and `session` are not settable. */
@@ -562,6 +574,7 @@ class OverseerClient {
       ...(fields?.fingerprint ? fingerprintOf(fields.fingerprint) : {}),
       contexts: {
         ...envContexts(),
+        ...traceContext(),
         ...contextsOf(fields?.contexts),
         conversation: conversationId ? { id: conversationId } : undefined,
         session: sessionId ? { id: sessionId } : undefined,
