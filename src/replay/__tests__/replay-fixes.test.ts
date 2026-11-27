@@ -280,7 +280,8 @@ describe("upload budgets count UTF-8 bytes", () => {
     await settle();
     click();
     await vi.advanceTimersByTimeAsync(35_000);
-    expect(replayCalls().length).toBeGreaterThan(0); // the clicks after the snapshot still upload
+    // The page's snapshot is over one request, so the replay cannot play and nothing of it is sent (see snapshot-recovery.test.ts).
+    expect(replayCalls()).toHaveLength(0);
     for (const call of replayCalls()) expect(utf8(call.raw)).toBeLessThanOrEqual(MAX);
   });
 

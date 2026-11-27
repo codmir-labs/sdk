@@ -10,6 +10,8 @@ import { SDK_INFO } from "../version";
 
 /** rrweb's Meta event: `data.href` is the page's address (`window.location.href`), then its width and height. */
 export const RRWEB_META = 4;
+/** rrweb's FullSnapshot event: the whole page, which the player needs before any incremental event. */
+export const RRWEB_FULL_SNAPSHOT = 2;
 
 /** The server rejects a body over 2 MB (UTF-8 bytes, not string length) with 413. */
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
@@ -102,22 +104,24 @@ export function buildSegmentBody(
 /**
  * Cuts `events` into consecutive runs that each fit one request: at most {@link MAX_EVENTS_PER_SEGMENT} events
  * and about {@link TARGET_BODY_BYTES} UTF-8 bytes once serialised. A single event larger than the budget cannot be split
- * and is dropped (counted in `dropped`).
+ * and is dropped (counted in `dropped`; `snapshotDropped` says one of them was a FullSnapshot, so what follows cannot play).
  */
 export function chunkEvents(
   events: RrwebEvent[],
   overheadBytes = 600,
   budget = TARGET_BODY_BYTES,
-): { chunks: RrwebEvent[][]; dropped: number } {
+): { chunks: RrwebEvent[][]; dropped: number; snapshotDropped: boolean } {
   const chunks: RrwebEvent[][] = [];
   let current: RrwebEvent[] = [];
   let size = overheadBytes;
   let dropped = 0;
+  let snapshotDropped = false;
 
   for (const event of events) {
     const bytes = utf8Bytes(JSON.stringify(event)) + 1;
     if (bytes + overheadBytes > budget) {
       dropped++;
+      if (event.type === RRWEB_FULL_SNAPSHOT) snapshotDropped = true;
       continue;
     }
     if (current.length > 0 && (current.length >= MAX_EVENTS_PER_SEGMENT || size + bytes > budget)) {
@@ -129,7 +133,7 @@ export function chunkEvents(
     size += bytes;
   }
   if (current.length > 0) chunks.push(current);
-  return { chunks, dropped };
+  return { chunks, dropped, snapshotDropped };
 }
 
 const sleep = (ms: number) =>
