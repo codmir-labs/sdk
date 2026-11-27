@@ -36,6 +36,7 @@ import {
   type SeverityLevel,
 } from "../overseer/index";
 import { listen, patch, Stops } from "../overseer/lifecycle";
+import { withHint, crash } from "../overseer/capture-hint";
 import { instrumentFetch } from "../tracing/fetch";
 import { instrumentXhr } from "../tracing/xhr";
 import { startBrowserTracing, type BrowserTracingOptions } from "../tracing/browser";
@@ -105,13 +106,10 @@ export function init(config: BrowserConfig = {}): void {
   if (captureGlobalErrors) {
     stops.add(
       listen(window, "error", (event: ErrorEvent) => {
-        coreCaptureException(event.error || event.message, {
-          handled: false,
-          mechanism: "onerror",
-          filename: event.filename,
-          lineno: event.lineno,
-          colno: event.colno,
-        });
+        coreCaptureException(
+          event.error || event.message,
+          withHint({ filename: event.filename, lineno: event.lineno, colno: event.colno }, crash("onerror")),
+        );
       }),
     );
   }
@@ -120,10 +118,7 @@ export function init(config: BrowserConfig = {}): void {
   if (captureUnhandledRejections) {
     stops.add(
       listen(window, "unhandledrejection", (event: PromiseRejectionEvent) => {
-        coreCaptureException(event.reason, {
-          handled: false,
-          mechanism: "onunhandledrejection",
-        });
+        coreCaptureException(event.reason, withHint({}, crash("onunhandledrejection")));
       }),
     );
   }

@@ -27,6 +27,7 @@ import { SDK_INFO } from "../version";
 import { PatchRuntime, type SelfHealingConfig } from "./patch-runtime";
 import { getRequestScope } from "./request-scope";
 import { sanitizeExtra } from "./sanitize-extra";
+import { readHint } from "./capture-hint";
 import { browserRequest, envContexts } from "./runtime-context";
 import { addSourceContext } from "./source-context";
 import { parseStackTrace } from "./stack";
@@ -365,18 +366,20 @@ class OverseerClient {
 
     const eventId = generateId();
     const err = error instanceof Error ? error : new Error(String(error));
+    // Set by an integration only (a symbol key): a caller's own `handled` or `mechanism` is plain data in `extra`.
+    const hint = readHint(context);
 
     const event: OverseerEvent = {
       id: eventId,
       type: "error",
       timestamp: new Date().toISOString(),
-      level: "error",
+      level: hint?.level ?? "error",
       message: err.message,
       exception: {
         type: err.name,
         value: err.message,
         stacktrace: this.stackFor(err.stack),
-        mechanism: { type: "generic", handled: true },
+        mechanism: hint?.mechanism ?? { type: "generic", handled: true },
       },
       user: this.userOf() || undefined,
       tags: this.tagsOf(),

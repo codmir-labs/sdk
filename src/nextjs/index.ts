@@ -33,6 +33,7 @@ import {
   type SeverityLevel,
 } from "../overseer/index";
 import { listen, Stops } from "../overseer/lifecycle";
+import { withHint, crash } from "../overseer/capture-hint";
 import { trackNavigation } from "../overseer/navigation";
 import { scrubUrl } from "../overseer/url-scrub";
 import { requestScopeFrom, withRequestScope } from "../overseer/request-scope";
@@ -96,10 +97,7 @@ export function init(config: NextjsConfig = {}): void {
     if (captureUnhandledErrors) {
       stops.add(
         listen(window, "error", (event: ErrorEvent) => {
-          coreCaptureException(event.error || event.message, {
-            handled: false,
-            mechanism: "onerror",
-          });
+          coreCaptureException(event.error || event.message, withHint({}, crash("onerror")));
         }),
       );
     }
@@ -108,10 +106,7 @@ export function init(config: NextjsConfig = {}): void {
     if (captureUnhandledRejections) {
       stops.add(
         listen(window, "unhandledrejection", (event: PromiseRejectionEvent) => {
-          coreCaptureException(event.reason, {
-            handled: false,
-            mechanism: "onunhandledrejection",
-          });
+          coreCaptureException(event.reason, withHint({}, crash("onunhandledrejection")));
         }),
       );
     }
@@ -150,11 +145,13 @@ export function captureRequestError(
   // No request object, headers or cookies in the context. The event's `request` (origin, path, method) comes from
   // the scope below; the route pattern is `errorContext.routePath`.
   const capture = (): string =>
-    coreCaptureException(error, {
-      mechanism: "server",
-      ...errorContext,
-      ...(errorContext.routePath ? { route: errorContext.routePath } : {}),
-    });
+    coreCaptureException(
+      error,
+      withHint(
+        { ...errorContext, ...(errorContext.routePath ? { route: errorContext.routePath } : {}) },
+        crash("server"),
+      ),
+    );
   return request ? withRequestScope(requestScopeFrom({ url: request.url, method: request.method }), capture) : capture();
 }
 
@@ -174,13 +171,18 @@ export async function captureRouterError(
   // Origin from Host and X-Forwarded-Proto, path without its query; no header is sent in the event's `request`.
   const scope = requestScopeFrom({ url: request.path, method: request.method, host: header("host"), protocol: header("x-forwarded-proto") });
   withRequestScope(scope, () =>
-    coreCaptureException(error, {
-      mechanism: "nextjs-router",
-      routerKind: context.routerKind,
-      routePath: context.routePath,
-      routeType: context.routeType,
-      route: context.routePath,
-    }),
+    coreCaptureException(
+      error,
+      withHint(
+        {
+          routerKind: context.routerKind,
+          routePath: context.routePath,
+          routeType: context.routeType,
+          route: context.routePath,
+        },
+        crash("nextjs-router"),
+      ),
+    ),
   );
 }
 

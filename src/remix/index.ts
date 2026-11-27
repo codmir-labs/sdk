@@ -50,6 +50,7 @@ import {
   type SeverityLevel,
 } from "../overseer/index";
 import { listen, Stops } from "../overseer/lifecycle";
+import { withHint, crash } from "../overseer/capture-hint";
 import { trackNavigation } from "../overseer/navigation";
 import { scrubUrl } from "../overseer/url-scrub";
 
@@ -152,9 +153,7 @@ export function handleError(
   error: unknown,
   { request }: { request: RemixRequest }
 ): void {
-  const context: Record<string, unknown> = {
-    mechanism: "remix-handleError",
-  };
+  const context: Record<string, unknown> = withHint({}, crash("remix-handleError"));
 
   // Response errors carry status information
   if (isResponseLike(error)) {
@@ -216,9 +215,10 @@ export function wrapLoader<T extends DataFunction>(loader: T): T {
       return await loader(args);
     } catch (error) {
       if (remixConfig.captureLoaderErrors) {
-        coreCaptureException(error instanceof Error ? error : new Error(String(error)), {
-          mechanism: "remix-loader",
-        });
+        coreCaptureException(
+          error instanceof Error ? error : new Error(String(error)),
+          withHint({}, crash("remix-loader")),
+        );
       }
       throw error;
     }
@@ -261,9 +261,7 @@ export function wrapAction<T extends DataFunction>(action: T): T {
       return await action(args);
     } catch (error) {
       if (remixConfig.captureActionErrors) {
-        const context: Record<string, unknown> = {
-          mechanism: "remix-action",
-        };
+        const context: Record<string, unknown> = withHint({}, crash("remix-action"));
 
         // Capture form data keys (not values) for context
         try {
@@ -310,9 +308,7 @@ export function wrapAction<T extends DataFunction>(action: T): T {
  * ```
  */
 export function captureRemixServerError(error: unknown, request: RemixRequest): string {
-  const context: Record<string, unknown> = {
-    mechanism: "remix-server-render",
-  };
+  const context: Record<string, unknown> = withHint({}, crash("remix-server-render"));
 
   if (error instanceof Error) {
     return coreCaptureException(error, context);
@@ -351,20 +347,14 @@ export function setupBrowserTracking(): void {
   // Global error handler
   stops.add(
     listen(window, "error", (event: ErrorEvent) => {
-      coreCaptureException(event.error || event.message, {
-        handled: false,
-        mechanism: "onerror",
-      });
+      coreCaptureException(event.error || event.message, withHint({}, crash("onerror")));
     }),
   );
 
   // Unhandled rejection handler
   stops.add(
     listen(window, "unhandledrejection", (event: PromiseRejectionEvent) => {
-      coreCaptureException(event.reason, {
-        handled: false,
-        mechanism: "onunhandledrejection",
-      });
+      coreCaptureException(event.reason, withHint({}, crash("onunhandledrejection")));
     }),
   );
 

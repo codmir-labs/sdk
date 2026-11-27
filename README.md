@@ -714,13 +714,13 @@ inside the request, as in the Express, Next.js and Hono integrations; the transa
 <details>
 <summary><b>What each Remix function captures</b></summary>
 
-| Function | Captures | Extra context |
+| Function | Captures | On the event |
 | --- | --- | --- |
-| `handleError(error, { request })` | Server errors Remix reports. A thrown `Response` is captured as `Response Error: <status> <statusText>` unless `captureResponseErrors: false` | `mechanism`, `responseStatus`, `responseStatusText` |
-| `wrapLoader(fn)` | Errors thrown by the loader (`captureLoaderErrors`), plus a `loader` breadcrumb with method and path | `mechanism: remix-loader` |
-| `wrapAction(fn)` | Errors thrown by the action (`captureActionErrors`), plus an `action` breadcrumb | `mechanism: remix-action`, and `formDataKeys` (the form's field names, never their values) when the action threw before reading the body |
-| `captureRemixServerError(error, request)` | Rendering errors from `entry.server.tsx`; returns the event id | `mechanism: remix-server-render` |
-| `setupBrowserTracking()` | `window` errors and unhandled rejections; navigation breadcrumbs unless `captureRouteChanges: false` | `mechanism: onerror` or `onunhandledrejection` |
+| `handleError(error, { request })` | Server errors Remix reports. A thrown `Response` is captured as `Response Error: <status> <statusText>` unless `captureResponseErrors: false` | event mechanism `remix-handleError`, `responseStatus`, `responseStatusText` |
+| `wrapLoader(fn)` | Errors thrown by the loader (`captureLoaderErrors`), plus a `loader` breadcrumb with method and path | event mechanism `remix-loader` |
+| `wrapAction(fn)` | Errors thrown by the action (`captureActionErrors`), plus an `action` breadcrumb | event mechanism `remix-action`, and `formDataKeys` (the form's field names, never their values) when the action threw before reading the body |
+| `captureRemixServerError(error, request)` | Rendering errors from `entry.server.tsx`; returns the event id | event mechanism `remix-server-render` |
+| `setupBrowserTracking()` | `window` errors and unhandled rejections; navigation breadcrumbs unless `captureRouteChanges: false` | event mechanism `onerror` or `onunhandledrejection` |
 
 A thrown `Response` (`throw redirect()`, a 404) is classified by its status in a `remix/server` transaction and
 rethrown; it is not counted as an error.
@@ -1434,7 +1434,7 @@ back to `CODMIR_API_KEY`. The AI-call monitoring options that used to be listed 
 | Function | What it does |
 | --- | --- |
 | `init(config)` | Creates the client. Call it once; each call replaces the client |
-| `captureException(error, context?)` | Sends an error (anything thrown; a non-`Error` is wrapped). Returns the event id, or `''` before `init`, when disabled or sampled out |
+| `captureException(error, context?)` | Sends an error (anything thrown; a non-`Error` is wrapped). Returns the event id, or `''` before `init`, when disabled or sampled out. Your call is mechanism `generic`, handled, level `error`; a `handled` or `mechanism` key in `context` is plain data in `extra` and changes neither. The integrations send the errors they catch on their own (`window` errors, unhandled rejections, server and framework errors, React Native's global handler) as unhandled, with their own mechanism, and a React Native fatal at level `fatal` |
 | `captureMessage(message, level = 'info')` | Sends a message event at `fatal`, `error`, `warning`, `info` or `debug` |
 | `setUser(user \| null)` | `{ id, email, username, ip_address, ... }` on every later event. Inside a server request (see [Express](#express)) it is that request's user only |
 | `setTag(key, value)`, `setTags(tags)` | String tags on every later event and transaction |
