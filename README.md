@@ -242,7 +242,7 @@ Each import is its own bundle, so a page that only reports errors never loads th
 | `codmir-logs` (a command, `bin`) | `npx codmir-logs [files…]`: [findings from logs you already have](#read-logs-you-already-have), on your machine | Node.js |
 | `@codmir/sdk/nextjs` | Next.js `init`, `captureRouterError`, `captureRequestError`, route-change breadcrumbs | Browser and server |
 | `@codmir/sdk/nextjs/server` | `withCodmirTracing`, `withCodmirMiddleware` | Node.js runtime |
-| `@codmir/sdk/express` | `init`, `requestHandler`, `tracingHandler`, `errorHandler` | Node.js |
+| `@codmir/sdk/express` | `init`, `requestHandler`, `tracingHandler`, `errorHandler`, `bindToRequest` | Node.js |
 | `@codmir/sdk/hono` | `codmirTracing()` middleware | Node.js (needs `node:async_hooks`) |
 | `@codmir/sdk/remix` | `init`, `handleError`, `wrapLoader`, `wrapAction`, `captureRemixServerError`, `setupBrowserTracking` | Server and browser |
 | `@codmir/sdk/remix/server` | `withCodmirTracing`, `withCodmirRequestHandler` | Node.js |
@@ -637,6 +637,13 @@ breadcrumbs (the newest 100) and leave the process-wide ones, and every other re
 breadcrumbs `instrumentFetch()` records, which go through `addBreadcrumb`. An error, a message or a transaction carries the
 process-wide tags with the request's on top (the request's win, key by key) and the process-wide breadcrumbs followed by the
 request's. Outside a request all three are process-wide, as before.
+
+Listeners on `req` and `res` keep the request's scope and its `http.server` span too. Node runs a listener where its event
+is emitted, in the HTTP parser, so a middleware that continues from `req.on('end')` (multer, a body reader, a pipe callback)
+would otherwise hand the rest of the request on with no scope: no `request`, `setUser` falling through to the process-wide
+user, no child span for an outgoing call. `requestHandler()` binds every listener added to `req` and `res`, so `off` and
+`removeListener` with the original still work and `once` still fires once. For another emitter a middleware makes during the
+request (a busboy stream, say), call `bindToRequest(emitter)` from `@codmir/sdk/express`; outside a request it does nothing.
 
 Which handlers run in a request scope that survives `await` without you doing anything:
 

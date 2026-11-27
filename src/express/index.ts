@@ -50,7 +50,8 @@ import { withHint, crash } from "../overseer/capture-hint";
 import { instrumentFetch } from "../tracing/fetch";
 import { startTransaction, withActiveSpan, type Span } from "../tracing/index";
 import { installNodeTracingContext } from "../tracing/server";
-import { requestScopeFrom, withRequestScope, type RequestScope } from "../overseer/request-scope";
+import { getRequestScope, requestScopeFrom, withRequestScope, type RequestScope } from "../overseer/request-scope";
+import { bindEmitter } from "./bind-emitter";
 
 // =============================================================================
 // Inline Express Types (no @types/express dependency)
@@ -235,7 +236,7 @@ function scopeOf(req: ExpressRequest): RequestScope {
  * ```
  */
 export function requestHandler(): RequestMiddleware {
-  return (req: ExpressRequest, _res: ExpressResponse, next: NextFunction): void => {
+  return (req: ExpressRequest, res: ExpressResponse, next: NextFunction): void => {
     // Attach context for downstream middleware
     const scope = scopeOf(req);
     req._codmir = {
@@ -263,8 +264,34 @@ export function requestHandler(): RequestMiddleware {
 
     // Everything downstream, async tail included, captures under this request.
     installNodeTracingContext();
+    // A listener on `req` or `res` runs where its event is emitted, in the HTTP parser's context. Bound at the moment it is
+    // added, it keeps the scope and the active span of whoever added it, so a middleware that continues from `req.on("end")`
+    // (an upload parser, a body reader, a pipe callback) hands the rest of the request on with both.
+    if (isInitialized) {
+      bindEmitter(req, () => isInitialized);
+      bindEmitter(res, () => isInitialized);
+    }
     withRequestScope(scope, () => next());
   };
+}
+
+/**
+ * Makes the listeners added to `emitter` from now on keep the request's scope and active span, as the ones on `req` and
+ * `res` do. Call it, inside a request, on an emitter a middleware makes (a busboy stream, say). Outside a request it changes
+ * nothing.
+ *
+ * @example
+ * ```typescript
+ * app.use((req, res, next) => {
+ *   const form = bindToRequest(busboy({ headers: req.headers }));
+ *   form.on('close', next);
+ *   req.pipe(form);
+ * });
+ * ```
+ */
+export function bindToRequest<T extends object>(emitter: T): T {
+  if (isInitialized && getRequestScope()) bindEmitter(emitter, () => isInitialized);
+  return emitter;
 }
 
 /** Sets the request's user to what `extractUser` answers, and never lets it break the request. */
