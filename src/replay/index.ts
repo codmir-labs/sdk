@@ -29,6 +29,7 @@
 
 import { generateId } from "../id";
 import { getClient } from "../overseer/index";
+import { utf8Bytes } from "../overseer/transport";
 import { ChoiceFilter, hiddenChoices } from "./choices";
 import { ComposedPrivacyFilter } from "./composed-privacy";
 import { dropPageQuery } from "./page-query";
@@ -46,6 +47,7 @@ import {
   RRWEB_META,
   TARGET_BODY_BYTES,
   type RrwebEvent,
+  type UploadOutcome,
   type UploadTarget,
 } from "./upload";
 
@@ -240,6 +242,27 @@ type RrwebRecord = typeof import("@rrweb/record").record;
 /** Recovery snapshots taken with no stored segment in between; past this a loss waits for the next periodic checkout. */
 const MAX_RECOVERY_SNAPSHOTS = 3;
 
+/** A segment whose upload ended "retry later" waits in a queue of at most this many segments... */
+const MAX_QUEUED_SEGMENTS = 3;
+/** ...or this many bytes of request bodies, whichever comes first. */
+const MAX_QUEUED_BYTES = 5 * 1024 * 1024;
+/** With no `Retry-After`, the wait before a queued segment is tried again starts here, doubles per failure... */
+const QUEUE_BACKOFF_START_MS = 5000;
+/** ...up to this. */
+const QUEUE_BACKOFF_MAX_MS = 300_000;
+
+/** A segment waiting to be sent again. */
+interface QueuedSegment {
+  counter: { next: number };
+  replayId: string;
+  sequenceNumber: number;
+  events: RrwebEvent[];
+  errorIds: string[];
+  epoch: number;
+  /** UTF-8 bytes of its request body. */
+  bytes: number;
+}
+
 /** The page is known to be offline (`navigator.onLine` is a hint: only a `false` is believed). */
 function isOffline(): boolean {
   return typeof navigator !== "undefined" && navigator.onLine === false;
@@ -289,6 +312,18 @@ export class ReplayRecorder {
   private awaitingCheckout = false;
   /** A FullSnapshot did not fit one request: this replay cannot play from there, so it records and uploads no more. */
   private halted = false;
+  /** Segments of the replay now recording whose upload ended "retry later", in sequence order; they go out one at a time. */
+  private queue: QueuedSegment[] = [];
+  private queueBytes = 0;
+  /** Epoch ms before which the head of the queue is not sent again (unless the page comes back online). */
+  private queueDueAt = 0;
+  /** The last backoff used with no server delay, 0 after a stored segment. */
+  private queueBackoffMs = 0;
+  /** A request for the head of the queue is in flight. */
+  private draining = false;
+  /** Bumped whenever the queue is cleared, so the answer to a request sent for an older queue is ignored. */
+  private queueGeneration = 0;
+  private queueTimer: ReturnType<typeof setTimeout> | null = null;
   private segmentTimer: ReturnType<typeof setInterval> | null = null;
   private postErrorTimer: ReturnType<typeof setTimeout> | null = null;
   private onSegmentReady?: (segment: ReplaySegment) => void;
@@ -298,7 +333,10 @@ export class ReplayRecorder {
     this.flushSegment(true);
   };
   private onPageHide = (): void => this.flushSegment(true);
-  private onOnline = (): void => this.recover();
+  private onOnline = (): void => {
+    this.recover();
+    this.drain(true);
+  };
 
   constructor(config: ReplayRecorderConfig = {}) {
     const { privacy, ...rest } = config;
@@ -437,6 +475,7 @@ export class ReplayRecorder {
     this.recoveryPending = false;
     this.recoveries = 0;
     this.awaitingCheckout = false;
+    this.clearQueue();
   }
 
   private async boot(generation: number): Promise<void> {
@@ -591,33 +630,157 @@ export class ReplayRecorder {
   ): void {
     const upload = this.config.upload;
     if (!upload || this.uploadsRefused) return;
-    void postSegment(upload, buildSegmentBody(upload, { replayId, sequenceNumber, events, errorIds }), hiding).then((outcome) => {
-      if (outcome === "refused") {
-        this.uploadsRefused = true;
-        // Nothing more can be stored this session: stop recording too (deferred, we may be inside stop()).
-        setTimeout(() => this.stop(), 0);
-      } else if (outcome === "too_large") {
-        // The server took it for over its cap: send it in two halves, the first under its own number, the second under
-        // the next one of that replay; the error ids go with the later half. One event too big alone is dropped.
-        if (events.length < 2) {
-          if (events[0]?.type === RRWEB_FULL_SNAPSHOT) {
-            // A fresh snapshot would be as large: no recovery, the replay cannot be played.
-            if (replayId === this.replayId) this.haltReplay("the server refused a full snapshot as too large, so this replay cannot be played; stopping it");
-            return;
-          }
-          if (upload.debug) console.log("[Overseer replay] the server refused a single event as too large; dropping it");
-          this.segmentLost(replayId, epoch);
+    const segment: QueuedSegment = { counter, replayId, sequenceNumber, events, errorIds, epoch, bytes: 0 };
+    // Behind a queued segment a new one waits its turn, so segments reach the server in order. A segment flushed as the
+    // page hides is sent once, now, and never queued: the page may be gone before a queue could send it.
+    if (!hiding && this.queue.length > 0 && replayId === this.replayId) {
+      this.enqueue(segment, null);
+      return;
+    }
+    void postSegment(upload, this.bodyOf(segment), hiding).then((outcome) => {
+      if (typeof outcome === "object") this.enqueue(segment, outcome.delayMs);
+      else this.settle(segment, outcome, hiding);
+    });
+  }
+
+  private bodyOf(segment: QueuedSegment) {
+    return buildSegmentBody(this.config.upload as UploadTarget, segment);
+  }
+
+  /** What became of a segment that is not waiting for a retry. */
+  private settle(segment: QueuedSegment, outcome: Exclude<UploadOutcome, { outcome: "retry_later" }>, hiding: boolean): void {
+    const { counter, replayId, sequenceNumber, events, errorIds, epoch } = segment;
+    const upload = this.config.upload;
+    if (!upload) return;
+    if (outcome === "refused") {
+      this.uploadsRefused = true;
+      this.clearQueue();
+      // Nothing more can be stored this session: stop recording too (deferred, we may be inside stop()).
+      setTimeout(() => this.stop(), 0);
+    } else if (outcome === "too_large") {
+      // The server took it for over its cap: send it in two halves, the first under its own number, the second under
+      // the next one of that replay; the error ids go with the later half. One event too big alone is dropped.
+      if (events.length < 2) {
+        if (events[0]?.type === RRWEB_FULL_SNAPSHOT) {
+          // A fresh snapshot would be as large: no recovery, the replay cannot be played.
+          if (replayId === this.replayId) this.haltReplay("the server refused a full snapshot as too large, so this replay cannot be played; stopping it");
           return;
         }
-        const middle = Math.ceil(events.length / 2);
-        this.upload(counter, replayId, sequenceNumber, events.slice(0, middle), [], hiding, epoch);
-        this.upload(counter, replayId, counter.next++, events.slice(middle), errorIds, hiding, epoch);
-      } else if (outcome === "stored") {
-        if (replayId === this.replayId) this.recoveries = 0;
-      } else if (outcome === "failed") {
-        this.segmentLost(replayId, epoch);
+        if (upload.debug) console.log("[Overseer replay] the server refused a single event as too large; dropping it");
+        this.lose(replayId, epoch);
+        return;
       }
+      const middle = Math.ceil(events.length / 2);
+      this.upload(counter, replayId, sequenceNumber, events.slice(0, middle), [], hiding, epoch);
+      this.upload(counter, replayId, counter.next++, events.slice(middle), errorIds, hiding, epoch);
+    } else if (outcome === "stored") {
+      if (replayId === this.replayId) {
+        this.recoveries = 0;
+        this.queueBackoffMs = 0;
+      }
+    } else {
+      this.lose(replayId, epoch);
+    }
+  }
+
+  /** A segment is gone for good: what waits behind it in the queue cannot play without it, so it goes too. */
+  private lose(replayId: string, epoch: number): void {
+    if (replayId === this.replayId) {
+      const kept = this.queue.filter((queued) => queued.epoch > epoch);
+      this.queueBytes = kept.reduce((sum, queued) => sum + queued.bytes, 0);
+      this.queue = kept;
+      if (kept.length === 0) this.clearQueue();
+    }
+    this.segmentLost(replayId, epoch);
+  }
+
+  /**
+   * Puts a segment whose upload ended "retry later" in the queue, in sequence order. `delayMs` is the server's wait, or
+   * null for the backoff. Past 3 segments or 5 MB the queue is dropped as one lost segment: the later ones cannot play
+   * without the earliest.
+   */
+  private enqueue(segment: QueuedSegment, delayMs: number | null): void {
+    if (segment.replayId !== this.replayId || this.halted || this.uploadsRefused || !this.config.upload) return;
+    if (this.mode === "idle") return;
+    const wasEmpty = this.queue.length === 0;
+    segment.bytes = utf8Bytes(JSON.stringify(this.bodyOf(segment)));
+    let at = this.queue.length;
+    while (at > 0 && this.queue[at - 1].sequenceNumber > segment.sequenceNumber) at--;
+    this.queue.splice(at, 0, segment);
+    this.queueBytes += segment.bytes;
+    if (this.queue.length > MAX_QUEUED_SEGMENTS || this.queueBytes > MAX_QUEUED_BYTES) {
+      const earliest = this.queue[0];
+      if (this.config.upload.debug) console.log("[Overseer replay] too many segments are waiting to be sent; dropping them");
+      this.clearQueue();
+      this.segmentLost(earliest.replayId, earliest.epoch);
+      return;
+    }
+    if (wasEmpty) {
+      this.queueDueAt = Date.now() + (delayMs ?? this.nextBackoff());
+      this.armQueueTimer();
+    } else {
+      this.drain();
+    }
+  }
+
+  private nextBackoff(): number {
+    this.queueBackoffMs = Math.min(QUEUE_BACKOFF_MAX_MS, this.queueBackoffMs === 0 ? QUEUE_BACKOFF_START_MS : this.queueBackoffMs * 2);
+    return this.queueBackoffMs;
+  }
+
+  private armQueueTimer(): void {
+    if (this.queueTimer) clearTimeout(this.queueTimer);
+    this.queueTimer = null;
+    if (this.queue.length === 0 || this.draining) return;
+    this.queueTimer = setTimeout(() => {
+      this.queueTimer = null;
+      this.drain();
+    }, Math.max(0, this.queueDueAt - Date.now()));
+    (this.queueTimer as { unref?: () => void }).unref?.();
+  }
+
+  /**
+   * Sends the head of the queue, when its delay has passed and the page is not known to be offline (`force`, the
+   * `online` event, skips the delay). One request at a time; the next waits for its answer.
+   */
+  private drain(force = false): void {
+    const upload = this.config.upload;
+    if (this.draining || this.queue.length === 0 || !upload || this.uploadsRefused) return;
+    if (isOffline()) return; // the `online` event comes back here
+    if (!force && Date.now() < this.queueDueAt) {
+      this.armQueueTimer();
+      return;
+    }
+    if (this.queueTimer) clearTimeout(this.queueTimer);
+    this.queueTimer = null;
+    const head = this.queue[0];
+    const generation = this.queueGeneration;
+    this.draining = true;
+    void postSegment(upload, this.bodyOf(head), false, false).then((outcome) => {
+      if (generation !== this.queueGeneration) return; // the queue was cleared while this was in flight
+      this.draining = false;
+      if (typeof outcome === "object") {
+        this.queueDueAt = Date.now() + (outcome.delayMs ?? this.nextBackoff());
+        this.armQueueTimer();
+        return;
+      }
+      this.queue.shift();
+      this.queueBytes -= head.bytes;
+      this.queueDueAt = 0;
+      this.settle(head, outcome, false);
+      this.drain();
     });
+  }
+
+  private clearQueue(): void {
+    if (this.queueTimer) clearTimeout(this.queueTimer);
+    this.queueTimer = null;
+    this.queue = [];
+    this.queueBytes = 0;
+    this.queueDueAt = 0;
+    this.queueBackoffMs = 0;
+    this.draining = false;
+    this.queueGeneration++;
   }
 
   /** Stops this replay for good (deferred: we may be inside `stop()`); nothing more is recorded or uploaded. */
@@ -682,6 +845,7 @@ export class ReplayRecorder {
     this.recoveryPending = false;
     this.recoveries = 0;
     this.awaitingCheckout = false;
+    this.clearQueue();
     if (typeof window !== "undefined") window.removeEventListener("pagehide", this.onPageHide);
     if (typeof window !== "undefined") window.removeEventListener("online", this.onOnline);
     if (typeof document !== "undefined") document.removeEventListener("visibilitychange", this.onHide);

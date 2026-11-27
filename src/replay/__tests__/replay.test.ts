@@ -689,7 +689,7 @@ describe("upload helpers", () => {
     expect(out.chunks.flat()).toHaveLength(1);
   });
 
-  it("retries a failed upload once and then drops it, never throwing", async () => {
+  it("retries a failed upload once and then asks to retry later, never throwing", async () => {
     useFakeClock();
     respond = () => new Response("{}", { status: 503 });
     const { postSegment, buildSegmentBody } = await import("../upload");
@@ -697,7 +697,7 @@ describe("upload helpers", () => {
     const body = buildSegmentBody(target, { replayId: CONTRACT_EXAMPLE.replay_id, sequenceNumber: 0, events: [{ type: 2, timestamp: 1 }], errorIds: [] });
     const result = postSegment(target, body);
     await vi.advanceTimersByTimeAsync(5000);
-    expect(await result).toBe("failed");
+    expect(await result).toEqual({ outcome: "retry_later", delayMs: null });
     expect(calls).toHaveLength(2);
   });
 
@@ -747,7 +747,7 @@ describe("upload helpers", () => {
     expect(ReplaySegmentUploadSchema.safeParse(body).success).toBe(true);
   });
 
-  it("a 503 is retried once, then dropped (replay storage not configured)", async () => {
+  it("a 503 is retried once, then queued and sent again after the 5 s backoff", async () => {
     useFakeClock();
     respond = () => new Response("{}", { status: 503 });
     const { replay } = await load({ replaysSessionSampleRate: 1 });
@@ -756,10 +756,10 @@ describe("upload helpers", () => {
     const { record } = await import("@rrweb/record");
     record.addCustomEvent("a", 1);
     await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(replayCalls()).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(5000);
-    expect(replayCalls()).toHaveLength(2);
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(replayCalls()).toHaveLength(2);
+    expect(replayCalls()).toHaveLength(3);
   });
 
   it("flushes the current segment on pagehide with keepalive when the body fits 64 KB", async () => {

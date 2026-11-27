@@ -1190,6 +1190,12 @@ waits for the next periodic snapshot, so a wrong key or a long outage never make
 normal recording does. A page whose snapshot is over the limit of one request (about 1.8 MB) cannot be played, so
 nothing of that replay is uploaded and recording stops; `upload.debug` prints one line saying so.
 
+A busy server or an offline browser delays a segment instead of losing it: a 429 is waited out for its `Retry-After`
+(60 s without one), and a segment whose upload failed twice waits in a queue of at most 3 segments or 5 MB, sent in
+order after 5 s, doubling to 5 minutes, and at once when the page comes back online. A queue that would overflow is
+dropped as one lost segment, which the fresh snapshot above then covers; a segment flushed as the page hides is sent
+once and never queued.
+
 Privacy is on by default: every input is masked, a picked radio button or checkbox is not recorded, `[data-private]`
 and `.private` text is masked, `[data-codmir-block]` subtrees are not recorded, and password fields are masked
 whatever the config says (the exact rules are [below](#what-a-recording-holds)). Pass
