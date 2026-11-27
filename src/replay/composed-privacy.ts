@@ -20,6 +20,11 @@
  *   the recorder sends id -1 for a node it never serialized (an input in a blocked shadow root at the first snapshot), and
  *   the player cannot apply an event to a node it does not know, so playback loses nothing.
  *
+ * - a `<meta>` whose `name`, `property` or `http-equiv` names a token (a part, split on anything but letters, that is `csrf`,
+ *   `xsrf`, `token`, `nonce`, `secret` or `key`) is recorded with `content` set to an empty string: in a full snapshot, in an
+ *   add, and in an attribute change that sets `content` on one or sets the `name` that makes a meta one. rrweb's own
+ *   `headMetaVerification` drops a few such tags; this covers the names it does not list.
+ *
  * Mutations keep their rule: a node the mirror does not know is kept as rrweb sent it. Nothing here throws into the page. An event
  * with nothing to change is passed on as it is, the same object.
  */
@@ -52,11 +57,32 @@ interface Add {
   node: SerializedNode;
 }
 
+/** The `<meta>` attributes that can name a token. */
+const META_NAMING = ["name", "property", "http-equiv"];
+const TOKEN_WORDS = new Set(["csrf", "xsrf", "token", "nonce", "secret", "key"]);
+
+/** Whether `name` names a token: one of its parts, split on anything but letters, is a token word. */
+export function namesToken(name: unknown): boolean {
+  return typeof name === "string" && name.toLowerCase().split(/[^a-z]+/).some((part) => TOKEN_WORDS.has(part));
+}
+
+function isTokenMeta(node: SerializedNode): boolean {
+  if (node.type !== SERIALIZED_ELEMENT || !node.attributes) return false;
+  if ((node as { tagName?: string }).tagName?.toLowerCase() !== "meta") return false;
+  return META_NAMING.some((key) => namesToken(node.attributes?.[key]));
+}
+
+/** `node` with its `content` blanked when it is a token meta, else itself. */
+function blankMeta(node: SerializedNode): SerializedNode {
+  if (!isTokenMeta(node) || node.attributes?.content === undefined || node.attributes.content === "") return node;
+  return { ...node, attributes: { ...node.attributes, content: "" } };
+}
+
 interface MutationData {
   source?: number;
   adds?: Add[];
   texts?: Array<{ id: number; value: string | null }>;
-  attributes?: Array<{ id: number }>;
+  attributes?: Array<{ id: number; attributes?: Record<string, unknown> }>;
   removes?: unknown[];
 }
 
@@ -101,8 +127,10 @@ export class ComposedPrivacyFilter {
     try {
       if (event.type === FULL_SNAPSHOT) {
         this.blocked = new Set();
-        this.learn((event.data as { node?: SerializedNode } | undefined)?.node);
-        return event;
+        const root = (event.data as { node?: SerializedNode } | undefined)?.node;
+        this.learn(root);
+        const clean = root && this.blankMetas(root);
+        return clean && clean !== root ? { ...event, data: { ...(event.data as object), node: clean } } : event;
       }
       const data = event.data as MutationData | undefined;
       if (event.type !== INCREMENTAL_SNAPSHOT) return event;
@@ -155,8 +183,10 @@ export class ComposedPrivacyFilter {
     }
     let attributes = data.attributes;
     if (attributes?.length) {
-      const kept = attributes.filter((entry) => this.scopeOf(entry.id) !== "blocked");
-      if (kept.length !== attributes.length) {
+      let kept = attributes.filter((entry) => this.scopeOf(entry.id) !== "blocked");
+      const blanked = kept.map((entry) => this.blankAttributes(entry));
+      if (blanked.some((entry, i) => entry !== kept[i])) kept = blanked;
+      if (kept.length !== attributes.length || kept.some((entry, i) => entry !== attributes![i])) {
         changed = true;
         attributes = kept;
       }
@@ -187,7 +217,7 @@ export class ComposedPrivacyFilter {
       return undefined;
     }
     if (this.isPlaceholder(node)) this.remember(node.id);
-    let result = node;
+    let result = blankMeta(node);
     if (node.type === SERIALIZED_TEXT && here === "masked" && node.textContent && !this.isStyleOrScript(node, parent)) {
       const textContent = mask(node.textContent);
       if (textContent !== node.textContent) result = { ...node, textContent };
@@ -203,6 +233,45 @@ export class ComposedPrivacyFilter {
       if (childrenChanged) result = { ...result, childNodes: children };
     }
     return result;
+  }
+
+  /** `node` with every token meta below it (itself included) blanked: the same object when there is none. */
+  private blankMetas(node: SerializedNode): SerializedNode {
+    let result = blankMeta(node);
+    if (node.childNodes?.length) {
+      let children: SerializedNode[] | undefined;
+      node.childNodes.forEach((child, i) => {
+        const next = this.blankMetas(child);
+        if (next !== child) {
+          children ??= node.childNodes!.slice();
+          children[i] = next;
+        }
+      });
+      if (children) result = { ...result, childNodes: children };
+    }
+    return result;
+  }
+
+  /**
+   * An attribute change of a live `<meta>` that is, or becomes, a token meta, with `content` blanked: the same entry
+   * when it is not one. A change of the name alone gets `content: ""` too, so the player's copy loses its value.
+   */
+  private blankAttributes(entry: { id: number; attributes?: Record<string, unknown> }): typeof entry {
+    try {
+      const changes = entry.attributes;
+      const live = this.options.getNode(entry.id) as Element | null;
+      if (!changes || !live || live.nodeType !== ELEMENT_NODE || live.nodeName.toLowerCase() !== "meta") return entry;
+      const named = META_NAMING.some((key) => {
+        const value = key in changes ? changes[key] : live.getAttribute(key);
+        return namesToken(value);
+      });
+      if (!named) return entry;
+      const hasContent = "content" in changes || live.hasAttribute("content");
+      if (!hasContent || changes.content === "") return entry;
+      return { ...entry, attributes: { ...changes, content: "" } };
+    } catch {
+      return entry;
+    }
   }
 
   /** The placeholder ids of a full snapshot. */
