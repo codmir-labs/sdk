@@ -240,7 +240,7 @@ Each import is its own bundle, so a page that only reports errors never loads th
 | `@codmir/sdk/logs/node` | `captureConsole`, `captureProcess`, `fileSink`, `fileStore`, `expressLogs`, `honoLogs`, and for [logs you already have](#read-logs-you-already-have) `readLog`, `followFile` | Node.js |
 | `@codmir/sdk/logs/parse` | `parseLogLine`, `parseLogLines`: one line of JSON, Vercel, Railway, journald, pino, access-log or plain-text output as a record or a request | Anywhere |
 | `codmir-logs` (a command, `bin`) | `npx codmir-logs [files…]`: [findings from logs you already have](#read-logs-you-already-have), on your machine | Node.js |
-| `@codmir/sdk/nextjs` | Next.js `init`, `captureRouterError`, `captureRequestError`, route-change breadcrumbs | Browser and server |
+| `@codmir/sdk/nextjs` | Next.js `init`, `captureRouterError`, `captureRequestError`, `captureBoundaryError`, `captureUnderscoreErrorException`, route-change breadcrumbs | Browser and server |
 | `@codmir/sdk/nextjs/server` | `withCodmirTracing`, `withCodmirMiddleware` | Node.js runtime |
 | `@codmir/sdk/express` | `init`, `requestHandler`, `tracingHandler`, `errorHandler`, `bindToRequest` | Node.js |
 | `@codmir/sdk/hono` | `codmirTracing()` middleware | Node.js (needs `node:async_hooks`) |
@@ -644,6 +644,67 @@ Next's `waitUntil` when the request has one, and otherwise you await it, so the 
 `AWS_LAMBDA_FUNCTION_NAME`, `NETLIFY`, `K_SERVICE`, or a request with Next's `waitUntil`), `withCodmirTracing` and
 `withCodmirMiddleware` also send the transaction before they return; pass `flushOnEnd: false` to turn that off, or
 `flushOnEnd: true` to turn it on elsewhere. A long-running Node server does not flush per request.
+
+Errors an error boundary catches need one more call. In a production build Next.js hands them to `console.error`
+only, so neither the browser handlers nor `onRequestError` see them. `app/error.tsx` and `app/global-error.tsx` call
+`captureBoundaryError`, which sends the error once (the same Error object is never sent twice, here or by the window
+handler) with Next's `error.digest` as the tag `digest`, so a server error and its client report can be matched:
+
+```tsx
+// app/error.tsx
+'use client';
+import { useEffect } from 'react';
+import { captureBoundaryError } from '@codmir/sdk/nextjs';
+
+export default function Error({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
+  useEffect(() => {
+    captureBoundaryError(error);
+  }, [error]);
+  return <button onClick={reset}>Try again</button>;
+}
+```
+
+`app/global-error.tsx` replaces the root layout when it renders, so it must render `<html>` and `<body>`. Next.js
+hands the errors it catches to `console.error` here too:
+
+```tsx
+// app/global-error.tsx
+'use client';
+import { useEffect } from 'react';
+import { captureBoundaryError } from '@codmir/sdk/nextjs';
+
+export default function GlobalError({ error }: { error: Error & { digest?: string } }) {
+  useEffect(() => {
+    captureBoundaryError(error);
+  }, [error]);
+  return (
+    <html>
+      <body>
+        <h1>Something went wrong</h1>
+      </body>
+    </html>
+  );
+}
+```
+
+The Pages Router renders every error through `pages/_error.js`, and Next.js hands a client render error to
+`console.error` only. Await `captureUnderscoreErrorException` in `getInitialProps`; it sends nothing for a 404 with no
+error, adds the request's method and path (no headers, no query), and on a serverless runtime resolves after the send:
+
+```js
+// pages/_error.js
+import Error from 'next/error';
+import { captureUnderscoreErrorException } from '@codmir/sdk/nextjs';
+
+export default function CustomError(props) {
+  return <Error statusCode={props.statusCode} />;
+}
+
+CustomError.getInitialProps = async (ctx) => {
+  await captureUnderscoreErrorException(ctx);
+  return Error.getInitialProps(ctx);
+};
+```
 
 <details>
 <summary><b>What <code>@codmir/sdk/nextjs</code> does in the browser</b></summary>
