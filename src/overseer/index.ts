@@ -33,13 +33,17 @@ import { parseStackTrace } from "./stack";
 import {
   DEFAULT_DSN,
   KEEPALIVE_MAX_BYTES,
+  MAX_BATCH_BYTES,
   MAX_BATCH_EVENTS,
   MAX_QUEUE_SIZE,
   buildBody,
+  fitEventToBytes,
   isRetryableStatus,
   readDroppedEvents,
   retryDelayMs,
-  toWireEvent,
+  utf8Bytes,
+  withoutOldestBreadcrumbs,
+  wireEventBytes,
   RETRY_MAX_MS,
 } from "./transport";
 
@@ -625,9 +629,31 @@ class OverseerClient {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
+    // Lowered when the server answers 413 to a batch: the halves go out first and the rest of this drain stays small.
+    let maxEvents = MAX_BATCH_EVENTS;
+    const retriedSmaller = new WeakSet<object>();
     while (this.eventQueue.length > 0) {
-      const batch = this.eventQueue.splice(0, MAX_BATCH_EVENTS);
+      const batch = this.takeBatch(maxEvents);
+      if (batch.length === 0) continue; // everything it looked at was too large and has been dropped
       const outcome = await this.sendBatch(batch);
+      if (outcome.kind === "too_large") {
+        if (batch.length > 1) {
+          maxEvents = Math.ceil(batch.length / 2);
+          this.eventQueue.unshift(...batch);
+          continue;
+        }
+        const [event] = batch;
+        const crumbs = (event as { breadcrumbs?: unknown[] }).breadcrumbs;
+        const smaller = retriedSmaller.has(event) ? null : withoutOldestBreadcrumbs(event, Math.ceil((crumbs?.length ?? 0) / 2));
+        if (smaller) {
+          retriedSmaller.add(smaller);
+          this.eventQueue.unshift(smaller);
+        } else {
+          this.log("Server refused a single event as too large; dropping it");
+          this.tellDropped(1, 413, "too_large", batch);
+        }
+        continue;
+      }
       if (outcome.kind === "ok") {
         this.retryAttempt = 0;
         continue;
@@ -645,6 +671,38 @@ class OverseerClient {
       return false;
     }
     return true;
+  }
+
+  /**
+   * Takes the next request's events off the queue: up to `maxEvents`, and while the body stays within
+   * MAX_BATCH_BYTES. Always one event at least; one that cannot fit alone loses breadcrumbs, or is dropped.
+   */
+  private takeBatch(maxEvents: number): QueuedEvent[] {
+    const base = utf8Bytes(this.body([]));
+    let bytes = base;
+    const batch: QueuedEvent[] = [];
+    while (this.eventQueue.length > 0 && batch.length < maxEvents) {
+      let event = this.eventQueue[0];
+      let size = wireEventBytes(event);
+      if (base + size > MAX_BATCH_BYTES) {
+        const fitted = fitEventToBytes(event, MAX_BATCH_BYTES - base);
+        if (!fitted) {
+          this.eventQueue.shift();
+          this.log("Event is over the size cap with no breadcrumbs left; dropping it");
+          this.tellDropped(1, 0, "too_large", [event]);
+          continue;
+        }
+        event = fitted;
+        size = wireEventBytes(fitted);
+        this.eventQueue[0] = fitted;
+      }
+      const added = size + (batch.length > 0 ? 1 : 0);
+      if (batch.length > 0 && bytes + added > MAX_BATCH_BYTES) break;
+      this.eventQueue.shift();
+      batch.push(event);
+      bytes += added;
+    }
+    return batch;
   }
 
   private scheduleRetry(retryAfterMs?: number): void {
@@ -692,7 +750,7 @@ class OverseerClient {
 
   private async sendBatch(
     events: QueuedEvent[],
-  ): Promise<{ kind: "ok" } | { kind: "drop" } | { kind: "retry"; retryAfterMs?: number }> {
+  ): Promise<{ kind: "ok" } | { kind: "drop" } | { kind: "too_large" } | { kind: "retry"; retryAfterMs?: number }> {
     if (!this.config.dsn) {
       this.log("No DSN configured, events:", events);
       return { kind: "ok" };
@@ -721,6 +779,10 @@ class OverseerClient {
       return { kind: "ok" };
     }
 
+    if (res.status === 413) {
+      this.log(`Server refused a batch of ${events.length} event(s) as too large`);
+      return { kind: "too_large" };
+    }
     if (!isRetryableStatus(res.status)) {
       this.log(`Server rejected a batch of ${events.length} event(s) with ${res.status}; not retrying`);
       this.tellDropped(events.length, res.status, undefined, events);
@@ -746,7 +808,7 @@ class OverseerClient {
       let size = 300;
       let n = 0;
       while (n < this.eventQueue.length && n < MAX_BATCH_EVENTS) {
-        size += JSON.stringify(toWireEvent(this.eventQueue[n])).length + 1;
+        size += wireEventBytes(this.eventQueue[n]) + 1;
         if (n > 0 && size > KEEPALIVE_MAX_BYTES) break;
         n++;
       }
