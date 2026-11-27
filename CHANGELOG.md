@@ -2,6 +2,7 @@
 
 ### ⚠ BREAKING CHANGES
 
+* **nextjs:** Next.js 15 or later. The optional `next` peer dependency is now `>=15.0.0` (it was `>=14.0.0`). Next.js 14 never calls `onRequestError`, so an app on it that follows the README sent no server error at all: the page answered 500 and nothing was sent. CI now builds `examples/nextjs-build`, starts it with the SDK pointed at a stub server, requests a page whose server component throws, and fails unless exactly one error event with that message arrives, on Next.js 15.0.0 and on the example's own version. Upgrade the app to Next.js 15, or stay on `@codmir/sdk@2`. See [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md#2x-to-30).
 * **exports:** the package no longer exports `./serverless`, `./council`, `./runtime`, `./runtime/protocol`, `./agent`, `./mcp` and `./ai`. They were removed in 2.1.0 without a major release, so an app on `^2.0.1` that imports one of them fails with `ERR_PACKAGE_PATH_NOT_EXPORTED` after `npm update`. None of them has a published replacement: the code is no longer published. Remove the import, or stay on 2.0.1. `@codmir/sdk/overseer`, `/tracing` and `/replay` are unchanged. See [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md#2x-to-30).
 
 ### Features

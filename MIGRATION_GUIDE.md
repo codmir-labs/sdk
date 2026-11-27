@@ -24,6 +24,14 @@ needs one of these entries has two options: stay on `@codmir/sdk@2.0.1` (pin it 
 `FrameworkHelpers` or the `SDK_*` instruction strings either, and `@codmir/sdk/overseer` no longer exports
 `OverseerSystem`.
 
+### Next.js 14 is no longer supported
+
+The `next` peer dependency of `@codmir/sdk` is now `>=15.0.0` (it was `>=14.0.0`; it is still optional). Next.js 14 never
+calls `onRequestError`, so an app on it that follows the README sends no server error at all: the page answers 500 and
+nothing reaches Codmir. CI now starts an app and checks that a server error is sent, on Next.js 15.0.0 and on the
+newest 15.x it pins. To upgrade, move the app to Next.js 15 or later; the SDK's own setup does not change. To stay on
+Next.js 14, stay on `@codmir/sdk@2`, and expect no server errors from `instrumentation.ts` there.
+
 The sections below describe the agent API of the 2.0 line and its older versions; they do not apply to 3.0.
 
 ## Breaking Changes

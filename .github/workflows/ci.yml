@@ -77,6 +77,27 @@ jobs:
           # No lockfile, for the same reason as above.
           npm install --no-audit --no-fund
           npm run smoke
+      # A server error reaches the server: next build, next start with the SDK pointed at a stub ingest server, a request
+      # to a page whose server component throws, and a wait for the one error event. Node 20 only.
+      - name: Next.js send check (examples/nextjs-build, the example's next)
+        if: matrix.node-version == 20
+        timeout-minutes: 5
+        working-directory: examples/nextjs-build
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+        run: npm run send-check
+      # The same check on the lowest Next.js 15.0 release, the floor of the `next` peer range. 15.0.0 wants its own React
+      # release candidate; the example's next, react and react-dom are replaced, and --legacy-peer-deps because the
+      # example's package.json pins the versions this install replaces. Next.js 14 fails this check: it never calls onRequestError.
+      - name: Next.js send check (examples/nextjs-build, next 15.0.0)
+        if: matrix.node-version == 20
+        timeout-minutes: 5
+        working-directory: examples/nextjs-build
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+        run: |
+          npm install next@15.0.0 react@19.0.0-rc-65a56d0e-20241020 react-dom@19.0.0-rc-65a56d0e-20241020 --no-save --legacy-peer-deps --ignore-scripts --no-audit --no-fund
+          npm run send-check
 
   release:
     needs: [build]
