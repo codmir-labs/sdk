@@ -13,8 +13,10 @@
  */
 export const DEFAULT_DSN = "https://www.codmir.com/api/v1/overseer";
 
-/** Events per request. The server caps a body at 256 KB and 500 events; 100 events of ~1-2 KB sits well under both. */
+/** Events per request. The server caps a body at 256 KB and 500 events; batches are capped by bytes too ({@link MAX_BATCH_BYTES}), because events with many breadcrumbs run far over 2 KB. */
 export const MAX_BATCH_EVENTS = 100;
+/** UTF-8 bytes per request body: a margin under the 256 KB the server takes before it answers 413. */
+export const MAX_BATCH_BYTES = 240_000;
 /** Events kept while the network is down. Past this the oldest are dropped. */
 export const MAX_QUEUE_SIZE = 1000;
 /** Retry delay is `RETRY_BASE_MS * 2^attempt`, never more than `RETRY_MAX_MS`. */
@@ -108,6 +110,52 @@ export function buildBody(events: Array<{ type: string }>, meta: EnvelopeMeta): 
   if (meta.release) body.release = meta.release.slice(0, MAX_RELEASE);
   if (meta.sessionId) body.sessionId = meta.sessionId.slice(0, MAX_SESSION_ID);
   return JSON.stringify(body);
+}
+
+/** UTF-8 byte length of a string, the unit a request body is limited in. Needs no `TextEncoder`, so it also runs in React Native. */
+export function utf8Bytes(text: string): number {
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c < 0x80) bytes += 1;
+    else if (c < 0x800) bytes += 2;
+    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < text.length && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
+      bytes += 4;
+      i++;
+    } else bytes += 3;
+  }
+  return bytes;
+}
+
+/** Bytes one event adds to a request body. */
+export function wireEventBytes(event: { type: string }): number {
+  return utf8Bytes(JSON.stringify(toWireEvent(event)));
+}
+
+/** A copy of `event` without its `count` oldest breadcrumbs, or null when it has none to lose. The caller's event is not touched. */
+export function withoutOldestBreadcrumbs<T extends { type: string }>(event: T, count: number): T | null {
+  const crumbs = (event as { breadcrumbs?: unknown }).breadcrumbs;
+  if (!Array.isArray(crumbs) || crumbs.length === 0 || count <= 0) return null;
+  return { ...event, breadcrumbs: crumbs.slice(count) };
+}
+
+/**
+ * A copy of `event` that takes at most `budget` bytes on the wire, losing breadcrumbs oldest first,
+ * or null when it does not fit even with none left. An event that already fits is returned as it is.
+ */
+export function fitEventToBytes<T extends { type: string }>(event: T, budget: number): T | null {
+  let size = wireEventBytes(event);
+  if (size <= budget) return event;
+  const crumbs = (event as { breadcrumbs?: unknown[] }).breadcrumbs;
+  if (!Array.isArray(crumbs) || crumbs.length === 0) return null;
+  // Each breadcrumb is sized once; dropping one frees its bytes and one comma (none for the last one left).
+  let drop = 0;
+  while (drop < crumbs.length && size > budget) {
+    size -= utf8Bytes(JSON.stringify(crumbs[drop]) ?? "null") + (drop < crumbs.length - 1 ? 1 : 0);
+    drop++;
+  }
+  const fitted = withoutOldestBreadcrumbs(event, drop);
+  return fitted && wireEventBytes(fitted) <= budget ? fitted : null;
 }
 
 /** Delay before retry number `attempt` (0-based): 1s, 2s, 4s ... capped at {@link RETRY_MAX_MS}. */
