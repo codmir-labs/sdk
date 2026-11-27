@@ -92,10 +92,10 @@ describe("an upload that never answers", () => {
     await tick(29_000);
     expect(sequence()).toEqual([100, 101]);
     await tick(1000); // the two requests time out
+    await tick(10_000);
+    expect(sequence()).toContain(102); // the third segment is sent
     expect(calls[0].signal?.aborted).toBe(true);
     expect(calls[1].signal?.aborted).toBe(true);
-    await tick(10_000);
-    expect(sequence()).toContain(102);
   });
 
   it("is retried later through the retry queue, in sequence order", async () => {
