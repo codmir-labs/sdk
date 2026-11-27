@@ -37,6 +37,7 @@ import {
   type Breadcrumb,
   type SeverityLevel,
 } from "../overseer/index";
+import { setAppOs } from "../overseer/runtime-context";
 import { Stops } from "../overseer/lifecycle";
 import { withHint, crash } from "../overseer/capture-hint";
 
@@ -169,6 +170,7 @@ export function close(): void {
   stops.run();
   isInitialized = false;
   deviceInfo = null;
+  setAppOs(undefined);
   coreClose();
 }
 
@@ -177,6 +179,8 @@ export function close(): void {
  */
 export function setDeviceInfo(info: DeviceInfo): void {
   deviceInfo = info;
+  // The OS in `contexts.os`: React Native has no global that says it, so it is what the app passes here.
+  setAppOs(info);
   coreSetTags({
     "device.platform": info.platform,
     "device.os_version": info.osVersion || "unknown",
