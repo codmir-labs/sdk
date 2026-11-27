@@ -131,10 +131,10 @@ describe("the core boundary", () => {
     expect(events[0]!.breadcrumbs!.find((b) => b.category === "x")!.data).toEqual({ url: "/a" });
   });
 
-  it("sanitizeExtra keeps Dates, Errors and primitives, and tolerates undefined", () => {
+  it("sanitizeExtra keeps Dates and primitives, turns an Error into its name and message, and tolerates undefined", () => {
     const d = new Date(0);
     const err = new Error("e");
-    expect(sanitizeExtra({ d, err, n: null })).toEqual({ d, err, n: null });
+    expect(sanitizeExtra({ d, err, n: null })).toEqual({ d, err: { name: "Error", message: "e" }, n: null });
     expect(sanitizeExtra(undefined)).toEqual({});
   });
 });
