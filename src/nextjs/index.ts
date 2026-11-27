@@ -35,7 +35,7 @@ import {
 import { detectNextClientHost } from "../overseer/detect";
 import { listen, Stops } from "../overseer/lifecycle";
 import { withHint, crash, eventFrame } from "../overseer/capture-hint";
-import { trackNavigation } from "../overseer/navigation";
+import { installBrowserBreadcrumbs, type ConsoleMethod } from "../overseer/browser-breadcrumbs";
 import { scrubUrl } from "../overseer/url-scrub";
 import { getRequestScope, requestScopeFrom, withRequestScope, type RequestScope } from "../overseer/request-scope";
 import { flushInBackground, isServerlessRuntime } from "../overseer/flush-in-background";
@@ -49,8 +49,18 @@ export interface NextjsConfig extends OverseerConfig {
   captureUnhandledErrors?: boolean;
   /** Automatically capture unhandled promise rejections */
   captureUnhandledRejections?: boolean;
-  /** Track route changes as breadcrumbs */
+  /** Track route changes as breadcrumbs. The older name of `trackNavigation`, which wins when both are set. */
   trackRouteChanges?: boolean;
+  /** Track clicks as `ui.click` breadcrumbs (default: true) */
+  trackClicks?: boolean;
+  /** Track inputs as `ui.input` breadcrumbs, never the value (default: false) */
+  trackInputs?: boolean;
+  /** Track `fetch` and XHR requests as breadcrumbs (default: true) */
+  trackRequests?: boolean;
+  /** Track route changes as breadcrumbs (default: true) */
+  trackNavigation?: boolean;
+  /** Track console output as breadcrumbs: `true` is `["error", "warn"]` (default), or list the methods */
+  trackConsole?: boolean | ConsoleMethod[];
   /** Enable session replay */
   enableReplay?: boolean;
 }
@@ -110,6 +120,11 @@ export function init(config: NextjsConfig = {}): void {
     captureUnhandledErrors = true,
     captureUnhandledRejections = true,
     trackRouteChanges = true,
+    trackNavigation = trackRouteChanges,
+    trackClicks,
+    trackInputs,
+    trackRequests,
+    trackConsole,
     enableReplay = false,
     ...coreConfig
   } = config;
@@ -151,15 +166,13 @@ export function init(config: NextjsConfig = {}): void {
       );
     }
 
-    // Route change tracking
-    if (trackRouteChanges) {
-      stops.add(trackNavigation());
-    }
+    // Clicks, inputs, requests, route changes and console output: the set every browser entry records.
+    stops.add(installBrowserBreadcrumbs({ trackClicks, trackInputs, trackRequests, trackNavigation, trackConsole }));
   }
 }
 
 /**
- * Ends what `init` started: the global handlers and the route breadcrumbs (the `history` patches go back when they are
+ * Ends what `init` started: the global handlers and the breadcrumbs (the `console`, `fetch`, XHR and `history` patches go back when they are
  * still on top, and otherwise only pass calls on), then the core client, which sends what it holds. A later `init`
  * starts clean, with its own config. An error captured after `close` and before the next `init` is sent once, without
  * retries.

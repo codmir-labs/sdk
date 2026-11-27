@@ -109,7 +109,7 @@ describe("fetch, XHR and history with another patch over ours", () => {
 
   it("fetch: a library's patch over ours keeps working after close, and the next init records each request once", async () => {
     const browser = await import("../../browser/index");
-    browser.init({ dsn: DSN, clientKey: "k", browserTracing: false });
+    browser.init({ dsn: DSN, clientKey: "k", browserTracing: false, trackNavigation: false });
     const ours = globalThis.fetch;
     const library = vi.fn((input: RequestInfo | URL, init?: RequestInit) => ours(input, init));
     globalThis.fetch = library as unknown as typeof fetch;
@@ -120,7 +120,7 @@ describe("fetch, XHR and history with another patch over ours", () => {
     expect(globalThis.fetch).toBe(library);
     await fetch("https://api.example.test/b");
     expect(calls).toEqual(["https://api.example.test/a", "https://api.example.test/b"]);
-    browser.init({ dsn: DSN, clientKey: "k2", browserTracing: false });
+    browser.init({ dsn: DSN, clientKey: "k2", browserTracing: false, trackNavigation: false });
     expect(await crumbs(browser)).toEqual([]);
     await fetch("https://api.example.test/c");
     expect(await crumbs(browser)).toEqual(["fetch"]);
@@ -141,7 +141,7 @@ describe("fetch, XHR and history with another patch over ours", () => {
     vi.spyOn(XMLHttpRequest.prototype, "send").mockImplementation(function (this: XMLHttpRequest) {
       queueMicrotask(() => this.dispatchEvent(new Event("loadend")));
     });
-    browser.init({ dsn: DSN, clientKey: "k", browserTracing: false });
+    browser.init({ dsn: DSN, clientKey: "k", browserTracing: false, trackNavigation: false });
     // A library patches `open` and `send` over ours: neither is on top at close.
     const open = XMLHttpRequest.prototype.open;
     const send = XMLHttpRequest.prototype.send;
@@ -158,7 +158,7 @@ describe("fetch, XHR and history with another patch over ours", () => {
     browser.close();
     await request("https://api.example.test/b");
     expect(opened).toBe(2);
-    browser.init({ dsn: DSN, clientKey: "k2", browserTracing: false });
+    browser.init({ dsn: DSN, clientKey: "k2", browserTracing: false, trackNavigation: false });
     expect(await crumbs(browser)).toEqual([]);
     await request("https://api.example.test/c");
     expect(await crumbs(browser)).toEqual(["xhr"]);

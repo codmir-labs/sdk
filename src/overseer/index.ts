@@ -714,7 +714,7 @@ class OverseerClient {
     return this.config.environment;
   }
 
-  /** Inside a request the breadcrumb is the request's own; outside, the process-wide trail. The newest 100 are kept. */
+  /** Inside a request the breadcrumb is the request's own; outside, the process-wide trail. The newest 20 are kept. */
   addBreadcrumb(breadcrumb: Breadcrumb): void {
     const crumb: Breadcrumb = {
       ...breadcrumb,
@@ -724,6 +724,25 @@ class OverseerClient {
     const scope = getRequestScope();
     if (scope) scope.breadcrumbs = [...(scope.breadcrumbs ?? []), crumb].slice(-MAX_BREADCRUMBS);
     else this.breadcrumbs = [...this.breadcrumbs, crumb].slice(-MAX_BREADCRUMBS);
+  }
+
+  /**
+   * Like `addBreadcrumb`, except that a breadcrumb with the category, level and message of the newest one does not add
+   * another: the newest one's `data.count` goes up (2 for the first repeat), so a message that repeats does not push the
+   * rest of the trail out of the 20 an error keeps.
+   */
+  addRepeatedBreadcrumb(breadcrumb: Breadcrumb): void {
+    const scope = getRequestScope();
+    const trail = scope ? (scope.breadcrumbs ?? []) : this.breadcrumbs;
+    const last = trail[trail.length - 1];
+    if (!last || last.category !== breadcrumb.category || last.level !== breadcrumb.level || last.message !== breadcrumb.message) {
+      this.addBreadcrumb(breadcrumb);
+      return;
+    }
+    const count = typeof last.data?.count === "number" ? last.data.count + 1 : 2;
+    const next = [...trail.slice(0, -1), { ...last, data: { ...last.data, count } }];
+    if (scope) scope.breadcrumbs = next;
+    else this.breadcrumbs = next;
   }
 
   /** Sends everything queued: true when all of it was sent or refused, false when a batch is put back for a retry or `timeout` ms ran out first. */
@@ -1308,6 +1327,11 @@ export function setTags(tags: Record<string, string>): void {
 
 export function addBreadcrumb(breadcrumb: Breadcrumb): void {
   getClient()?.addBreadcrumb(breadcrumb);
+}
+
+/** `addBreadcrumb`, except that a repeat of the newest breadcrumb raises its `data.count` instead of adding one. */
+export function addRepeatedBreadcrumb(breadcrumb: Breadcrumb): void {
+  getClient()?.addRepeatedBreadcrumb(breadcrumb);
 }
 
 export function flush(timeout?: number): Promise<boolean> {

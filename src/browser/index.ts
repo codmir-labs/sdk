@@ -38,27 +38,20 @@ import {
 import { listen, patch, Stops } from "../overseer/lifecycle";
 import { withHint, crash, eventFrame } from "../overseer/capture-hint";
 import { frameFilename } from "../overseer/stack";
-import { instrumentFetch } from "../tracing/fetch";
-import { instrumentXhr } from "../tracing/xhr";
+import { installBrowserBreadcrumbs, consoleText, type BrowserBreadcrumbOptions } from "../overseer/browser-breadcrumbs";
 import { startBrowserTracing, type BrowserTracingOptions } from "../tracing/browser";
 
 // =============================================================================
 // Types
 // =============================================================================
 
-export interface BrowserConfig extends OverseerConfig {
+export interface BrowserConfig extends OverseerConfig, BrowserBreadcrumbOptions {
   /** Automatically capture global errors */
   captureGlobalErrors?: boolean;
   /** Automatically capture unhandled promise rejections */
   captureUnhandledRejections?: boolean;
   /** Automatically capture console.error */
   captureConsoleErrors?: boolean;
-  /** Track user clicks as breadcrumbs */
-  trackClicks?: boolean;
-  /** Track user inputs as breadcrumbs (values are masked) */
-  trackInputs?: boolean;
-  /** Track XHR/fetch requests as breadcrumbs */
-  trackRequests?: boolean;
   /**
    * Pageload and navigation transactions. Default: on when `tracesSampleRate` is above 0, otherwise
    * off. `true` or an options object turns it on (sampling still follows `tracesSampleRate`); `false` turns it off.
@@ -76,7 +69,7 @@ const stops = new Stops();
 
 /**
  * Starts the browser integration: the core client, global error and rejection handlers, `console.error` capture,
- * click and input breadcrumbs, `fetch` and XHR spans and breadcrumbs, and the pageload and navigation transactions.
+ * click, input, request, navigation and console breadcrumbs, `fetch` and XHR spans, and the pageload and navigation transactions.
  * A second call before `close` is ignored. Where `window`, `document`, `location` or `history` is missing (React Native,
  * a worker) the parts that need it are skipped.
  */
@@ -95,6 +88,8 @@ export function init(config: BrowserConfig = {}): void {
     trackClicks = true,
     trackInputs = false,
     trackRequests = true,
+    trackNavigation = true,
+    trackConsole,
     browserTracing,
     ...coreConfig
   } = config;
@@ -129,66 +124,15 @@ export function init(config: BrowserConfig = {}): void {
   if (captureConsoleErrors) {
     stops.add(
       patch(console, "error", (originalError) => (...args: unknown[]) => {
-        coreCaptureMessage(args.map(String).join(" "), "error");
+        coreCaptureMessage(consoleText(args), "error");
         originalError.apply(console, args);
       }),
     );
   }
 
-  // Click tracking
-  if (trackClicks) {
-    const onClick = (event: Event): void => {
-      try {
-        const target = event.target as HTMLElement;
-        if (typeof target?.tagName !== "string") return;
-
-        const breadcrumb: Breadcrumb = {
-          category: "ui.click",
-          message: getElementDescription(target),
-          data: {
-            tag: target.tagName.toLowerCase(),
-            id: target.id || undefined,
-            class: classOf(target) || undefined,
-          },
-        };
-
-        coreAddBreadcrumb(breadcrumb);
-      } catch {
-        // a listener of the SDK never throws into the page
-      }
-    };
-    stops.add(listen(typeof document === "undefined" ? undefined : document, "click", onClick));
-  }
-
-  // Input tracking (masked)
-  if (trackInputs) {
-    const onInput = (event: Event): void => {
-      try {
-        const target = event.target as HTMLInputElement;
-        if (typeof target?.tagName !== "string") return;
-
-        const breadcrumb: Breadcrumb = {
-          category: "ui.input",
-          message: getElementDescription(target),
-          data: {
-            tag: target.tagName.toLowerCase(),
-            type: target.type || "text",
-            // Never log actual values
-          },
-        };
-
-        coreAddBreadcrumb(breadcrumb);
-      } catch {
-        // a listener of the SDK never throws into the page
-      }
-    };
-    stops.add(listen(typeof document === "undefined" ? undefined : document, "input", onInput));
-  }
-
-  // Fetch/XHR tracking
-  if (trackRequests) {
-    stops.add(setupRequestTracking());
-  }
+  // Clicks, inputs, requests, route changes and console output: the set every browser entry records. After the
+  // console.error capture above, so a console call is a breadcrumb before it is captured.
+  stops.add(installBrowserBreadcrumbs({ trackClicks, trackInputs, trackRequests, trackNavigation, trackConsole }));
 
   // Pageload / navigation roots. Started after fetch is instrumented so early requests become child spans.
   const tracingOn = browserTracing === undefined ? (getClient()?.getTracesSampleRate() ?? 0) > 0 : browserTracing !== false;
@@ -201,44 +145,8 @@ export function init(config: BrowserConfig = {}): void {
 // Helpers
 // =============================================================================
 
-/** The class attribute as a string: on an SVG element `className` is an object, not a string. */
-function classOf(el: Element): string {
-  return el.getAttribute?.("class") ?? "";
-}
-
-function getElementDescription(el: HTMLElement): string {
-  let description = el.tagName.toLowerCase();
-  const cls = classOf(el);
-
-  if (el.id) {
-    description += `#${el.id}`;
-  } else if (cls) {
-    description += `.${cls.split(" ")[0]}`;
-  }
-
-  // Add text content for buttons/links
-  if (el.tagName === "BUTTON" || el.tagName === "A") {
-    const text = el.textContent?.trim().slice(0, 50);
-    if (text) {
-      description += ` "${text}"`;
-    }
-  }
-
-  return description;
-}
-
-function setupRequestTracking(): () => void {
-  // Fetch and XHR: breadcrumbs plus http.client spans and traceparent propagation.
-  const stopFetch = instrumentFetch({ breadcrumbs: true });
-  const stopXhr = instrumentXhr({ breadcrumbs: true });
-  return () => {
-    stopXhr();
-    stopFetch();
-  };
-}
-
 /**
- * Ends what `init` started: the global handlers, the click and input breadcrumbs, the `console.error`, `fetch`, XHR and
+ * Ends what `init` started: the global handlers, the click and input listeners, the `console`, `fetch`, XHR and
  * `history` patches, the pageload and navigation transactions (the open one ends and is sent), and the core client,
  * which sends what it holds. A later `init` starts clean, with its own config. A patch another copy of the SDK put over
  * one of these stays in place and only passes the calls on. An error captured after `close` and before the next `init`
@@ -266,6 +174,7 @@ export {
 
 export { startBrowserTracing } from "../tracing/browser";
 export type { BrowserTracingOptions } from "../tracing/browser";
+export type { ConsoleMethod } from "../overseer/browser-breadcrumbs";
 
 export type {
   OverseerConfig,

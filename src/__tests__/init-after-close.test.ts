@@ -67,7 +67,8 @@ describe("/browser", () => {
       const errors = server.errors(`/p${n}`);
       expect(errors.map((e) => e.message).sort()).toEqual([`captured ${word}`, `thrown ${word}`]);
       for (const event of errors) {
-        expect(crumbs(event)).toEqual(["ui.click", "fetch", "xhr"]);
+        // The first page, then each round's click, fetch and XHR: one of each, none doubled by the first init.
+        expect(crumbs(event)).toEqual(["navigation", "ui.click", "fetch", "xhr"]);
         expect(event.environment).toBe(`env${n}`);
         expect(event.release).toBe(`r${n}`);
       }
