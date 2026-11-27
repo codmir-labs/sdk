@@ -1,7 +1,6 @@
 /** Spans, sampling, traceparent propagation and fetch instrumentation. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { close, flush, init } from "../../overseer/index";
-import { setRandomFill } from "../propagation";
 import { formatTraceparent, generateSpanId, generateTraceId, instrumentFetch, parseTraceparent, startSpan, startTransaction } from "../index";
 import { TransactionEventSchema, sentTransactions, type FetchCall } from "./helpers";
 
@@ -50,7 +49,7 @@ describe("traceparent", () => {
     }
   });
 
-  it("still makes valid ids when globalThis.crypto does not exist (Node 18)", () => {
+  it("still makes valid ids when globalThis.crypto does not exist", () => {
     vi.stubGlobal("crypto", undefined);
     // Also hide Node's builtin lookup so the Math.random last resort is what runs.
     const proc = process as unknown as { getBuiltinModule?: unknown };
@@ -66,16 +65,12 @@ describe("traceparent", () => {
     }
   });
 
-  it("uses a registered Node random source when there is no globalThis.crypto", () => {
-    vi.stubGlobal("crypto", undefined);
-    const fill = vi.fn((b: Uint8Array) => b.fill(0xab));
-    setRandomFill(fill);
-    try {
-      expect(generateSpanId()).toBe("abababababababab");
-      expect(fill).toHaveBeenCalled();
-    } finally {
-      setRandomFill(undefined);
-    }
+  it("takes ids from globalThis.crypto", () => {
+    const getRandomValues = vi.fn((buf: Uint8Array) => buf.fill(0xab));
+    vi.stubGlobal("crypto", { getRandomValues });
+    expect(generateSpanId()).toBe("abababababababab");
+    expect(generateTraceId()).toBe("ab".repeat(16));
+    expect(getRandomValues).toHaveBeenCalledTimes(2);
   });
 });
 

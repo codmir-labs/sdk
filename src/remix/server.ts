@@ -1,5 +1,5 @@
 /**
- * @codmir/sdk/remix/server: `http.server` transactions for Remix. Node only.
+ * @codmir/sdk/remix/server: `http.server` transactions for Remix. Needs `AsyncLocalStorage`: Node, Bun, Deno, and Workers with `nodejs_als` or `nodejs_compat`.
  *
  * ```ts
  * // server.ts: the whole request, loaders and actions included

@@ -1,7 +1,7 @@
 /**
  * @codmir/sdk/nextjs/server: `http.server` transactions for Next.js App Router route handlers and
- * middleware. Node runtime only: it needs `node:async_hooks`, so do not import it from an Edge route
- * (`export const runtime = "edge"`) or from Edge middleware; Next 15.5+ Node.js middleware is fine.
+ * middleware. Needs `AsyncLocalStorage` (`node:async_hooks`): the Node.js runtime, and Next.js Edge, which
+ * provides it. Never import it from client code; `@codmir/sdk/nextjs` has no Node import.
  *
  * ```ts
  * // app/api/users/[id]/route.ts

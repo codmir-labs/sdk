@@ -1,13 +1,11 @@
 /**
  * Shared core of the server request tracing wrappers: `@codmir/sdk/nextjs/server`, `/hono` and
- * `/remix/server`. Node only: it installs AsyncLocalStorage as the active-span store so concurrent requests
- * never see each other's span. Not re-exported from `tracing/index` because that entry is also bundled for
+ * `/remix/server`. Needs `AsyncLocalStorage` (Node, Bun, Deno, Next.js Edge, Workers with `nodejs_als` or `nodejs_compat`): it installs it as
+ * the active-span store so concurrent requests never see each other's span. Not re-exported from `tracing/index` because that entry is also bundled for
  * browsers, which have no `node:async_hooks`.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomFillSync } from "node:crypto";
-import { setRandomFill } from "./propagation";
 import { setContextStrategy, withActiveSpan } from "./context";
 import { requestScopeFrom, shareRequestScopeStore, withRequestScope, type RequestScope } from "../overseer/request-scope";
 import { flushInBackground, isServerlessRuntime } from "../overseer/flush-in-background";
@@ -22,11 +20,10 @@ const STORE_SLOT = Symbol.for("codmir.tracing.store");
 /**
  * The one place a Node async context strategy is installed: Express, Next.js, Hono and Remix all call
  * this on their first request. Idempotent, so any mix of wrappers in one process shares one AsyncLocalStorage and
- * agrees on the active span. Node 18 has no `globalThis.crypto`, so ids need `randomFillSync` too.
+ * agrees on the active span. Ids come from `globalThis.crypto`, so this module imports no Node built-in but `node:async_hooks`.
  */
 export function installNodeTracingContext(): void {
   if (als) return;
-  setRandomFill((buf) => void randomFillSync(buf));
   // One store per process, in a slot, so a copy of this module that comes second (Next.js bundles one per layer) shares it.
   const slots = globalThis as Record<symbol, AsyncLocalStorage<Span> | undefined>;
   const store = slots[STORE_SLOT] ?? (slots[STORE_SLOT] = new AsyncLocalStorage<Span>());

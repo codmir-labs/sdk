@@ -199,3 +199,52 @@ describe.skipIf(!hasDist)("package.json sideEffects (built dist)", () => {
     expect(kept.filter((file) => file.includes("node_modules/zod/"))).toEqual([]);
   });
 });
+
+// The server tracing entries also run on Next.js Edge, Vercel Edge and Workers (with `nodejs_als` or `nodejs_compat`). There
+// `node:async_hooks` is the one Node built-in a bundler may leave external: a bare `crypto` or `async_hooks` in a built
+// chunk, or any other built-in, fails an Edge build with "Module not found".
+const ALLOWED = "node:async_hooks";
+
+/** What each entry is imported for: the names a server wraps its routes with. */
+const ENTRIES: { subpath: string; names: string[] }[] = [
+  { subpath: "./hono", names: ["codmirTracing"] },
+  { subpath: "./nextjs/server", names: ["withCodmirTracing", "withCodmirMiddleware"] },
+  { subpath: "./remix/server", names: ["withCodmirTracing", "withCodmirRequestHandler"] },
+];
+
+/** The built-ins a bundle for an Edge runtime imports, with only `node:async_hooks` allowed to stay external. */
+async function externalImports(subpath: string, names: string[], condition: "import" | "require"): Promise<string[]> {
+  const target = pkg.exports[subpath][condition].default.slice(2);
+  const file = `${root}${target}`;
+  const result = await build({
+    stdin: {
+      contents: condition === "import" ? `import { ${names.join(", ")} } from ${JSON.stringify(file)};\nconsole.log(${names.join(", ")});\n` : `const m = require(${JSON.stringify(file)});\nconsole.log(${names.map((n) => `m.${n}`).join(", ")});\n`,
+      resolveDir: root,
+      loader: "js",
+    },
+    absWorkingDir: root,
+    bundle: true,
+    write: false,
+    platform: "browser",
+    format: "esm",
+    external: [ALLOWED],
+    metafile: true,
+    logLevel: "silent",
+  });
+  const [output] = Object.values(result.metafile.outputs);
+  return output.imports.filter((i) => i.external).map((i) => i.path);
+}
+
+describe.skipIf(!hasDist)("server tracing bundles for an Edge runtime (built dist)", () => {
+  for (const { subpath, names } of ENTRIES) {
+    for (const condition of ["import", "require"] as const) {
+      it(`@codmir/sdk${subpath.slice(1)} (${condition}) reaches no Node built-in but ${ALLOWED}`, async () => {
+        // esbuild fails the build on a built-in it cannot resolve (`crypto`, `node:crypto`), which is the failure an Edge build gives.
+        const external = await externalImports(subpath, names, condition);
+        expect(external.filter(isBuiltin).filter((id) => id !== ALLOWED)).toEqual([]);
+        // It does import the prefixed name: a bare `async_hooks` is not accepted by Edge bundlers.
+        expect(external).toContain(ALLOWED);
+      });
+    }
+  }
+});
