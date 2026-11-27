@@ -280,8 +280,9 @@ describe("upload budgets count UTF-8 bytes", () => {
     await settle();
     click();
     await vi.advanceTimersByTimeAsync(35_000);
-    expect(replayCalls().length).toBeGreaterThan(0); // the clicks after the snapshot still upload
-    for (const call of replayCalls()) expect(utf8(call.raw)).toBeLessThanOrEqual(MAX);
+    // This page's FullSnapshot is about 1.4 million characters (under TARGET_BODY_BYTES, 1.8 MB) but about 2.8 million UTF-8
+    // bytes (over it), so no request at all means the budget counts bytes: a count of characters would have sent it.
+    expect(replayCalls()).toHaveLength(0);
   });
 
   it("sends a hiding post over 60 KB of UTF-8 without keepalive, and a small one with it", async () => {

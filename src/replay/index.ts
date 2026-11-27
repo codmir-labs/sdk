@@ -42,7 +42,9 @@ import {
   chunkEvents,
   postSegment,
   replayEndpoint,
+  RRWEB_FULL_SNAPSHOT,
   RRWEB_META,
+  TARGET_BODY_BYTES,
   type RrwebEvent,
   type UploadTarget,
 } from "./upload";
@@ -229,8 +231,19 @@ const DEFAULT_CONFIG: Omit<ReplayConfig, "privacy" | "upload" | "beforeSend"> = 
   postErrorDuration: 30_000,
 };
 
+/** In session mode rrweb takes a full snapshot this often, so a lost segment costs about this much of the replay. */
+export const SESSION_CHECKOUT_MS = 300_000;
+
 type Mode = "idle" | "session" | "buffer" | "post-error";
 type RrwebRecord = typeof import("@rrweb/record").record;
+
+/** Recovery snapshots taken with no stored segment in between; past this a loss waits for the next periodic checkout. */
+const MAX_RECOVERY_SNAPSHOTS = 3;
+
+/** The page is known to be offline (`navigator.onLine` is a hint: only a `false` is believed). */
+function isOffline(): boolean {
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
 
 function uuidv4(): string {
   const c = (globalThis as { crypto?: Crypto }).crypto;
@@ -266,6 +279,16 @@ export class ReplayRecorder {
   private stopRrweb: (() => void) | undefined;
   /** Bumped by start and stop so a late `import()` knows it was cancelled. */
   private generation = 0;
+  /** Bumped by each recovery snapshot; a segment emitted before one is older than it, so its loss needs no second snapshot. */
+  private epoch = 0;
+  /** A segment was lost and no fresh full snapshot has been taken yet (the page is offline, or the loss is just known). */
+  private recoveryPending = false;
+  /** Recovery snapshots taken since a segment of this replay was last stored. */
+  private recoveries = 0;
+  /** The cap was hit: what is recorded is dropped until rrweb's next periodic checkout, which costs no extra serialisation. */
+  private awaitingCheckout = false;
+  /** A FullSnapshot did not fit one request: this replay cannot play from there, so it records and uploads no more. */
+  private halted = false;
   private segmentTimer: ReturnType<typeof setInterval> | null = null;
   private postErrorTimer: ReturnType<typeof setTimeout> | null = null;
   private onSegmentReady?: (segment: ReplaySegment) => void;
@@ -275,6 +298,7 @@ export class ReplayRecorder {
     this.flushSegment(true);
   };
   private onPageHide = (): void => this.flushSegment(true);
+  private onOnline = (): void => this.recover();
 
   constructor(config: ReplayRecorderConfig = {}) {
     const { privacy, ...rest } = config;
@@ -295,6 +319,7 @@ export class ReplayRecorder {
     if (!mode) return null;
 
     this.mode = mode;
+    this.halted = false;
     this.buffered = mode === "buffer";
     this.sessionStartTime = Date.now();
     this.beginReplay();
@@ -314,6 +339,7 @@ export class ReplayRecorder {
 
     const generation = ++this.generation;
     window.addEventListener("pagehide", this.onPageHide);
+    window.addEventListener("online", this.onOnline);
     document.addEventListener("visibilitychange", this.onHide);
     if (mode === "session") {
       this.segmentTimer = setInterval(() => this.tick(), this.config.segmentDuration);
@@ -408,6 +434,9 @@ export class ReplayRecorder {
     this.prevBuffer = [];
     this.curBuffer = [];
     this.pendingErrorIds = [];
+    this.recoveryPending = false;
+    this.recoveries = 0;
+    this.awaitingCheckout = false;
   }
 
   private async boot(generation: number): Promise<void> {
@@ -438,8 +467,9 @@ export class ReplayRecorder {
           if (safe) this.onEvent(safe, isCheckout === true);
         },
         ...rrwebPrivacy,
-        // On-error mode needs a full snapshot at the start of whatever window is uploaded.
-        ...(this.buffered ? { checkoutEveryNms: Math.max(1000, Math.floor(this.config.bufferDuration / 2)) } : {}),
+        // On-error mode needs a full snapshot at the start of whatever window is uploaded; a session takes one every
+        // few minutes, so one lost segment costs a few minutes of the replay, not the rest of it.
+        checkoutEveryNms: this.buffered ? Math.max(1000, Math.floor(this.config.bufferDuration / 2)) : SESSION_CHECKOUT_MS,
         errorHandler: () => true,
       });
     } catch (err) {
@@ -462,7 +492,13 @@ export class ReplayRecorder {
       this.curBuffer.push(event);
       return;
     }
-    if (this.mode === "idle") return;
+    if (this.mode === "idle" || this.halted) return;
+    if (this.awaitingCheckout) {
+      // Without the lost state nothing recorded can play: drop it until the periodic checkout, then resume from it.
+      if (!(isCheckout && event.type === RRWEB_META)) return;
+      this.awaitingCheckout = false;
+      this.epoch++; // a segment sent before the checkout is older than it
+    }
     this.events.push(event);
     if (this.events.length >= this.config.maxSegmentEvents) this.flushSegment();
   }
@@ -483,6 +519,14 @@ export class ReplayRecorder {
 
   private flushSegment(hiding = false): void {
     if (this.mode !== "session" && this.mode !== "post-error") return;
+    if (this.recoveryPending) {
+      // What was recorded since the lost segment cannot play without it: while offline it is dropped rather than sent.
+      if (isOffline()) {
+        this.events = [];
+        return;
+      }
+      this.recover();
+    }
     if (this.events.length === 0) return;
     const events = this.events;
     this.events = [];
@@ -505,11 +549,16 @@ export class ReplayRecorder {
   }
 
   private emitSegment(events: RrwebEvent[], errorIds: string[], hiding = false): void {
-    if (events.length === 0 || !this.session) return;
-    const { chunks, dropped } = chunkEvents(events);
+    if (events.length === 0 || !this.session || this.halted) return;
+    const { chunks, dropped, snapshotDropped } = chunkEvents(events);
+    if (snapshotDropped) {
+      this.haltReplay(`a full snapshot is over the ${TARGET_BODY_BYTES} byte limit of one request, so this replay cannot be played; stopping it`);
+      return;
+    }
     if (dropped > 0 && this.config.upload?.debug) console.log(`[Overseer replay] dropped ${dropped} oversized event(s)`);
 
     const counter = this.segments;
+    const epoch = this.epoch;
     chunks.forEach((chunk, index) => {
       const segment: ReplaySegment = {
         id: generateId(),
@@ -527,7 +576,7 @@ export class ReplayRecorder {
       } catch {
         // a consumer's handler must not break recording
       }
-      this.upload(counter, segment.sessionId, segment.sequenceNumber, segment.events, segment.errorIds ?? [], hiding);
+      this.upload(counter, segment.sessionId, segment.sequenceNumber, segment.events, segment.errorIds ?? [], hiding, epoch);
     });
   }
 
@@ -538,6 +587,7 @@ export class ReplayRecorder {
     events: RrwebEvent[],
     errorIds: string[],
     hiding: boolean,
+    epoch: number,
   ): void {
     const upload = this.config.upload;
     if (!upload || this.uploadsRefused) return;
@@ -550,14 +600,67 @@ export class ReplayRecorder {
         // The server took it for over its cap: send it in two halves, the first under its own number, the second under
         // the next one of that replay; the error ids go with the later half. One event too big alone is dropped.
         if (events.length < 2) {
+          if (events[0]?.type === RRWEB_FULL_SNAPSHOT) {
+            // A fresh snapshot would be as large: no recovery, the replay cannot be played.
+            if (replayId === this.replayId) this.haltReplay("the server refused a full snapshot as too large, so this replay cannot be played; stopping it");
+            return;
+          }
           if (upload.debug) console.log("[Overseer replay] the server refused a single event as too large; dropping it");
+          this.segmentLost(replayId, epoch);
           return;
         }
         const middle = Math.ceil(events.length / 2);
-        this.upload(counter, replayId, sequenceNumber, events.slice(0, middle), [], hiding);
-        this.upload(counter, replayId, counter.next++, events.slice(middle), errorIds, hiding);
+        this.upload(counter, replayId, sequenceNumber, events.slice(0, middle), [], hiding, epoch);
+        this.upload(counter, replayId, counter.next++, events.slice(middle), errorIds, hiding, epoch);
+      } else if (outcome === "stored") {
+        if (replayId === this.replayId) this.recoveries = 0;
+      } else if (outcome === "failed") {
+        this.segmentLost(replayId, epoch);
       }
     });
+  }
+
+  /** Stops this replay for good (deferred: we may be inside `stop()`); nothing more is recorded or uploaded. */
+  private haltReplay(reason: string): void {
+    if (this.halted) return;
+    this.halted = true;
+    this.events = [];
+    if (this.config.upload?.debug) console.log(`[Overseer replay] ${reason}`);
+    setTimeout(() => this.stop(), 0);
+  }
+
+  /**
+   * A segment of the replay did not arrive. The events since it cannot play without it, so a fresh full snapshot
+   * follows: at once, or, while the page is offline, on the `online` event or the first flush back online.
+   * On-error mode: a loss while buffering needs nothing (every buffer window opens with its own snapshot, and an upload
+   * of an earlier replay id is ignored); a loss in the post-error window is recovered like a session's.
+   */
+  private segmentLost(replayId: string, epoch: number): void {
+    if (replayId !== this.replayId || epoch !== this.epoch || this.recoveryPending || this.halted) return;
+    if (this.mode !== "session" && this.mode !== "post-error") return;
+    if (this.awaitingCheckout) return;
+    if (this.recoveries >= MAX_RECOVERY_SNAPSHOTS) {
+      // Nothing is getting through (a wrong key, a failing server, a dead network): no more snapshots until the next checkout.
+      this.awaitingCheckout = true;
+      this.events = [];
+      return;
+    }
+    this.recoveryPending = true;
+    if (!isOffline()) this.recover();
+  }
+
+  private recover(): void {
+    if (!this.recoveryPending) return;
+    this.recoveryPending = false;
+    if (this.mode !== "session" && this.mode !== "post-error") return;
+    this.epoch++;
+    this.recoveries++;
+    this.events = [];
+    try {
+      this.record?.takeFullSnapshot(true);
+    } catch {
+      // never into the page
+    }
   }
 
   private teardown(): void {
@@ -576,7 +679,11 @@ export class ReplayRecorder {
     this.prevBuffer = [];
     this.curBuffer = [];
     this.pendingErrorIds = [];
+    this.recoveryPending = false;
+    this.recoveries = 0;
+    this.awaitingCheckout = false;
     if (typeof window !== "undefined") window.removeEventListener("pagehide", this.onPageHide);
+    if (typeof window !== "undefined") window.removeEventListener("online", this.onOnline);
     if (typeof document !== "undefined") document.removeEventListener("visibilitychange", this.onHide);
   }
 }
