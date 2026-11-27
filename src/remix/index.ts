@@ -175,17 +175,12 @@ export function handleError(
 
   // Response errors carry status information
   if (isResponseLike(error)) {
-    if (!remixConfig.captureResponseErrors) return;
-
-    context.responseStatus = error.status;
-    context.responseStatusText = error.statusText;
-
-    coreCaptureException(
-      new Error(`Response Error: ${error.status} ${error.statusText}`),
-      context
-    );
+    captureThrownResponse(error, context);
     return;
   }
+
+  // An object a wrapper already sent is not sent again
+  if (alreadySent(error)) return;
 
   // Standard Error instances
   if (error instanceof Error) {
@@ -232,7 +227,13 @@ export function wrapLoader<T extends DataFunction>(loader: T): T {
     try {
       return await loader(args);
     } catch (error) {
-      if (remixConfig.captureLoaderErrors) {
+      if (isResponseLike(error)) {
+        if (remixConfig.captureLoaderErrors) {
+          captureThrownResponse(error, withHint({}, crash("remix-loader", undefined, "none")));
+        }
+        throw error;
+      }
+      if (remixConfig.captureLoaderErrors && !alreadySent(error)) {
         coreCaptureException(error, withHint({}, crash("remix-loader", undefined, "none")));
       }
       throw error;
@@ -275,19 +276,17 @@ export function wrapAction<T extends DataFunction>(action: T): T {
     try {
       return await action(args);
     } catch (error) {
-      if (remixConfig.captureActionErrors) {
-        const context: Record<string, unknown> = withHint({}, crash("remix-action", undefined, "none"));
-
-        // Capture form data keys (not values) for context
-        try {
-          if (args.request.formData) {
-            const formData = await args.request.formData();
-            context.formDataKeys = Array.from(formData.keys());
-          }
-        } catch {
-          // formData() may fail if body was already consumed — that's fine
+      if (isResponseLike(error)) {
+        if (remixConfig.captureActionErrors) {
+          const context: Record<string, unknown> = withHint({}, crash("remix-action", undefined, "none"));
+          if (remixConfig.captureResponseErrors && error.status >= 500) await addFormDataKeys(context, args.request);
+          captureThrownResponse(error, context);
         }
-
+        throw error;
+      }
+      if (remixConfig.captureActionErrors && !alreadySent(error)) {
+        const context: Record<string, unknown> = withHint({}, crash("remix-action", undefined, "none"));
+        await addFormDataKeys(context, args.request);
         coreCaptureException(error, context);
       }
       throw error;
@@ -402,6 +401,48 @@ function safeParseUrl(url: string): string {
   } catch {
     return url;
   }
+}
+
+/**
+ * Objects already sent, by identity, so one thrown object is one event and nothing is kept alive. One set per process, in a
+ * `Symbol.for` slot, so two copies of this module share it: the copy that sent an object and the copy that sees it again
+ * (a wrapper, then `handleError`) must agree.
+ */
+const SENT_SLOT = Symbol.for("codmir.remix.sent-errors");
+const slots = globalThis as Record<symbol, WeakSet<object> | undefined>;
+/** True when `value` was sent before; otherwise marks it as sent. A value that is not an object is never remembered. */
+function alreadySent(value: unknown): boolean {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) return false;
+  const sent = (slots[SENT_SLOT] ??= new WeakSet<object>());
+  if (sent.has(value)) return true;
+  sent.add(value);
+  return false;
+}
+
+/** Adds the form's field names (never values) to `context`; a body already consumed adds nothing. */
+async function addFormDataKeys(context: Record<string, unknown>, request: RemixRequest): Promise<void> {
+  try {
+    if (request.formData) {
+      const formData = await request.formData();
+      context.formDataKeys = Array.from(formData.keys());
+    }
+  } catch {
+    // formData() may fail if body was already consumed — that's fine
+  }
+}
+
+/**
+ * A thrown `Response` is control flow (a redirect, a 404) unless it is a server error: only a status of 500 or more is
+ * sent, once per object, and only with `captureResponseErrors` on.
+ */
+function captureThrownResponse(response: RemixResponse, context: Record<string, unknown>): void {
+  if (!remixConfig.captureResponseErrors || response.status < 500) return;
+  if (alreadySent(response)) return;
+
+  context.responseStatus = response.status;
+  context.responseStatusText = response.statusText;
+
+  coreCaptureException(new Error(`Response Error: ${response.status} ${response.statusText}`), context);
 }
 
 function isResponseLike(value: unknown): value is RemixResponse {
