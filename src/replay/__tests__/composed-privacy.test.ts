@@ -58,7 +58,7 @@ const settle = async () => {
 const click = () => document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
 /** Records a session: `setup` runs before the recorder starts, `act` after its first snapshot; returns what was uploaded and what the filter passed on. */
-async function record(setup: () => void | Promise<void>, act: () => void | Promise<void> = () => {}) {
+async function record(setup: () => void | Promise<void>, act: () => void | Promise<void> = () => {}, options: Record<string, unknown> = {}) {
   useFakeClock();
   await setup();
   const composed = await import("../composed-privacy");
@@ -66,7 +66,7 @@ async function record(setup: () => void | Promise<void>, act: () => void | Promi
   const overseer = await import("../../overseer/index");
   const replay = await import("../index");
   overseer.init({ dsn: DSN, clientKey: "osk_test", environment: "production", release: "1.2.3", replaysSessionSampleRate: 1 });
-  replay.startReplay();
+  replay.startReplay(options as never);
   await settle();
   await act();
   await vi.advanceTimersByTimeAsync(0);
@@ -147,6 +147,99 @@ describe("shadow roots", () => {
     );
     expect(text).toContain("shadow-added-text");
     expect(text).toContain("shadow-changed-text");
+  });
+});
+
+describe("attribute changes and input events under a block", () => {
+  const CARD = "4111111111111111";
+  const typeInto = async (input: HTMLInputElement) => {
+    await vi.advanceTimersByTimeAsync(0);
+    input.value = CARD;
+    input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    await vi.advanceTimersByTimeAsync(0);
+  };
+
+  it("an attribute set later on a node inside a blocked shadow root is not recorded", async () => {
+    let root!: ShadowRoot;
+    const { text, passed } = await record(
+      () => {
+        document.body.innerHTML = `<div><pay-widget id="w" data-codmir-block></pay-widget></div><p>public</p>`;
+        root = (document.getElementById("w") as HTMLElement).attachShadow({ mode: "open" });
+        root.innerHTML = `<p>snap</p>`;
+      },
+      async () => {
+        const p = document.createElement("p");
+        p.textContent = "later";
+        root.appendChild(p);
+        await vi.advanceTimersByTimeAsync(0);
+        p.setAttribute("aria-label", "attr-secret-4242");
+        await vi.advanceTimersByTimeAsync(0);
+      },
+    );
+    expect(text).not.toContain("attr-secret-4242");
+    expect(passed).not.toContain("attr-secret-4242");
+    expect(text).toContain("public");
+  });
+
+  it("a value typed into an input added to a blocked shadow root is not recorded", async () => {
+    let root!: ShadowRoot;
+    const { text, passed } = await record(
+      () => {
+        document.body.innerHTML = `<div><pay-widget id="w" data-codmir-block></pay-widget></div><p>public</p>`;
+        root = (document.getElementById("w") as HTMLElement).attachShadow({ mode: "open" });
+        root.innerHTML = `<p>snap</p>`;
+      },
+      async () => {
+        const input = document.createElement("input");
+        input.type = "text";
+        root.appendChild(input);
+        await typeInto(input);
+      },
+      { privacy: { maskAllInputs: false } },
+    );
+    expect(text).not.toContain(CARD);
+    expect(passed).not.toContain(CARD);
+    expect(text).toContain("public");
+  });
+
+  it("control: the same input in a light-DOM block is not recorded", async () => {
+    const { text, passed } = await record(
+      () => {
+        document.body.innerHTML = `<div data-codmir-block id="b"></div><p>public</p>`;
+      },
+      async () => {
+        const input = document.createElement("input");
+        input.type = "text";
+        document.getElementById("b")!.appendChild(input);
+        await typeInto(input);
+      },
+      { privacy: { maskAllInputs: false } },
+    );
+    expect(text).not.toContain(CARD);
+    expect(passed).not.toContain(CARD);
+  });
+
+  it("an open target is untouched: a typed input and an attribute inside a shadow root under no block are recorded", async () => {
+    let root!: ShadowRoot;
+    const { text } = await record(
+      () => {
+        document.body.innerHTML = `<div><x-card id="host"></x-card></div>`;
+        root = (document.getElementById("host") as HTMLElement).attachShadow({ mode: "open" });
+        root.innerHTML = `<p>snap</p>`;
+      },
+      async () => {
+        const input = document.createElement("input");
+        input.type = "text";
+        root.appendChild(input);
+        const p = root.querySelector("p")!;
+        await typeInto(input);
+        p.setAttribute("aria-label", "open-attr-label");
+        await vi.advanceTimersByTimeAsync(0);
+      },
+      { privacy: { maskAllInputs: false } },
+    );
+    expect(text).toContain(CARD);
+    expect(text).toContain("open-attr-label");
   });
 });
 

@@ -11,7 +11,10 @@
  * - each add and each `texts` entry is looked up as a live node in rrweb's mirror, and the mask and block selectors are
  *   tested on its composed ancestors: from a ShadowRoot on at its `host`, from a Document on at its `defaultView.frameElement`.
  *   Under a block the add or the text is dropped; under a mask the text becomes `*` for every character but a space,
- *   as rrweb masks it in a snapshot (the text of a `<style>` or `<script>` is not text and stays).
+ *   as rrweb masks it in a snapshot (the text of a `<style>` or `<script>` is not text and stays);
+ * - each `attributes` entry of a mutation under a block is dropped, and so is any other incremental event (input, mouse
+ *   interaction, scroll, media) whose `data.id` is under a block, as the recorder drops them itself for a light-DOM
+ *   block. Under a mask, attributes and input values stay as the recorder sends them, its own light-DOM rule.
  *
  * Fail closed: a node the mirror does not know is kept as rrweb sent it, and nothing here throws into the page. An event
  * with nothing to change is passed on as it is, the same object.
@@ -49,6 +52,8 @@ interface MutationData {
   source?: number;
   adds?: Add[];
   texts?: Array<{ id: number; value: string | null }>;
+  attributes?: Array<{ id: number }>;
+  removes?: unknown[];
 }
 
 /** What the filter needs of rrweb's mirror. */
@@ -78,6 +83,8 @@ function composedParent(node: Node): Node | null {
 
 export class ComposedPrivacyFilter {
   private blocked = new Set<number>();
+  /** The scope of each live node seen while one event is applied; unset outside `apply`. */
+  private memo: Map<Node, Scope> | null = null;
   private readonly limit: number;
 
   constructor(private readonly options: ComposedPrivacyOptions) {
@@ -86,6 +93,7 @@ export class ComposedPrivacyFilter {
 
   /** `event` with the text under a mask masked and what is under a block taken out, or `null` for an event that is only that. */
   apply(event: RrwebEvent): RrwebEvent | null {
+    this.memo = new Map();
     try {
       if (event.type === FULL_SNAPSHOT) {
         this.blocked = new Set();
@@ -93,11 +101,16 @@ export class ComposedPrivacyFilter {
         return event;
       }
       const data = event.data as MutationData | undefined;
-      if (event.type !== INCREMENTAL_SNAPSHOT || data?.source !== MUTATION) return event;
-      return this.mutation(event, data);
+      if (event.type !== INCREMENTAL_SNAPSHOT) return event;
+      if (data?.source === MUTATION) return this.mutation(event, data);
+      // input, mouse interaction, scroll, media: the recorder drops these for a light-DOM block, not across a shadow root
+      const id = (data as { id?: unknown } | undefined)?.id;
+      return typeof id === "number" && this.scopeOf(id) === "blocked" ? null : event;
     } catch {
       // never into the page
       return event;
+    } finally {
+      this.memo = null;
     }
   }
 
@@ -134,12 +147,18 @@ export class ComposedPrivacyFilter {
         texts = kept;
       }
     }
+    let attributes = data.attributes;
+    if (attributes?.length) {
+      const kept = attributes.filter((entry) => this.scopeOf(entry.id) !== "blocked");
+      if (kept.length !== attributes.length) {
+        changed = true;
+        attributes = kept;
+      }
+    }
     if (!changed) return event;
     // An event that only carried what was dropped says nothing any more.
-    const empty = !adds?.length && !texts?.length;
-    const rest = event.data as { removes?: unknown[]; attributes?: unknown[] };
-    if (empty && !rest.removes?.length && !rest.attributes?.length) return null;
-    return { ...event, data: { ...data, adds, texts } };
+    if (!adds?.length && !texts?.length && !attributes?.length && !data.removes?.length) return null;
+    return { ...event, data: { ...data, adds, texts, attributes } };
   }
 
   /** `add` as it may be kept: itself, a copy with its text masked, or `undefined` for a drop. */
@@ -213,14 +232,28 @@ export class ComposedPrivacyFilter {
       const live = this.options.getNode(id);
       if (!live) return "open";
       const { maskSelector, blockSelector } = this.options;
-      let masked = false;
+      const memo = this.memo;
+      // up to the first node already known (or the top), then down again, so a chain is walked once per event
+      const path: Node[] = [];
+      let scope: Scope = "open";
       for (let node: Node | null = live; node; node = composedParent(node)) {
-        if (node.nodeType !== ELEMENT_NODE) continue;
-        const element = node as Element;
-        if (blockSelector && element.matches(blockSelector)) return "blocked";
-        if (maskSelector && element.matches(maskSelector)) masked = true;
+        const known = memo?.get(node);
+        if (known) {
+          scope = known;
+          break;
+        }
+        path.push(node);
       }
-      return masked ? "masked" : "open";
+      for (let i = path.length - 1; i >= 0; i--) {
+        const node = path[i];
+        if (scope !== "blocked" && node.nodeType === ELEMENT_NODE) {
+          const element = node as Element;
+          if (blockSelector && element.matches(blockSelector)) scope = "blocked";
+          else if (maskSelector && element.matches(maskSelector)) scope = "masked";
+        }
+        memo?.set(node, scope);
+      }
+      return scope;
     } catch {
       return "open";
     }

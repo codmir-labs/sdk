@@ -1031,8 +1031,9 @@ other types are recorded as typed unless named.
 
 `[data-private]` (and the rest of `maskSelectors`) and `[data-codmir-block]` (and the rest of `blockSelectors`) hold
 inside open shadow roots and same-origin iframes as well, for what is added or changed later as for the first snapshot:
-text under a mask is `*`, and what is under a block is not recorded (a blocked `<iframe>`'s document is never
-attached). A selector on a shadow host or on an iframe, or on one of their ancestors, reaches the content inside. Closed
+text under a mask is `*`, and what is under a block is not recorded: not its nodes, not its attribute changes, not the
+input, click, scroll or media events on it (a blocked `<iframe>`'s document is never attached). Under a mask, attributes
+and input values stay as the recorder sends them, so input values follow `maskAllInputs` and `maskInputTypes`. A selector on a shadow host or on an iframe, or on one of their ancestors, reaches the content inside. Closed
 shadow roots and cross-origin iframes are not recorded at all.
 
 What it does not cover:
