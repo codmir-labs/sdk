@@ -1,3 +1,5 @@
+import { frameFilename } from "./stack";
+
 /**
  * An internal note an integration attaches to the context it passes to `captureException`: how the error reached the
  * SDK (its mechanism, and whether the app handled it) and, optionally, its level. It rides under a registry symbol, so
@@ -42,7 +44,7 @@ function framesOf(raw: unknown): CaptureHint["frames"] {
   const { filename, lineno, colno } = raw as { filename?: unknown; lineno?: unknown; colno?: unknown };
   if (typeof filename !== "string" || !filename) return "none";
   return {
-    filename,
+    filename: frameFilename(filename),
     ...(typeof lineno === "number" && lineno > 0 ? { lineno } : {}),
     ...(typeof colno === "number" && colno > 0 ? { colno } : {}),
   };
@@ -56,6 +58,6 @@ export function crash(type: string, level?: CaptureHint["level"], frames?: Captu
 /** The one frame a window `error` event names (where the script failed), `"none"` when it names no file. */
 export function eventFrame(event: { filename?: unknown; lineno?: unknown; colno?: unknown }): NonNullable<CaptureHint["frames"]> {
   return typeof event.filename === "string" && event.filename
-    ? { filename: event.filename, ...(typeof event.lineno === "number" ? { lineno: event.lineno } : {}), ...(typeof event.colno === "number" ? { colno: event.colno } : {}) }
+    ? { filename: frameFilename(event.filename), ...(typeof event.lineno === "number" ? { lineno: event.lineno } : {}), ...(typeof event.colno === "number" ? { colno: event.colno } : {}) }
     : "none";
 }

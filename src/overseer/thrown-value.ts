@@ -1,3 +1,4 @@
+import { frameFilename } from "./stack";
 import type { CaptureHint } from "./capture-hint";
 
 /**
@@ -43,7 +44,7 @@ function primitiveText(value: unknown): string {
 function frameStack(header: string, frames: Exclude<CaptureHint["frames"], undefined>): string {
   if (frames === "none" || !frames.filename) return header;
   const position = frames.lineno === undefined ? "" : `:${frames.lineno}${frames.colno === undefined ? "" : `:${frames.colno}`}`;
-  return `${header}\n    at ${frames.filename}${position}`;
+  return `${header}\n    at ${frameFilename(frames.filename)}${position}`;
 }
 
 /**
