@@ -79,4 +79,22 @@ describe("steady load", () => {
     expect(firstAt).toBeGreaterThanOrEqual(0);
     expect(sent[0].at - start).toBeLessThanOrEqual(1000);
   });
+
+  it("does not throw into the app for an event that cannot be serialized, with the rate limit on", () => {
+    const c = new OverseerClient({ clientKey: "osk_test", environment: "production" });
+    c.init();
+
+    let id: unknown;
+    expect(() => {
+      id = c.captureException(new Error("x"), { orderId: 12345678901234567890n } as never);
+    }).not.toThrow();
+    expect(id).toEqual(expect.any(String));
+
+    c.setUser({ id: 42n } as never);
+    expect(() => {
+      id = c.captureMessage("y", "error");
+    }).not.toThrow();
+    expect(id).toEqual(expect.any(String));
+    // No timer advance and no close: the bad events never reach a flush this test does not handle.
+  });
 });

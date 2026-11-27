@@ -674,7 +674,13 @@ class OverseerClient {
     if (!limits || (event.type !== "error" && event.type !== "message")) return false;
     const now = Date.now();
     const since = now - RATE_WINDOW_MS;
-    const group = (event.fingerprint?.length ? event.fingerprint : sdkFingerprint(event as WireSourceEvent)).join("\u0000");
+    let group: string;
+    try {
+      group = (event.fingerprint?.length ? event.fingerprint : sdkFingerprint(event as WireSourceEvent)).join("\u0000");
+    } catch {
+      // An event that cannot be fingerprinted is let through, not limited.
+      return false;
+    }
 
     const recent = (times: number[]): number[] => {
       let from = 0;
@@ -734,7 +740,11 @@ class OverseerClient {
 
   private enqueue(event: QueuedEvent): void {
     this.eventQueue.push(event);
-    this.queuedBytes += wireEventBytes(event) + 1;
+    try {
+      this.queuedBytes += wireEventBytes(event) + 1;
+    } catch {
+      // An event that cannot be serialized counts as 0 bytes; the send path meets it as before.
+    }
     this.trimQueue();
 
     // A pending retry will pick this event up; flushing now would skip its backoff.
