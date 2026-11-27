@@ -15,6 +15,7 @@
  */
 
 import type { MiddlewareHandler } from "hono";
+import { flushInBackground } from "../overseer/flush-in-background";
 import { pathOf, traceServerRequest } from "../tracing/server";
 
 /**
@@ -46,5 +47,16 @@ export function codmirTracing(): MiddlewareHandler {
         return handler && handler !== "/*" ? handler : undefined;
       },
     );
+    // On Workers the isolate may end with the response; waitUntil keeps it until the error and the transaction are sent.
+    if (c.error) {
+      let waitUntil: ((promise: Promise<unknown>) => void) | undefined;
+      try {
+        const ctx = c.executionCtx;
+        waitUntil = (promise) => ctx.waitUntil(promise);
+      } catch {
+        // Node Hono has no executionCtx: nothing to hand it to
+      }
+      if (waitUntil) void flushInBackground(2000, waitUntil);
+    }
   };
 }
