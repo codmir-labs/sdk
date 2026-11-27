@@ -5,7 +5,8 @@
   "description": "A Next.js app that imports @codmir/sdk/nextjs in browser code and next to a middleware, and must build",
   "scripts": {
     "build": "next build",
-    "smoke": "next build && node check.mjs"
+    "smoke": "next build && node check.mjs",
+    "send-check": "next build && node send-check.mjs"
   },
   "dependencies": {
     "@codmir/sdk": "file:../..",

@@ -2,7 +2,8 @@
 import * as Codmir from '@codmir/sdk/nextjs';
 
 export function register() {
-  Codmir.init({ clientKey: process.env.CODMIR_CLIENT_KEY, environment: process.env.NODE_ENV });
+  // CODMIR_DSN is the README's `dsn`: where events go. `npm run send-check` points it at a stub server.
+  Codmir.init({ clientKey: process.env.CODMIR_CLIENT_KEY, dsn: process.env.CODMIR_DSN, environment: process.env.NODE_ENV });
 }
 
 export const onRequestError = Codmir.captureRouterError;

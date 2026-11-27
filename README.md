@@ -16,7 +16,7 @@
 
 <p align="center">
   <a href="#typescript"><img alt="TypeScript strict" src="https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript&logoColor=white"></a>
-  <a href="#nextjs"><img alt="Next.js 14 or later" src="https://img.shields.io/badge/Next.js-14%2B-000000?style=flat-square&logo=nextdotjs&logoColor=white"></a>
+  <a href="#nextjs"><img alt="Next.js 15 or later" src="https://img.shields.io/badge/Next.js-15%2B-000000?style=flat-square&logo=nextdotjs&logoColor=white"></a>
   <a href="#express"><img alt="Express middleware" src="https://img.shields.io/badge/Express-middleware-000000?style=flat-square&logo=express&logoColor=white"></a>
   <a href="#hono"><img alt="Hono 4 or later" src="https://img.shields.io/badge/Hono-4%2B-E36002?style=flat-square&logo=hono&logoColor=white"></a>
   <a href="#remix"><img alt="Remix loaders and actions" src="https://img.shields.io/badge/Remix-loaders%20%26%20actions-000000?style=flat-square&logo=remix&logoColor=white"></a>
@@ -582,6 +582,10 @@ replay uploads, feedback) never become breadcrumbs or spans.
 renders on a server. Add [session replay](#session-replay) with one more import.
 
 ### Next.js
+
+Next.js 15 or later. Next.js 14 never calls `onRequestError`, so on it the server hook below would send no server error,
+even with `experimental.instrumentationHook` on. The SDK installs on Next.js 14 and its browser side works there; only the
+server hook sends nothing. CI starts an app and checks that a server error is sent, on Next.js 15.0.0 and on the example's version.
 
 Browser side, in `instrumentation-client.ts`:
 
@@ -2292,8 +2296,13 @@ only when `cloud` is on.
 - Source lines in Node from an ES module need `process.getBuiltinModule` (Node 20.16 or 22.3 and later); CommonJS
   works on any supported Node.
 - TypeScript 5.0 or later, optional.
-- Optional peer dependencies, only for the integration you use: `next` 14 or later, `react` 18 or later,
-  `react-native` 0.72 or later, `hono` 4 or later. Express and Remix are typed structurally and are not dependencies.
+- One optional peer dependency: `hono` 4 or later, for `@codmir/sdk/hono`. `next`, `react` and `react-native` are not peer
+  dependencies, because no file of the package loads them, so an app on any version of them installs the SDK. Express and
+  Remix are typed structurally and are not dependencies.
+- Supported versions, for the integration you use: Next.js 15 or later for server errors (the browser side needs no
+  more than the app's own Next.js); React 16.6 or later for the React Native error boundary (`createErrorBoundary` uses
+  `getDerivedStateFromError`; you pass it your `React`); React Native 0.72 or later (the subpath export needs Metro's
+  package exports, see [React Native](#react-native)); Hono 4 or later.
 - Runtime dependencies: `@rrweb/record` 2.2.0 (loaded only by `@codmir/sdk/replay`) and `zod` 3.
 
 ## Troubleshooting
