@@ -429,7 +429,8 @@ x-overseer-key: osk_example
 </details>
 
 6. **Grouping.** The fingerprint is the error type, the `file:line` of the first in-app frame, and the message with
-   digits masked as `<N>` (then runs of 8 or more hex characters as `<ID>`), cut to 100 characters. Two declined cards
+   UUIDs masked as `<UUID>`, then runs of 8 or more hex characters with at least one letter as `<ID>`, then digits as `<N>`, cut to 100
+   characters. Two declined cards
    with different numbers group together. Set `event.fingerprint` in `beforeSend` to group your own way.
 7. **Delivery.** A 2xx ends it. A network error, a 5xx, 408 or 429 puts the batch back and retries after 1 s, 2 s,
    4 s ... up to 60 s, honouring `Retry-After`. Any other 4xx drops the batch, because sending it again cannot help.
