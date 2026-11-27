@@ -100,7 +100,7 @@ export interface OverseerConfig {
   /**
    * Called when the server did not take events: a batch it refused (`status` 401 for a wrong key, say), or events it
    * dropped out of a batch it answered 200 to (`reason`, such as `payment_required`), or that the client gave up on
-   * (`status` 0: the queue was full, the client was closed before the last try went through, `beforeSend` threw, or `rateLimit` held the event back, reason `rate_limited`). They are not sent again.
+   * (`status` 0: the queue was full, the client was closed before the last try went through, `beforeSend` threw, or `rateLimit` held the event back, reason `rate_limited`, or an event could not be written as JSON, reason `unserializable`). They are not sent again.
    * `eventIds` are the ids `captureEvent` returned for those events, when they are known.
    */
   onDropped?: (dropped: { events: number; status: number; reason?: string; eventIds?: string[] }) => void;
@@ -612,7 +612,7 @@ class OverseerClient {
       document.removeEventListener("visibilitychange", this.onVisibilityChange);
     }
     this.patchRuntime?.stop();
-    void this.flush();
+    this.flushQuietly();
   }
 
   // Private methods
@@ -752,12 +752,17 @@ class OverseerClient {
 
     // A full batch leaves at once.
     if (this.eventQueue.length >= MAX_BATCH_EVENTS || this.queuedBytes >= MAX_BATCH_BYTES) {
-      void this.flush();
+      this.flushQuietly();
       return;
     }
 
     // The timer is never pushed back: events leave at most 1 s after the first one waiting.
-    if (!this.flushTimer) this.flushTimer = setTimeout(() => void this.flush(), 1000);
+    if (!this.flushTimer) this.flushTimer = setTimeout(() => this.flushQuietly(), 1000);
+  }
+
+  /** A flush nobody awaits: a failure is logged, never an unhandled rejection. */
+  private flushQuietly(): void {
+    this.flush().catch((err) => this.log("Flush failed:", err));
   }
 
   private log(...args: unknown[]): void {
@@ -841,7 +846,14 @@ class OverseerClient {
     const batch: QueuedEvent[] = [];
     while (this.eventQueue.length > 0 && batch.length < maxEvents) {
       let event = this.eventQueue[0];
-      let size = wireEventBytes(event);
+      let size: number;
+      try {
+        size = wireEventBytes(event);
+      } catch (err) {
+        this.eventQueue.shift();
+        this.unserializable(event, err);
+        continue;
+      }
       if (base + size > MAX_BATCH_BYTES) {
         const fitted = fitEventToBytes(event, MAX_BATCH_BYTES - base);
         if (!fitted) {
@@ -863,6 +875,12 @@ class OverseerClient {
     return batch;
   }
 
+  /** An event that cannot be written as JSON (a `toJSON` or getter that throws) can never be sent: the caller has removed it. */
+  private unserializable(event: QueuedEvent, err: unknown): void {
+    this.log("Event cannot be serialized; dropping it:", err);
+    this.tellDropped(1, 0, "unserializable", [event]);
+  }
+
   private scheduleRetry(retryAfterMs?: number): void {
     // close() makes one last attempt; a failure then is final, or a closed client would keep posting with backoff.
     if (this.closed) return;
@@ -871,7 +889,7 @@ class OverseerClient {
     this.log(`Send failed; retrying in ${delay}ms (attempt ${this.retryAttempt})`);
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
-      void this.flush();
+      this.flushQuietly();
     }, delay);
     // Do not keep a Node process alive just to retry telemetry.
     (this.retryTimer as { unref?: () => void }).unref?.();
@@ -967,7 +985,14 @@ class OverseerClient {
       let size = 300;
       let n = 0;
       while (n < this.eventQueue.length && n < MAX_BATCH_EVENTS) {
-        size += wireEventBytes(this.eventQueue[n]) + 1;
+        let bytes: number;
+        try {
+          bytes = wireEventBytes(this.eventQueue[n]);
+        } catch (err) {
+          this.unserializable(this.eventQueue.splice(n, 1)[0], err);
+          continue;
+        }
+        size += bytes + 1;
         if (n > 0 && size > KEEPALIVE_MAX_BYTES) break;
         n++;
       }

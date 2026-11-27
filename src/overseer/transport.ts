@@ -104,6 +104,25 @@ export interface EnvelopeMeta {
   sessionId?: string | null;
 }
 
+/**
+ * `JSON.stringify` that does not throw on what apps capture: a BigInt is written as its decimal string, and a value
+ * that is its own ancestor is written as "[Circular]". Only true cycles are cut: the chain of parents is tracked, not
+ * every object seen, so one object reached twice side by side (the fingerprint in `event` and in `group`) is written
+ * both times. Everything else is as `JSON.stringify` writes it. A `toJSON` or getter that throws still throws.
+ */
+export function safeStringify(value: unknown): string {
+  const ancestors: unknown[] = [];
+  return JSON.stringify(value, function (this: unknown, _key: string, v: unknown) {
+    if (typeof v === "bigint") return v.toString();
+    if (v === null || typeof v !== "object") return v;
+    // `this` is the object holding `v`; whatever sits above it in the chain is a sibling branch that has been left.
+    while (ancestors.length > 0 && ancestors[ancestors.length - 1] !== this) ancestors.pop();
+    if (ancestors.includes(v)) return "[Circular]";
+    ancestors.push(v);
+    return v;
+  }) as string;
+}
+
 /** The request body: the envelope fields the route reads, clipped to its limits, plus the converted events. */
 export function buildBody(events: Array<{ type: string }>, meta: EnvelopeMeta): string {
   const body: Record<string, unknown> = { events: events.map(toWireEvent) };
@@ -111,7 +130,7 @@ export function buildBody(events: Array<{ type: string }>, meta: EnvelopeMeta): 
   if (meta.environment) body.environment = meta.environment.slice(0, MAX_ENVIRONMENT);
   if (meta.release) body.release = meta.release.slice(0, MAX_RELEASE);
   if (meta.sessionId) body.sessionId = meta.sessionId.slice(0, MAX_SESSION_ID);
-  return JSON.stringify(body);
+  return safeStringify(body);
 }
 
 /** UTF-8 byte length of a string, the unit a request body is limited in. Needs no `TextEncoder`, so it also runs in React Native. */
@@ -131,7 +150,7 @@ export function utf8Bytes(text: string): number {
 
 /** Bytes one event adds to a request body. */
 export function wireEventBytes(event: { type: string }): number {
-  return utf8Bytes(JSON.stringify(toWireEvent(event)));
+  return utf8Bytes(safeStringify(toWireEvent(event)));
 }
 
 /** A copy of `event` without its `count` oldest breadcrumbs, or null when it has none to lose. The caller's event is not touched. */
@@ -153,7 +172,7 @@ export function fitEventToBytes<T extends { type: string }>(event: T, budget: nu
   // Each breadcrumb is sized once; dropping one frees its bytes and one comma (none for the last one left).
   let drop = 0;
   while (drop < crumbs.length && size > budget) {
-    size -= utf8Bytes(JSON.stringify(crumbs[drop]) ?? "null") + (drop < crumbs.length - 1 ? 1 : 0);
+    size -= utf8Bytes(safeStringify(crumbs[drop]) ?? "null") + (drop < crumbs.length - 1 ? 1 : 0);
     drop++;
   }
   const fitted = withoutOldestBreadcrumbs(event, drop);
