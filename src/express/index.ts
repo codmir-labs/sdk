@@ -232,18 +232,20 @@ export function requestHandler(): RequestMiddleware {
       scope,
     };
 
-    // Add request breadcrumb
-    coreAddBreadcrumb({
-      type: "http",
-      category: "http.request",
-      message: `${req.method} ${pathOnly(req)}`,
-      data: {
-        method: req.method,
-        url: pathOnly(req),
-        path: req.path,
-      },
-      level: "info",
-    });
+    // Add request breadcrumb, inside the request's scope so it belongs to this request only
+    withRequestScope(scope, () =>
+      coreAddBreadcrumb({
+        type: "http",
+        category: "http.request",
+        message: `${req.method} ${pathOnly(req)}`,
+        data: {
+          method: req.method,
+          url: pathOnly(req),
+          path: req.path,
+        },
+        level: "info",
+      }),
+    );
 
     // The request's own user, from `extractUser`: nobody when it answers nothing or throws.
     if (expressConfig.extractUser) extractInto(req, scope);
@@ -350,10 +352,16 @@ export function tracingHandler(): RequestMiddleware {
     });
     if (req._codmir) req._codmir.span = tx;
 
+    const scope = req._codmir?.scope ?? scopeOf(req);
     let finished = false;
+    // "finish" and "close" may fire outside the request's async context: end the transaction and add the response
+    // breadcrumb inside its scope, so they carry this request's tags and breadcrumbs only.
     const finish = (): void => {
       if (finished) return;
       finished = true;
+      withRequestScope(scope, end);
+    };
+    const end = (): void => {
       const duration = Date.now() - startTime;
 
       // The route pattern, never the raw URL: `/users/:id` groups, `/users/42` would be one transaction per id.
@@ -380,7 +388,7 @@ export function tracingHandler(): RequestMiddleware {
     // A client that hangs up never gets a "finish".
     res.on("close", finish);
 
-    withRequestScope(req._codmir?.scope ?? scopeOf(req), () => withActiveSpan(tx, () => next()));
+    withRequestScope(scope, () => withActiveSpan(tx, () => next()));
   };
 }
 

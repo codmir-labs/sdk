@@ -599,11 +599,17 @@ a `traceparent` to same-origin URLs and to your `tracePropagationTargets`.
 > `errorHandler()` adds `clientIp` (`req.ip`) and the `extractUser` result to the event's `extra`. Leave
 > `extractUser` out, or strip them in `beforeSend`, if you must not send them.
 
-**Each request has its own user.** Inside a request, an event's user is the request's: what `extractUser` answered (`null`
+**Each request has its own user, tags and breadcrumbs.** Inside a request, an event's user is the request's: what `extractUser` answered (`null`
 or `undefined` means nobody, not the process-wide user; an `extractUser` that throws leaves the request without a user and
 never breaks it), or what `setUser` was last called with inside this request. `setUser` inside a request sets that request's
 user and leaves the process-wide one, and every other request, alone; outside a request it is process-wide, as before. A
 request with no user of its own (no `extractUser`, no `setUser`) takes the process-wide one, such as `initialUser`.
+
+`setTag`, `setTags` and `addBreadcrumb` work the same way. Inside a request they write that request's own tags and
+breadcrumbs (the newest 100) and leave the process-wide ones, and every other request, alone; this includes the
+breadcrumbs `instrumentFetch()` records, which go through `addBreadcrumb`. An error, a message or a transaction carries the
+process-wide tags with the request's on top (the request's win, key by key) and the process-wide breadcrumbs followed by the
+request's. Outside a request all three are process-wide, as before.
 
 Which handlers run in a request scope that survives `await` without you doing anything:
 
@@ -614,7 +620,7 @@ Which handlers run in a request scope that survives `await` without you doing an
 | Next.js `withCodmirTracing`, `withCodmirMiddleware` from `/nextjs/server` | yes | yes |
 | Remix `withCodmirTracing`, `withCodmirRequestHandler` from `/remix/server` | yes | yes |
 | Next.js `captureRequestError`, `captureRouterError` | only around the capture itself | no: there is no user of the request |
-| A handler you did not wrap, or code that runs before Express's `requestHandler()` | none | `setUser` there is process-wide, so two requests that overlap can see each other's user: wrap the handler, or call `setUser` inside a wrapped one |
+| A handler you did not wrap, or code that runs before Express's `requestHandler()` | none | `setUser`, `setTag`, `setTags` and `addBreadcrumb` there are process-wide, so two requests that overlap can see each other's user, tags and breadcrumbs: wrap the handler, or call them inside a wrapped one |
 
 The scope is AsyncLocalStorage, installed by the first request that goes through one of these wrappers.
 

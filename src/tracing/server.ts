@@ -89,21 +89,28 @@ export async function traceServerRequest<T>(
     if (route) tx.name = `${method} ${route}`;
   };
 
+  // One scope for the whole request, so the transaction ends with the tags the request set.
+  const scope = info.url ? requestScopeFrom({ url: info.url, method }) : undefined;
+  const inScope = <R>(f: () => R): R => (scope ? withRequestScope(scope, f) : f());
+
   let result: T;
   try {
-    const run = () => withActiveSpan(tx, () => fn(tx));
-    result = await (info.url ? withRequestScope(requestScopeFrom({ url: info.url, method }), run) : run());
+    result = await inScope(() => withActiveSpan(tx, () => fn(tx)));
   } catch (err) {
-    rename();
-    const thrownStatus = statusOf(err);
-    if (thrownStatus !== undefined) finishWithStatus(tx, thrownStatus);
-    else {
-      tx.setStatus("error");
-      tx.end();
-    }
+    inScope(() => {
+      rename();
+      const thrownStatus = statusOf(err);
+      if (thrownStatus !== undefined) finishWithStatus(tx, thrownStatus);
+      else {
+        tx.setStatus("error");
+        tx.end();
+      }
+    });
     throw err;
   }
-  rename();
-  finishWithStatus(tx, statusOf(result));
+  inScope(() => {
+    rename();
+    finishWithStatus(tx, statusOf(result));
+  });
   return result;
 }

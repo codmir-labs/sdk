@@ -7,11 +7,13 @@
  * the caller wraps it in `withRequestScope`; `installNodeTracingContext` (tracing/server.ts) swaps in AsyncLocalStorage,
  * so a capture anywhere in the handler's async tail sees its own request and never another's.
  *
- * The scope also holds the request's user, so `setUser` inside a request never reaches another one. Where the scope does
- * not survive an `await` (no `installNodeTracingContext`), a later `setUser` is outside it and is the client's.
+ * The scope also holds the request's user, tags and breadcrumbs, so `setUser`, `setTag`, `setTags` and `addBreadcrumb`
+ * inside a request never reach another one, and an event or transaction takes the process-wide state with the request's on
+ * top. Where the scope does not survive an `await` (no `installNodeTracingContext`), a later write is outside it and is the
+ * client's.
  */
 
-import type { UserContext } from "./index";
+import type { Breadcrumb, UserContext } from "./index";
 
 export interface RequestScope {
   /** Origin and path, or just the path when the origin is unknown. No query, no fragment, no credentials. */
@@ -23,6 +25,10 @@ export interface RequestScope {
    * event inside the request has no user, never the client's. `setUser` inside the request sets it; the client's is left alone.
    */
   user?: UserContext | null;
+  /** The request's own tags, set by `setTag` and `setTags` inside it. They win over the process-wide tags, key by key. */
+  tags?: Record<string, string>;
+  /** The request's own breadcrumbs, at most the newest 100, which an event carries after the process-wide ones. */
+  breadcrumbs?: Breadcrumb[];
 }
 
 export interface RequestScopeStrategy {
