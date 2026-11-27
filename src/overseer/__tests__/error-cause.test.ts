@@ -150,6 +150,62 @@ describe("beforeSend", () => {
   });
 });
 
+describe("errors is read from an AggregateError only", () => {
+  class ValidationError extends Error {
+    errors = [{ path: ["email"], message: "Required" }];
+  }
+  class FetchFailures extends AggregateError {}
+
+  it("sends no causes for a validation-style error, and its fingerprint is the no-cause one", async () => {
+    const err = new ValidationError("invalid input");
+    const wire = await wireOf(err);
+    expect("causes" in wire.exception).toBe(false);
+    expect(wire.fingerprint).toEqual(sdkFingerprint({ ...wire, exception: { type: wire.exception.type, value: wire.exception.value, stacktrace: wire.exception.stacktrace } }));
+  });
+
+  it("still walks an AggregateError and a subclass of it", async () => {
+    for (const agg of [new AggregateError([new Error("e0"), new Error("e1")], "many"), new FetchFailures([new Error("e0"), new Error("e1")], "many")]) {
+      const wire = await wireOf(agg);
+      expect(wire.exception.causes.map((c: any) => [c.value, c.source, c.parent])).toEqual([
+        ["e0", "errors[0]", -1],
+        ["e1", "errors[1]", -1],
+      ]);
+    }
+  });
+});
+
+describe("culprit", () => {
+  const groupOf = async (error: unknown): Promise<any> => {
+    calls = [];
+    const c = client();
+    c.captureException(error);
+    await c.flush();
+    return calls[0]!.body.events[0].group;
+  };
+
+  it("is the first inner error's file:line for a Promise.any failure", async () => {
+    const inner = failA("upstream down");
+    let caught: unknown;
+    try {
+      await Promise.any([Promise.reject(inner)]);
+    } catch (e) {
+      caught = e;
+    }
+    const wire = await wireOf(caught);
+    expect(wire.exception.stacktrace ?? []).toEqual([]);
+    const frame = wire.exception.causes[0].stacktrace.find((f: any) => f.filename);
+    expect(frame).toBeDefined();
+    const group = await groupOf(caught);
+    expect(group.culprit).toBe(`${frame.filename}:${frame.lineno}`);
+  });
+
+  it("keeps the top error's own frame when it has one", async () => {
+    const err = wrap("outer", failA("inner"));
+    err.stack = "Error: outer\n    at handleCheckout (/srv/app/src/checkout.ts:42:13)";
+    expect((await groupOf(err)).culprit).toBe("/srv/app/src/checkout.ts:42");
+  });
+});
+
 describe("grouping", () => {
   const fp = async (error: unknown) => (await wireOf(error)).fingerprint as string[];
 

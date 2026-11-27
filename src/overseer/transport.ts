@@ -116,7 +116,9 @@ export function toWireEvent<T extends { type: string }>(input: T): unknown {
 
   const fingerprint = source.fingerprint?.length ? source.fingerprint : sdkFingerprint(source);
   const message = source.message ?? source.exception?.value;
-  const topFrame = source.exception?.stacktrace?.find((f) => f.filename);
+  const topFrame =
+    source.exception?.stacktrace?.find((f) => f.filename) ??
+    source.exception?.causes?.map((c) => c.stacktrace?.find((f) => f.filename)).find(Boolean);
   const { type: _type, ...rest } = source;
 
   return {

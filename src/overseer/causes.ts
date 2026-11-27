@@ -12,6 +12,10 @@ export const MAX_CAUSE_FRAMES = 30;
 const isErrorObject = (value: unknown): value is Error =>
   value instanceof Error || (value !== null && typeof value === "object" && Object.prototype.toString.call(value) === "[object Error]");
 
+/** An `AggregateError`, a subclass of it, or one from another realm: only its `errors` are inner errors, any other error's are its own data. */
+const isAggregateError = (value: unknown): boolean =>
+  (typeof AggregateError === "function" && value instanceof AggregateError) || read(value as object, "name") === "AggregateError";
+
 /** A property read that never throws: a getter on an error may. */
 function read(value: object, key: string): unknown {
   try {
@@ -34,7 +38,7 @@ function unwrap(value: unknown): unknown {
 }
 
 /**
- * The errors behind `thrown`, breadth first over `cause` and, on an `AggregateError`, `errors`, in walk order.
+ * The errors behind `thrown`, breadth first over `cause` and, on an `AggregateError` only, `errors`, in walk order.
  * Cycle-safe by object identity; at most {@link MAX_CAUSE_DEPTH} deep along a path, {@link MAX_AGGREGATE_ERRORS}
  * inner errors per aggregate and {@link MAX_CAUSES} entries. A cause that is not an error goes through
  * `normalizeThrown`. Returns `undefined` when there is nothing to walk.
@@ -54,7 +58,7 @@ export function collectCauses(thrown: unknown): ExceptionCause[] | undefined {
     const children: Array<{ value: unknown; source: string }> = [];
     const cause = read(node, "cause");
     if (cause !== undefined && cause !== null) children.push({ value: cause, source: "cause" });
-    const errors = read(node, "errors");
+    const errors = isAggregateError(node) ? read(node, "errors") : undefined;
     if (Array.isArray(errors)) {
       errors.slice(0, MAX_AGGREGATE_ERRORS).forEach((value, i) => children.push({ value, source: `errors[${i}]` }));
     }

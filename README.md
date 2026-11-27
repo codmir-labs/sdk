@@ -376,10 +376,10 @@ captureException(err, { orderId: 'ord_123', password: 'hunter2', req: { headers:
    Node, the first three in-app frames whose file can be read also get `pre_context`, `context_line` and
    `post_context` (5 lines each side). The errors behind it go in `exception.causes`: each entry is
    `{ type, value, stacktrace?, source, parent }`, where `source` is `"cause"` or `"errors[i]"` (an `AggregateError`'s inner
-   errors, so a `Promise.any` failure sends why each promise failed) and `parent` is the index of the entry it hangs from
+   errors, so a `Promise.any` failure sends why each promise failed; `errors` is read from an `AggregateError` only, never from another error that keeps a list there) and `parent` is the index of the entry it hangs from
    (`-1` for the top error). The walk is breadth first, cycle-safe, at most 5 deep, 10 inner errors per `AggregateError` and
    10 entries in all; each entry has at most 30 frames and no source lines, and its message is scrubbed like the top one's.
-   An error with nothing to walk has no `causes`.
+   An error with nothing to walk has no `causes`. An error with no frame of its own takes its culprit from the first entry of `causes` that has one.
 3. **Cleaning.** `sanitizeExtra` drops `password` and `req` from the context, and `addBreadcrumb` already dropped
    `authToken` from the breadcrumb.
 4. **Context.** The user, tags, breadcrumbs, environment, release, SDK name and version and the runtime contexts are
