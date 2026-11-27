@@ -292,6 +292,67 @@ describe("same-origin iframes", () => {
   });
 });
 
+describe("events on a node the recorder does not know", () => {
+  const CARD = "4000056655665556";
+  const OPEN_CARD = "4111111111111111";
+
+  const inputEvent = (input: HTMLInputElement, value: string) => {
+    input.value = value;
+    input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+  };
+
+  it("P4: an input in a blocked shadow root at the first snapshot, typed into, is in no upload", async () => {
+    let root!: ShadowRoot;
+    const { text, passed } = await record(
+      () => {
+        document.body.innerHTML = `<div><pay-widget id="w" data-codmir-block></pay-widget></div><p>public</p>`;
+        root = (document.getElementById("w") as HTMLElement).attachShadow({ mode: "open" });
+        root.innerHTML = `<input type="text" id="card">`;
+      },
+      async () => {
+        inputEvent(root.getElementById("card") as HTMLInputElement, CARD);
+        await vi.advanceTimersByTimeAsync(0);
+      },
+      { privacy: { maskAllInputs: false } },
+    );
+    expect(text).not.toContain(CARD);
+    expect(passed).not.toContain(CARD);
+    expect(sentEvents().some((e) => e.type === 3 && e.data?.source === 5 && e.data.id < 0)).toBe(false);
+    expect(text).toContain("public");
+  });
+
+  it("known open nodes keep their events: a click and a typed input outside any block are uploaded", async () => {
+    const { text } = await record(
+      () => {
+        document.body.innerHTML = `<div data-codmir-block><p>blocked</p></div><button id="b">pay</button><input type="text" id="open"><p>public</p>`;
+      },
+      async () => {
+        document.getElementById("b")!.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 5, clientY: 6 }));
+        inputEvent(document.getElementById("open") as HTMLInputElement, OPEN_CARD);
+        await vi.advanceTimersByTimeAsync(0);
+      },
+      { privacy: { maskAllInputs: false } },
+    );
+    expect(text).toContain(OPEN_CARD);
+    const events = sentEvents().filter((e) => e.type === 3);
+    expect(events.some((e) => e.data?.source === 2 && e.data.id >= 0)).toBe(true);
+    expect(events.some((e) => e.data?.source === 5 && e.data.id >= 0)).toBe(true);
+  });
+
+  it("the filter drops a non-mutation event with a negative or unknown id and keeps a mutation", async () => {
+    const { ComposedPrivacyFilter } = await import("../composed-privacy");
+    const filter = new ComposedPrivacyFilter({ maskSelector: "[data-private]", blockSelector: "[data-codmir-block]", getNode: () => null });
+    for (const source of [1, 2, 3, 5, 7]) {
+      expect(filter.apply({ type: 3, timestamp: 1, data: { source, id: -1, text: "x" } })).toBeNull();
+      expect(filter.apply({ type: 3, timestamp: 1, data: { source, id: 999, text: "x" } })).toBeNull();
+    }
+    const mouseMove = { type: 3, timestamp: 1, data: { source: 1, positions: [{ x: 1, y: 2, id: 999, timeOffset: 0 }] } };
+    expect(filter.apply(mouseMove)).toBe(mouseMove);
+    const mutation = { type: 3, timestamp: 1, data: { source: 0, texts: [{ id: 999, value: "kept" }] } };
+    expect(filter.apply(mutation)).toBe(mutation);
+  });
+});
+
 describe("the filter on its own", () => {
   it("a page with no shadow root or iframe: every event passes on as it is, the same object", async () => {
     useFakeClock();

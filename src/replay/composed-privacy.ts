@@ -16,7 +16,11 @@
  *   interaction, scroll, media) whose `data.id` is under a block, as the recorder drops them itself for a light-DOM
  *   block. Under a mask, attributes and input values stay as the recorder sends them, its own light-DOM rule.
  *
- * Fail closed: a node the mirror does not know is kept as rrweb sent it, and nothing here throws into the page. An event
+ * - any other incremental event whose numeric `data.id` is negative, or names a node the mirror does not know, is dropped:
+ *   the recorder sends id -1 for a node it never serialized (an input in a blocked shadow root at the first snapshot), and
+ *   the player cannot apply an event to a node it does not know, so playback loses nothing.
+ *
+ * Mutations keep their rule: a node the mirror does not know is kept as rrweb sent it. Nothing here throws into the page. An event
  * with nothing to change is passed on as it is, the same object.
  */
 
@@ -103,9 +107,11 @@ export class ComposedPrivacyFilter {
       const data = event.data as MutationData | undefined;
       if (event.type !== INCREMENTAL_SNAPSHOT) return event;
       if (data?.source === MUTATION) return this.mutation(event, data);
-      // input, mouse interaction, scroll, media: the recorder drops these for a light-DOM block, not across a shadow root
+      // input, mouse interaction, scroll, media: the recorder drops these for a light-DOM block, not across a shadow root,
+      // and sends one with id -1 for a node it never serialized, such as an input in a blocked shadow root
       const id = (data as { id?: unknown } | undefined)?.id;
-      return typeof id === "number" && this.scopeOf(id) === "blocked" ? null : event;
+      if (typeof id !== "number") return event;
+      return id < 0 || this.isUnknown(id) || this.scopeOf(id) === "blocked" ? null : event;
     } catch {
       // never into the page
       return event;
@@ -256,6 +262,15 @@ export class ComposedPrivacyFilter {
       return scope;
     } catch {
       return "open";
+    }
+  }
+
+  /** Whether the mirror has no live node for `id`; a mirror that throws is not "unknown". */
+  private isUnknown(id: number): boolean {
+    try {
+      return !this.options.getNode(id);
+    } catch {
+      return false;
     }
   }
 
