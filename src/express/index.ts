@@ -101,6 +101,14 @@ type ErrorMiddleware = (
 
 export interface ExpressConfig extends OverseerConfig {
   /**
+   * Capture uncaught exceptions and unhandled rejections as fatal and send the queue before the process ends, and flush
+   * on SIGTERM and SIGINT. See `OverseerConfig.captureProcessErrors`. Unlike the core `init`, this is on here unless
+   * set to `false`.
+   * @default true
+   */
+  captureProcessErrors?: boolean;
+
+  /**
    * @deprecated Ignored: a request body is never put in an error report, because it may hold
    * credentials and personal data. Kept so existing `init({ captureRequestBody })` calls still type-check.
    */
@@ -163,6 +171,7 @@ export function init(config: ExpressConfig = {}): void {
     captureRequestBody = false,
     captureResponseBody = false,
     extractUser,
+    captureProcessErrors = true,
     ...coreConfig
   } = config;
 
@@ -174,7 +183,7 @@ export function init(config: ExpressConfig = {}): void {
   };
 
   // Initialize core
-  coreInit(coreConfig);
+  coreInit({ ...coreConfig, captureProcessErrors });
   isInitialized = true;
 
   // Tracing: outgoing fetches become child spans and carry traceparent.
@@ -184,13 +193,14 @@ export function init(config: ExpressConfig = {}): void {
 /**
  * Ends what `init` started: the `fetch` patch (put back when it is still on top, and otherwise passing calls on) and the
  * core client, which sends what it holds. A later `init` starts clean, with its own config. An error captured after
- * `close` and before the next `init` is sent once, without retries.
+ * `close` and before the next `init` is sent once, without retries. Also removes the process hooks `init` installed.
+ * Resolves `true` when the queue was sent within `timeoutMs` (default 2000), so a shutdown hook can wait for it.
  */
-export function close(): void {
+export function close(timeoutMs?: number): Promise<boolean> {
   stops.run();
   isInitialized = false;
   expressConfig = {};
-  coreClose();
+  return coreClose(timeoutMs);
 }
 
 /** The request's path, never its query string or fragment: a breadcrumb or transaction name is an event field too. */
