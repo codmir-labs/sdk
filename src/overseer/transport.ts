@@ -25,6 +25,10 @@ export const MAX_QUEUE_SIZE = 1000;
 /** Retry delay is `RETRY_BASE_MS * 2^attempt`, never more than `RETRY_MAX_MS`. */
 export const RETRY_BASE_MS = 1000;
 export const RETRY_MAX_MS = 60_000;
+/** Answers of 5xx one batch may get before it is split in half, and before a single event is dropped as `retry_exhausted`. Network errors, timeouts, 408 and 429 are not counted. */
+export const MAX_SERVER_ERROR_ATTEMPTS = 5;
+/** An event still unsent after this long is dropped and reported to `onDropped` as `expired`. */
+export const MAX_EVENT_AGE_MS = 24 * 60 * 60 * 1000;
 /** Time one request may take before it is given up on and retried: 10 s under Node, 30 s in a browser and in React Native. */
 export function requestTimeoutMs(): number {
   return typeof process !== "undefined" && process.versions?.node ? 10_000 : 30_000;

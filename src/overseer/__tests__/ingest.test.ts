@@ -267,7 +267,19 @@ describe("delivery (criterion 3)", () => {
     expect(calls).toHaveLength(3);
     await vi.advanceTimersByTimeAsync(4000); // then +4s
     expect(calls).toHaveLength(4);
+    await vi.advanceTimersByTimeAsync(8000); // the fifth answer of 5xx ends the event
+    expect(calls).toHaveLength(5);
     for (let i = 0; i < 10; i++) await vi.advanceTimersByTimeAsync(RETRY_MAX_MS);
+    expect(calls).toHaveLength(5);
+    c.close();
+  });
+
+  it("keeps the delay at its cap while a 429 goes on, with no limit on tries", async () => {
+    const c = client();
+    respond = () => new Response("slow down", { status: 429 });
+    c.captureException(nodeError());
+    await c.flush();
+    for (let i = 0; i < 20; i++) await vi.advanceTimersByTimeAsync(RETRY_MAX_MS);
     expect(calls.length).toBeGreaterThanOrEqual(14);
     c.close();
   });
