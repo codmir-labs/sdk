@@ -1433,7 +1433,8 @@ init({
 
 > [!WARNING]
 > Some fields are yours to keep out. Click breadcrumbs carry up to 50 characters of a button's or link's text, and a
-> value under a harmless key in your `context` is sent as you wrote it. Strip what you must not send in `beforeSend`.
+> value under a harmless key in your `context` is sent as you wrote it, apart from what looks like a secret. Strip what
+> you must not send in `beforeSend`.
 
 > [!CAUTION]
 > The client key (`clientKey`) travels in every request from the browser as `x-overseer-key`; it identifies your
