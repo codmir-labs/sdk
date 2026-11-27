@@ -570,7 +570,7 @@ addBreadcrumb({ category: 'checkout', message: 'coupon applied' });
 | Unhandled rejections | `unhandledrejection` events (`captureUnhandledRejections`, default on) |
 | Click breadcrumbs | Tag, id, class and, for buttons and links, up to 50 characters of their text |
 | Request breadcrumbs | `fetch` and XHR: method, origin and path, status and duration; never the query string. The message names the path and the outcome: `GET /api/cart 500`, or `GET /api/cart failed` when no answer came back |
-| Navigation breadcrumbs | The first page (`/checkout`), then `pushState /checkout`, `replaceState /cart` and `popstate /`: the message names the page after the move, never its query or fragment |
+| Navigation breadcrumbs | The first page (`/checkout`), then `pushState /checkout`, `replaceState /cart` and `popstate /`: the message names the page after the move, never its query; a fragment stays only when it is a route (`#/settings`, `#!/users/42`), see below |
 | Console breadcrumbs | `console.error` and `console.warn` by default (`trackConsole`; add `'info'`, `'log'` or `'debug'`): the arguments joined, secrets masked, cut to 200 characters. A message identical to the newest breadcrumb adds no new one and raises its `data.count` |
 | Spans | Every `fetch` and XHR made inside a trace becomes an `http.client` span; same-origin requests and your `tracePropagationTargets` get a `traceparent` header |
 | Transactions | With `tracesSampleRate` above 0: one `pageload` transaction, then one `navigation` transaction per client-side route change, with web vitals on the pageload |
@@ -598,7 +598,14 @@ Codmir.init({
   environment: process.env.NODE_ENV,
   release: process.env.NEXT_PUBLIC_APP_VERSION,
 });
+
+// Next.js 15.3+: a breadcrumb for each route transition
+export const onRouterTransitionStart = Codmir.captureRouterTransitionStart;
 ```
+
+`onRouterTransitionStart` receives the full href, query and hash included. The route is scrubbed like every URL: the
+breadcrumb `Navigating to /reset` never carries a `?token=` or an OAuth `#access_token=`; a path stays a path and an absolute
+URL stays absolute. A fragment stays only when it is a route (`#/settings`, `#!/users/42`), cut at its first `?`, `=` or `&`.
 
 Server side, in `instrumentation.ts`. Next.js hands server errors to `onRequestError`, and `captureRouterError` has
 the shape it expects:
@@ -752,8 +759,9 @@ CustomError.getInitialProps = async (ctx) => {
 - The same breadcrumbs as `@codmir/sdk/browser`: clicks (`trackClicks`, on), inputs (`trackInputs`, off), `fetch` and
   XHR (`trackRequests`, on), route changes (`trackNavigation`, on; `trackRouteChanges` is the older name) and `console`
   warnings and errors (`trackConsole`, `['error', 'warn']`). A route move reads `pushState /checkout`, with the path
-  after the move, no query or fragment.
-- `captureRouterTransitionStart(route)` adds a `Navigating to <route>` breadcrumb when you call it.
+  after the move, no query, and no fragment unless it is a route (`#/settings`, `#!/users/42`).
+- `captureRouterTransitionStart(route)` adds a `Navigating to <route>` breadcrumb when you call it, or when Next.js 15.3+
+  does (`export const onRouterTransitionStart = Codmir.captureRouterTransitionStart;`). The route is scrubbed like every URL.
 - It starts no pageload transaction and no replay. For replay call `startReplay()` from
   [`@codmir/sdk/replay`](#session-replay) after `init()`; the `enableReplay` option is accepted but not read at this
   version.
@@ -1154,7 +1162,7 @@ browser, the active span is a stack: two flows running at once can see each othe
 true` or an options object). You can also call `startBrowserTracing(options)` yourself.
 
 - A `pageload` transaction starts at `performance.timeOrigin`; each client-side route change (`pushState`,
-  `replaceState`, `popstate`, when the pathname changes) ends the current root and starts a `navigation` one.
+  `replaceState`, `popstate`, when the pathname or the route fragment changes) ends the current root and starts a `navigation` one.
 - A root ends when no child span has been open for `idleTimeout` ms (default 1,000), or after `finalTimeout` ms
   (default 30,000), whichever comes first; spans still open then are ended `cancelled`.
 - The pageload carries `lcp`, `inp`, `cls`, `ttfb` and `fcp` as measured so far. INP and CLS settle when the page hides,
@@ -1638,8 +1646,11 @@ that undoes them. Cloud mode is off unless you pass `cloud`.
   `Error("reset failed: token=abc123 Authorization: Bearer xyz789")` is sent as
   `reset failed: token=[secret] Authorization: Bearer [token]`, and two errors that differ only by the secret are one
   issue. Emails and IP addresses in text are not masked: a message such as `no account for ann@example.com` goes as it is.
-- **URLs keep origin and path only.** `fetch` and XHR breadcrumbs, navigation breadcrumbs, transactions and
-  `request.url` drop the query string and fragment, so an `?access_token=` or an OAuth `#access_token=` in a URL does
+- **URLs keep origin and path only, and a route fragment.** `fetch` and XHR breadcrumbs, navigation breadcrumbs, transactions and
+  `request.url` drop the query string and every fragment but a route one: a fragment that starts with `#/` or `#!/` (a hash
+  router such as `createHashHistory` or Vue's hash mode) is kept up to its first `?`, `=` or `&` (`#/access_token=abc` becomes `#/access_token`, so a router that rewrites an OAuth redirect leaks nothing), and any other fragment
+  (`#access_token=…`, `#id_token=…`, `#section-2`) is dropped. Path segments are kept as they are, in the path and in a route
+  fragment. So an `?access_token=` or an OAuth `#access_token=` in a URL does
   not ride along with your errors, and neither does a `user:password@` (a protocol-relative or padded URL included). A `data:` URL
   is its media type and payload size (`data:image/png;base64,[80000 bytes]`), `blob:` keeps the scrubbed URL inside it, `about:`
   its path, any other scheme without `//` (`javascript:`, `mailto:`) only the scheme, and no URL is longer than 1,024

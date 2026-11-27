@@ -49,6 +49,29 @@ describe("scrubUrl", () => {
     ["", undefined, ""],
   ])("%s", (raw, base, want) => expect(scrubUrl(raw, base)).toBe(want));
 
+  it.each([
+    ["https://app.test/#/settings/billing", undefined, "https://app.test/#/settings/billing"],
+    ["https://app.test/#!/users/42?tab=keys", undefined, "https://app.test/#!/users/42"],
+    ["https://app.test/#/cb?access_token=abc", undefined, "https://app.test/#/cb"],
+    ["https://app.test/#/a#access_token=abc", undefined, "https://app.test/#/a"],
+    ["https://app.test/#/access_token=abc&token_type=bearer", undefined, "https://app.test/#/access_token"],
+    ["https://app.test/#/search/q=shoes", undefined, "https://app.test/#/search/q"],
+    ["https://app.test/#access_token=abc&token_type=bearer", undefined, "https://app.test/"],
+    ["https://app.test/#id_token=abc", undefined, "https://app.test/"],
+    ["https://app.test/#section-2", undefined, "https://app.test/"],
+    ["https://app.test/#!access_token=abc", undefined, "https://app.test/"],
+    ["https://app.test/app?x=1#/settings", undefined, "https://app.test/app#/settings"],
+    ["#/settings?x=1", "https://app.test/app?y=2", "https://app.test/app#/settings"],
+    ["/app#/settings?x=1", undefined, "/app#/settings"],
+    ["/app#access_token=abc", undefined, "/app"],
+    ["http://[bad#/route?x=1", undefined, "http://[bad#/route"],
+  ])("fragment: %s", (raw, base, want) => expect(scrubUrl(raw, base)).toBe(want));
+
+  it("masks no path segment, so a route fragment segment is kept as a path segment is", () => {
+    expect(scrubUrl("https://app.test/reset/abcdef0123456789abcdef")).toBe("https://app.test/reset/abcdef0123456789abcdef");
+    expect(scrubUrl("https://app.test/#/reset/abcdef0123456789abcdef")).toBe("https://app.test/#/reset/abcdef0123456789abcdef");
+  });
+
   it("takes a URL object and nothing", () => {
     expect(scrubUrl(new URL("https://h.example.com/p?q=1#f"))).toBe("https://h.example.com/p");
     expect(scrubUrl(null)).toBe("");

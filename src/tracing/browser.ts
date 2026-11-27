@@ -10,7 +10,7 @@
 
 import { releaseTrace, setStandingRoot } from "./context";
 import { isLive, listen, Stops, type Installed } from "../overseer/lifecycle";
-import { scrubUrl } from "../overseer/url-scrub";
+import { routeFragment, scrubUrl } from "../overseer/url-scrub";
 import { startTransaction } from "./index";
 import type { Span, Transaction } from "./span";
 import { observeWebVitals, type WebVitals, type WebVitalsObserver } from "./web-vitals";
@@ -66,7 +66,9 @@ export function startBrowserTracing(options: BrowserTracingOptions = {}): () => 
 
   const stops = new Stops();
   let current: { tx: Transaction; finish: (endTimeMs?: number) => void } | undefined;
-  let lastPath = window.location.pathname;
+  // The path and the route fragment: a hash router moves only the fragment, and that is a navigation too.
+  const routeKey = (): string => `${window.location.pathname}${routeFragment(window.location.hash)}`;
+  let lastPath = routeKey();
   const vitals: WebVitalsObserver = observeWebVitals();
   // What the finished pageload carried, so the hide send can say what changed since. Set when the pageload ends.
   let pageload: { traceparent: string; name: string; inp?: number; cls?: number } | undefined;
@@ -157,9 +159,9 @@ export function startBrowserTracing(options: BrowserTracingOptions = {}): () => 
   }
 
   const onRouteChange = (): void => {
-    const pathname = window.location.pathname;
-    if (pathname === lastPath) return;
-    lastPath = pathname;
+    const key = routeKey();
+    if (key === lastPath) return;
+    lastPath = key;
     current?.finish();
     begin("navigation", true);
   };

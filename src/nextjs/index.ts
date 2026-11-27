@@ -261,13 +261,28 @@ export async function captureRouterError(
 }
 
 /**
- * Track router transition start (for performance)
+ * Track router transition start: wire it as `export const onRouterTransitionStart = captureRouterTransitionStart;` in
+ * `instrumentation-client.ts` (Next.js 15.3+). Next passes the full href, query and hash included, so the route is
+ * scrubbed like every URL (`scrubUrl`, resolved against the page when there is one): a path stays a path, an absolute URL
+ * stays absolute, the query goes, and so does a fragment unless it is a route (`#/settings`).
  */
 export function captureRouterTransitionStart(route: string): void {
+  const base = typeof location === "undefined" ? undefined : location.href;
+  const absolute = /^\s*(?:[A-Za-z][A-Za-z0-9+.-]*:|[/\\]{2})/.test(route);
+  let scrubbed = scrubUrl(route, absolute ? undefined : base);
+  if (!absolute && base) {
+    // Resolved against the page to find the path; given as a path, it goes out as one.
+    try {
+      const { origin } = new URL(base);
+      if (origin !== "null" && scrubbed.startsWith(origin)) scrubbed = scrubbed.slice(origin.length);
+    } catch {
+      // an unparsable page address: keep what scrubUrl made
+    }
+  }
   coreAddBreadcrumb({
     category: "navigation",
-    message: `Navigating to ${route}`,
-    data: { route },
+    message: `Navigating to ${scrubbed}`,
+    data: { route: scrubbed },
   });
 }
 
