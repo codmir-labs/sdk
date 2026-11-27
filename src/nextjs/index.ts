@@ -33,7 +33,7 @@ import {
   type SeverityLevel,
 } from "../overseer/index";
 import { listen, Stops } from "../overseer/lifecycle";
-import { withHint, crash } from "../overseer/capture-hint";
+import { withHint, crash, eventFrame } from "../overseer/capture-hint";
 import { trackNavigation } from "../overseer/navigation";
 import { scrubUrl } from "../overseer/url-scrub";
 import { requestScopeFrom, withRequestScope } from "../overseer/request-scope";
@@ -97,7 +97,7 @@ export function init(config: NextjsConfig = {}): void {
     if (captureUnhandledErrors) {
       stops.add(
         listen(window, "error", (event: ErrorEvent) => {
-          coreCaptureException(event.error || event.message, withHint({}, crash("onerror")));
+          coreCaptureException(event.error || event.message, withHint({}, crash("onerror", undefined, eventFrame(event))));
         }),
       );
     }
@@ -106,7 +106,7 @@ export function init(config: NextjsConfig = {}): void {
     if (captureUnhandledRejections) {
       stops.add(
         listen(window, "unhandledrejection", (event: PromiseRejectionEvent) => {
-          coreCaptureException(event.reason, withHint({}, crash("onunhandledrejection")));
+          coreCaptureException(event.reason, withHint({}, crash("onunhandledrejection", undefined, "none")));
         }),
       );
     }

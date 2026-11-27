@@ -36,7 +36,7 @@ import {
   type SeverityLevel,
 } from "../overseer/index";
 import { listen, patch, Stops } from "../overseer/lifecycle";
-import { withHint, crash } from "../overseer/capture-hint";
+import { withHint, crash, eventFrame } from "../overseer/capture-hint";
 import { instrumentFetch } from "../tracing/fetch";
 import { instrumentXhr } from "../tracing/xhr";
 import { startBrowserTracing, type BrowserTracingOptions } from "../tracing/browser";
@@ -108,7 +108,8 @@ export function init(config: BrowserConfig = {}): void {
       listen(window, "error", (event: ErrorEvent) => {
         coreCaptureException(
           event.error || event.message,
-          withHint({ filename: event.filename, lineno: event.lineno, colno: event.colno }, crash("onerror")),
+          // With no error of its own, the event's place is the one frame: the SDK has none to give.
+          withHint({ filename: event.filename, lineno: event.lineno, colno: event.colno }, crash("onerror", undefined, eventFrame(event))),
         );
       }),
     );
@@ -118,7 +119,7 @@ export function init(config: BrowserConfig = {}): void {
   if (captureUnhandledRejections) {
     stops.add(
       listen(window, "unhandledrejection", (event: PromiseRejectionEvent) => {
-        coreCaptureException(event.reason, withHint({}, crash("onunhandledrejection")));
+        coreCaptureException(event.reason, withHint({}, crash("onunhandledrejection", undefined, "none")));
       }),
     );
   }
