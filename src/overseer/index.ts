@@ -35,6 +35,7 @@ import { browserRequest, envContexts } from "./runtime-context";
 import { addSourceContext } from "./source-context";
 import { parseStackTrace } from "./stack";
 import { installProcessErrors } from "./process-errors";
+import { userForWire } from "./user-pii";
 import {
   DEFAULT_DSN,
   KEEPALIVE_MAX_BYTES,
@@ -117,6 +118,14 @@ export interface OverseerConfig {
    * counted. `false` turns the limit off.
    */
   rateLimit?: { perGroupPerMinute?: number; perMinute?: number } | false;
+  /**
+   * Send the whole user object, and Express's client IP, with every error and message event. Default `false`: an event
+   * carries only the user's `id` and `username` (and the `email` when there is no `id`, so that user is still counted),
+   * and Express adds no `clientIp`. On, every key of the user is sent except one that names a secret (a password, token
+   * or key). `beforeSend` sees what will be sent.
+   * @default false
+   */
+  sendDefaultPii?: boolean;
   /** Initial user context */
   initialUser?: UserContext;
   /** Initial tags */
@@ -210,8 +219,9 @@ export type SeverityLevel = "fatal" | "error" | "warning" | "info" | "debug";
 // Core Client
 // =============================================================================
 
-type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'selfHealing' | 'apiKey' | 'includeSourceContext' | 'captureProcessErrors' | 'onDropped' | 'rateLimit'> & {
+type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'sendDefaultPii' | 'selfHealing' | 'apiKey' | 'includeSourceContext' | 'captureProcessErrors' | 'onDropped' | 'rateLimit'> & {
   initialUser?: UserContext;
+  sendDefaultPii: boolean;
   onDropped?: OverseerConfig["onDropped"];
   selfHealing?: SelfHealingConfig;
   includeSourceContext: boolean;
@@ -325,6 +335,7 @@ class OverseerClient {
       beforeSend: config.beforeSend || ((e) => e),
       onDropped: config.onDropped,
       initialUser: config.initialUser,
+      sendDefaultPii: config.sendDefaultPii === true,
       initialTags: config.initialTags || {},
       selfHealing: config.selfHealing,
       includeSourceContext: config.includeSourceContext ?? true,
@@ -706,9 +717,34 @@ class OverseerClient {
     return this.config.includeSourceContext ? addSourceContext(frames) : frames;
   }
 
+  /** True with `sendDefaultPii: true`: Express adds `clientIp` only then. */
+  sendsDefaultPii(): boolean {
+    return this.config.sendDefaultPii;
+  }
+
+  /** A copy of the event whose `user`, and `extra.user` (Express's), are cut down to what `sendDefaultPii` allows. */
+  private withWireUser(event: OverseerEvent): OverseerEvent {
+    if (event.type !== "error" && event.type !== "message") return event;
+    const pii = this.config.sendDefaultPii;
+    const out: OverseerEvent = { ...event };
+    const user = userForWire(event.user, pii);
+    if (user) out.user = user as UserContext;
+    else delete out.user;
+    const extraUser = event.extra?.user;
+    if (extraUser !== undefined) {
+      const reduced = userForWire(extraUser, pii);
+      const extra = { ...event.extra };
+      if (reduced) extra.user = reduced;
+      else delete extra.user;
+      out.extra = extra;
+    }
+    return out;
+  }
+
   private sendEvent(raw: OverseerEvent): void {
-    // Before the hook and before any fingerprint: the hook and the group see the scrubbed text.
-    const event = scrubEvent(raw);
+    // Before the hook and before any fingerprint: the hook and the group see the user `sendDefaultPii` allows and the
+    // scrubbed text.
+    const event = scrubEvent(this.withWireUser(raw));
     let result: ReturnType<NonNullable<OverseerConfig["beforeSend"]>>;
     try {
       result = this.config.beforeSend(copyForHook(event));
@@ -1234,6 +1270,11 @@ export function getDsn(): string {
 
 export function getEnvironment(): string {
   return getClient()?.getEnvironment() || "development";
+}
+
+/** True when the client was started with `sendDefaultPii: true`. */
+export function sendsDefaultPii(): boolean {
+  return getClient()?.sendsDefaultPii() ?? false;
 }
 
 export function getClientKey(): string {

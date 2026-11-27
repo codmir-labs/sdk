@@ -30,9 +30,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function client() {
+function client(more: { sendDefaultPii?: boolean } = {}) {
   const onDropped = vi.fn();
-  const c = new OverseerClient({ clientKey: "osk_test", environment: "production", onDropped, rateLimit: false });
+  const c = new OverseerClient({ clientKey: "osk_test", environment: "production", onDropped, rateLimit: false, ...more });
   c.init();
   return { c, onDropped };
 }
@@ -97,8 +97,9 @@ describe("safe serialization", () => {
   });
 
   it("(f) drops an event whose toJSON throws, reports it, and sends the next one in the same batch", async () => {
-    const { c, onDropped } = client();
-    // The context is cleaned before it is queued (a throwing toJSON there is cut), so the throw comes from the user.
+    // The context is cleaned before it is queued (a throwing toJSON there is cut), so the throw comes from the user,
+    // whose keys are all sent only with `sendDefaultPii`.
+    const { c, onDropped } = client({ sendDefaultPii: true });
     c.setUser({
       id: "u",
       toJSON() {

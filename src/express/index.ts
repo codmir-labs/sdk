@@ -12,7 +12,7 @@
  * Codmir.init({
  *   dsn: process.env.CODMIR_DSN,
  *   environment: process.env.NODE_ENV,
- *   extractUser: (req) => ({ id: req.user?.id, email: req.user?.email }),
+ *   extractUser: (req) => (req.user ? { id: req.user.id } : null),
  * });
  *
  * const app = express();
@@ -40,6 +40,7 @@ import {
   flush as coreFlush,
   close as coreClose,
   getClient,
+  sendsDefaultPii,
   type OverseerConfig,
   type UserContext,
   type Breadcrumb,
@@ -130,12 +131,11 @@ export interface ExpressConfig extends OverseerConfig {
    *
    * @example
    * ```typescript
-   * extractUser: (req) => ({
-   *   id: req.user?.id,
-   *   email: req.user?.email,
-   *   ip_address: req.ip,
-   * })
+   * extractUser: (req) => (req.user ? { id: req.user.id } : null)
    * ```
+   *
+   * An event sends the user's `id` and `username` only (the `email` when there is no `id`). Other keys, such as
+   * `ip_address: req.ip`, are sent only with `sendDefaultPii: true`.
    */
   extractUser?: (req: ExpressRequest) => UserContext | null;
 }
@@ -339,8 +339,8 @@ export function errorHandler(): ErrorMiddleware {
     if (expressConfig.extractUser && (!req._codmir?.scope || req.user !== req._codmir.userSeen)) extractInto(req, scope);
     if (expressConfig.extractUser && scope.user) requestContext.user = scope.user;
 
-    // Add client IP if available
-    if (req.ip) {
+    // The client IP is personal data: only with `sendDefaultPii: true`.
+    if (req.ip && sendsDefaultPii()) {
       requestContext.clientIp = req.ip;
     }
 
