@@ -2462,7 +2462,7 @@ To [`packages/agent-kit`](packages/agent-kit), a private workspace in this repo 
 | [`scripts/`](scripts) | `check-dist-types.mjs`: every export target exists after a build |
 | [`docs/assets/`](docs/assets) | This page's hero and icons |
 | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Typecheck, lint, tests, build and dist checks on Node 18, 20 and 22, and the example smoke and the Next.js build smoke on Node 20, on every push and pull request to `main`; the release job, with semantic-release, runs only when a maintainer dispatches the workflow by hand ([Releasing](#releasing)) |
-| [`.github/release/`](.github/release) | `no-downgrade.cjs`, the semantic-release plugin that refuses a version not above npm `latest`, and the tests of it and of the release job |
+| [`.github/release/`](.github/release) | The semantic-release plugins: `no-downgrade.cjs` refuses a version not above npm `latest`, and `export-guard.cjs` makes a release a major when an export of the last release is gone; with their tests and those of the release job |
 | [CHANGELOG.md](CHANGELOG.md) | Released and unreleased changes |
 | [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) | The entries removed in 3.0, and migrating from the older agent SDK API |
 | [AI_REFERENCE.md](AI_REFERENCE.md) | An API client reference written for AI assistants |
