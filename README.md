@@ -107,7 +107,7 @@ LCP, INP, CLS, TTFB and FCP on the browser pageload transaction, with the final 
 <td width="33%" valign="top">
 <img src="docs/assets/icons/breadcrumbs.svg" width="40" height="40" alt=""><br>
 <b>Breadcrumbs</b><br>
-Clicks, <code>fetch</code>, XHR, navigation and server requests; the last 100 ride along with every error.
+Clicks, <code>fetch</code>, XHR, navigation and console warnings in every browser entry, and server requests; the last 20 ride along with every error.
 </td>
 <td width="33%" valign="top">
 <img src="docs/assets/icons/privacy.svg" width="40" height="40" alt=""><br>
@@ -240,10 +240,10 @@ With `debug: true`, `init` logs once when the release is still `unknown`.
 | Platform | Import | Errors | Breadcrumbs | Tracing | Replay |
 | --- | --- | --- | --- | --- | --- |
 | [Browser](#browser) | `@codmir/sdk/browser` | ![auto](https://img.shields.io/badge/auto-22C55E?style=flat-square) | ![auto](https://img.shields.io/badge/auto-22C55E?style=flat-square) | ![auto](https://img.shields.io/badge/auto-22C55E?style=flat-square) when `tracesSampleRate` > 0 | ![opt-in](https://img.shields.io/badge/opt--in-8B5CF6?style=flat-square) `@codmir/sdk/replay` |
-| [Next.js](#nextjs) | `@codmir/sdk/nextjs`, `/nextjs/server` | ![auto](https://img.shields.io/badge/auto-22C55E?style=flat-square) browser, ![hook](https://img.shields.io/badge/hook-3B82F6?style=flat-square) `onRequestError` | ![auto](https://img.shields.io/badge/auto-22C55E?style=flat-square) route changes | ![wrap](https://img.shields.io/badge/wrap-3B82F6?style=flat-square) route handlers, middleware | ![opt-in](https://img.shields.io/badge/opt--in-8B5CF6?style=flat-square) in the browser |
+| [Next.js](#nextjs) | `@codmir/sdk/nextjs`, `/nextjs/server` | ![auto](https://img.shields.io/badge/auto-22C55E?style=flat-square) browser, ![hook](https://img.shields.io/badge/hook-3B82F6?style=flat-square) `onRequestError` | ![auto](https://img.shields.io/badge/auto-22C55E?style=flat-square) clicks, requests, route changes, console | ![wrap](https://img.shields.io/badge/wrap-3B82F6?style=flat-square) route handlers, middleware | ![opt-in](https://img.shields.io/badge/opt--in-8B5CF6?style=flat-square) in the browser |
 | [Express](#express) | `@codmir/sdk/express` | ![middleware](https://img.shields.io/badge/middleware-3B82F6?style=flat-square) | ![middleware](https://img.shields.io/badge/middleware-3B82F6?style=flat-square) | ![middleware](https://img.shields.io/badge/middleware-3B82F6?style=flat-square) + outgoing `fetch` | n/a |
 | [Hono](#hono) | `@codmir/sdk/hono` | ![manual](https://img.shields.io/badge/manual-737373?style=flat-square) `captureException` in `onError` | ![manual](https://img.shields.io/badge/manual-737373?style=flat-square) | ![middleware](https://img.shields.io/badge/middleware-3B82F6?style=flat-square) | n/a |
-| [Remix](#remix) | `@codmir/sdk/remix`, `/remix/server` | ![hook](https://img.shields.io/badge/hook-3B82F6?style=flat-square) `handleError`, ![wrap](https://img.shields.io/badge/wrap-3B82F6?style=flat-square) loaders, actions | ![wrap](https://img.shields.io/badge/wrap-3B82F6?style=flat-square) server, ![hook](https://img.shields.io/badge/hook-3B82F6?style=flat-square) browser | ![wrap](https://img.shields.io/badge/wrap-3B82F6?style=flat-square) | ![opt-in](https://img.shields.io/badge/opt--in-8B5CF6?style=flat-square) in the browser |
+| [Remix](#remix) | `@codmir/sdk/remix`, `/remix/server` | ![hook](https://img.shields.io/badge/hook-3B82F6?style=flat-square) `handleError`, ![wrap](https://img.shields.io/badge/wrap-3B82F6?style=flat-square) loaders, actions | ![wrap](https://img.shields.io/badge/wrap-3B82F6?style=flat-square) server, ![hook](https://img.shields.io/badge/hook-3B82F6?style=flat-square) browser: clicks, requests, route changes, console | ![wrap](https://img.shields.io/badge/wrap-3B82F6?style=flat-square) | ![opt-in](https://img.shields.io/badge/opt--in-8B5CF6?style=flat-square) in the browser |
 | [React Native](#react-native) | `@codmir/sdk/react-native` | ![auto](https://img.shields.io/badge/auto-22C55E?style=flat-square) JS errors, error boundary | ![manual](https://img.shields.io/badge/manual-737373?style=flat-square) screens, app state | n/a | n/a |
 | [Node.js](#nodejs) | `@codmir/sdk` | ![manual](https://img.shields.io/badge/manual-737373?style=flat-square) | ![manual](https://img.shields.io/badge/manual-737373?style=flat-square) | ![manual](https://img.shields.io/badge/manual-737373?style=flat-square) `@codmir/sdk/tracing` | n/a |
 
@@ -258,14 +258,14 @@ Each import is its own bundle, so a page that only reports errors never loads th
 | --- | --- | --- |
 | `@codmir/sdk` | The error SDK (`init`, `captureException`, `captureMessage`, `setUser`, `setTag`, `addBreadcrumb`, `flush` ...), the `Overseer` namespace and `CodmirClient` | Anywhere |
 | `@codmir/sdk/overseer` | The error SDK alone: the same functions as the root, without the API client | Anywhere |
-| `@codmir/sdk/browser` | `init` with global handlers, click and request breadcrumbs, `fetch` and XHR spans, `startBrowserTracing` | Browser |
+| `@codmir/sdk/browser` | `init` with global handlers, click, request, navigation and console breadcrumbs, `fetch` and XHR spans, `startBrowserTracing` | Browser |
 | `@codmir/sdk/replay` | `startReplay`, `stopReplay`, `ReplayRecorder`, `DEFAULT_PRIVACY` | Browser |
 | `@codmir/sdk/tracing` | `startSpan`, `startTransaction`, `startChildSpan`, `traceparent` helpers, `instrumentFetch`, `instrumentXhr` | Anywhere |
 | `@codmir/sdk/logs` | `createLogMonitor`, `redact`, `pathPattern`, `messageKey`: findings from an app's own logs, local first; the `LogStore` and `LogState` types for the `store` option | Anywhere |
 | `@codmir/sdk/logs/node` | `captureConsole`, `captureProcess`, `fileSink`, `fileStore`, `expressLogs`, `honoLogs`, and for [logs you already have](#read-logs-you-already-have) `readLog`, `followFile` | Node.js |
 | `@codmir/sdk/logs/parse` | `parseLogLine`, `parseLogLines`: one line of JSON, Vercel, Railway, journald, pino, access-log or plain-text output as a record or a request | Anywhere |
 | `codmir-logs` (a command, `bin`) | `npx codmir-logs [files…]`: [findings from logs you already have](#read-logs-you-already-have), on your machine | Node.js |
-| `@codmir/sdk/nextjs` | Next.js `init`, `captureRouterError`, `captureRequestError`, `captureBoundaryError`, `captureUnderscoreErrorException`, route-change breadcrumbs | Browser and server |
+| `@codmir/sdk/nextjs` | Next.js `init`, `captureRouterError`, `captureRequestError`, `captureBoundaryError`, `captureUnderscoreErrorException`, click, request, route-change and console breadcrumbs | Browser and server |
 | `@codmir/sdk/nextjs/server` | `withCodmirTracing`, `withCodmirMiddleware` | Node.js runtime |
 | `@codmir/sdk/express` | `init`, `requestHandler`, `tracingHandler`, `errorHandler`, `bindToRequest` | Node.js |
 | `@codmir/sdk/hono` | `codmirTracing()` middleware | Node.js (needs `node:async_hooks`) |
@@ -553,6 +553,8 @@ init({
   environment: 'production',
   trackClicks: true, // default true: ui.click breadcrumbs
   trackRequests: true, // default true: fetch and XHR breadcrumbs, http.client spans, traceparent
+  trackNavigation: true, // default true: navigation breadcrumbs for pushState, replaceState and popstate
+  trackConsole: ['error', 'warn'], // default ['error', 'warn']: console breadcrumbs; true is the default, false is off
   trackInputs: false, // default false: ui.input breadcrumbs, never the value
   captureConsoleErrors: false, // default false: console.error sent as an error-level message
   tracesSampleRate: 0.2, // above 0 turns on pageload and navigation transactions
@@ -569,6 +571,7 @@ addBreadcrumb({ category: 'checkout', message: 'coupon applied' });
 | Click breadcrumbs | Tag, id, class and, for buttons and links, up to 50 characters of their text |
 | Request breadcrumbs | `fetch` and XHR: method, origin and path, status and duration; never the query string. The message names the path and the outcome: `GET /api/cart 500`, or `GET /api/cart failed` when no answer came back |
 | Navigation breadcrumbs | The first page (`/checkout`), then `pushState /checkout`, `replaceState /cart` and `popstate /`: the message names the page after the move, never its query or fragment |
+| Console breadcrumbs | `console.error` and `console.warn` by default (`trackConsole`; add `'info'`, `'log'` or `'debug'`): the arguments joined, secrets masked, cut to 200 characters. A message identical to the newest breadcrumb adds no new one and raises its `data.count` |
 | Spans | Every `fetch` and XHR made inside a trace becomes an `http.client` span; same-origin requests and your `tracePropagationTargets` get a `traceparent` header |
 | Transactions | With `tracesSampleRate` above 0: one `pageload` transaction, then one `navigation` transaction per client-side route change, with web vitals on the pageload |
 
@@ -742,8 +745,10 @@ CustomError.getInitialProps = async (ctx) => {
 <summary><b>What <code>@codmir/sdk/nextjs</code> does in the browser</b></summary>
 
 - `window` `error` and `unhandledrejection` are captured (`captureUnhandledErrors`, `captureUnhandledRejections`, both on).
-- Route changes become `navigation` breadcrumbs: the first page, `pushState`, `replaceState` and `popstate`, each with
-  origin and path only (`trackRouteChanges`, on). A move reads `pushState /checkout`, with the path after the move.
+- The same breadcrumbs as `@codmir/sdk/browser`: clicks (`trackClicks`, on), inputs (`trackInputs`, off), `fetch` and
+  XHR (`trackRequests`, on), route changes (`trackNavigation`, on; `trackRouteChanges` is the older name) and `console`
+  warnings and errors (`trackConsole`, `['error', 'warn']`). A route move reads `pushState /checkout`, with the path
+  after the move, no query or fragment.
 - `captureRouterTransitionStart(route)` adds a `Navigating to <route>` breadcrumb when you call it.
 - It starts no pageload transaction and no replay. For replay call `startReplay()` from
   [`@codmir/sdk/replay`](#session-replay) after `init()`; the `enableReplay` option is accepted but not read at this
@@ -910,7 +915,7 @@ Browser, in `entry.client.tsx`, before you hydrate:
 import * as Codmir from '@codmir/sdk/remix';
 
 Codmir.init({ clientKey: 'osk_your_client_key' });
-Codmir.setupBrowserTracking(); // window errors, unhandled rejections, navigation breadcrumbs
+Codmir.setupBrowserTracking(); // window errors, unhandled rejections, click, request, navigation and console breadcrumbs
 ```
 
 Transactions come from `@codmir/sdk/remix/server`: wrap the request handler for one transaction per request, or a
@@ -944,7 +949,7 @@ inside the request, as in the Express, Next.js and Hono integrations; the transa
 | `wrapLoader(fn)` | Errors thrown by the loader (`captureLoaderErrors`), plus a `loader` breadcrumb with method and path | event mechanism `remix-loader` |
 | `wrapAction(fn)` | Errors thrown by the action (`captureActionErrors`), plus an `action` breadcrumb | event mechanism `remix-action`, and `formDataKeys` (the form's field names, never their values) when the action threw before reading the body |
 | `captureRemixServerError(error, request)` | Rendering errors from `entry.server.tsx`; returns the event id | event mechanism `remix-server-render` |
-| `setupBrowserTracking()` | `window` errors and unhandled rejections; navigation breadcrumbs unless `captureRouteChanges: false` | event mechanism `onerror` or `onunhandledrejection` |
+| `setupBrowserTracking()` | `window` errors and unhandled rejections; click, `fetch`, XHR, navigation and console breadcrumbs, as `init()` was told (`trackNavigation: false` or `captureRouteChanges: false` turns the route ones off) | event mechanism `onerror` or `onunhandledrejection` |
 
 A thrown `Response` (`throw redirect()`, a 404) is classified by its status in a `remix/server` transaction and
 rethrown; it is not counted as an error.
@@ -1610,6 +1615,7 @@ that undoes them. Cloud mode is off unless you pass `cloud`.
 - **Replay masks by default.** Every input value is masked, password fields always, and you choose what else is masked
   or not recorded at all ([selectors](#session-replay)).
 - **Browser input breadcrumbs** (`trackInputs`, off by default) record the element and its type, never the value.
+- **Console breadcrumbs** (`trackConsole`, `error` and `warn` by default) are scrubbed of secrets (tokens, cookies, `key=value` pairs, query strings) and cut to 200 characters; emails and ids in a message stay, so keep personal data out of what you log.
 - **Source lines are Node-only.** A browser event never carries source code.
 - **The user is cut down to what Codmir reads.** By default an event carries only the user's `id` and `username`, and
   the `email` when there is no `id` (so that user is still counted as one person). `ip_address` and every other key of the
@@ -1754,6 +1760,8 @@ Each framework's `init()` takes the core options plus its own:
 | `trackClicks` | `true` | `ui.click` breadcrumbs |
 | `trackInputs` | `false` | `ui.input` breadcrumbs: element and type, never the value |
 | `trackRequests` | `true` | `fetch` and XHR breadcrumbs, `http.client` spans and `traceparent` |
+| `trackNavigation` | `true` | `navigation` breadcrumbs: the first page, `pushState`, `replaceState`, `popstate` |
+| `trackConsole` | `['error', 'warn']` | `console` breadcrumbs for these methods (`'error'`, `'warn'`, `'info'`, `'log'`, `'debug'`); `true` is the default list, `false` is off. Messages are masked, cut to 200 characters, and a repeat of the newest one raises its `data.count` |
 | `browserTracing` | on when `tracesSampleRate` > 0 | `true`, `false`, or `{ idleTimeout, finalTimeout, routeName, onPageloadEnd }` |
 
 </details>
@@ -1765,7 +1773,12 @@ Each framework's `init()` takes the core options plus its own:
 | --- | --- | --- |
 | `captureUnhandledErrors` | `true` | Browser: capture `window` `error` events |
 | `captureUnhandledRejections` | `true` | Browser: capture `unhandledrejection` events |
-| `trackRouteChanges` | `true` | Browser: navigation breadcrumbs |
+| `trackRouteChanges` | `true` | Browser: navigation breadcrumbs; the older name of `trackNavigation` |
+| `trackNavigation` | `true` | Browser: navigation breadcrumbs (wins over `trackRouteChanges` when both are set) |
+| `trackClicks` | `true` | Browser: `ui.click` breadcrumbs |
+| `trackInputs` | `false` | Browser: `ui.input` breadcrumbs, never the value |
+| `trackRequests` | `true` | Browser: `fetch` and XHR breadcrumbs, `http.client` spans and `traceparent` |
+| `trackConsole` | `['error', 'warn']` | Browser: `console` breadcrumbs for these methods; `true` is the default list, `false` is off |
 | `enableReplay` | `false` | Accepted, not read at this version: call `startReplay()` |
 
 `withCodmirTracing(handler, { route })` and `withCodmirMiddleware(fn, { route })` take one option, the route pattern.
@@ -1790,7 +1803,12 @@ Each framework's `init()` takes the core options plus its own:
 | --- | --- | --- |
 | `captureLoaderErrors` | `true` | Capture errors thrown in wrapped loaders |
 | `captureActionErrors` | `true` | Capture errors thrown in wrapped actions |
-| `captureRouteChanges` | `true` | Navigation breadcrumbs from `setupBrowserTracking()` |
+| `captureRouteChanges` | `true` | Navigation breadcrumbs from `setupBrowserTracking()`; the older name of `trackNavigation` |
+| `trackNavigation` | `true` | Navigation breadcrumbs from `setupBrowserTracking()` (wins over `captureRouteChanges` when both are set) |
+| `trackClicks` | `true` | Browser: `ui.click` breadcrumbs from `setupBrowserTracking()` |
+| `trackInputs` | `false` | Browser: `ui.input` breadcrumbs, never the value |
+| `trackRequests` | `true` | Browser: `fetch` and XHR breadcrumbs, `http.client` spans and `traceparent` |
+| `trackConsole` | `['error', 'warn']` | Browser: `console` breadcrumbs for these methods; `true` is the default list, `false` is off |
 | `captureResponseErrors` | `true` | Capture a thrown `Response` in `handleError` |
 
 </details>

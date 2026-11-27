@@ -51,7 +51,7 @@ import {
 } from "../overseer/index";
 import { listen, Stops } from "../overseer/lifecycle";
 import { withHint, crash, eventFrame } from "../overseer/capture-hint";
-import { trackNavigation } from "../overseer/navigation";
+import { installBrowserBreadcrumbs, type BrowserBreadcrumbOptions, type ConsoleMethod } from "../overseer/browser-breadcrumbs";
 import { scrubUrl } from "../overseer/url-scrub";
 
 // =============================================================================
@@ -63,8 +63,18 @@ export interface RemixConfig extends OverseerConfig {
   captureLoaderErrors?: boolean;
   /** Automatically capture errors thrown in actions (default: true) */
   captureActionErrors?: boolean;
-  /** Track route changes as breadcrumbs (default: true) */
+  /** Track route changes as breadcrumbs (default: true). The older name of `trackNavigation`, which wins when both are set. */
   captureRouteChanges?: boolean;
+  /** Track clicks as `ui.click` breadcrumbs (default: true) */
+  trackClicks?: boolean;
+  /** Track inputs as `ui.input` breadcrumbs, never the value (default: false) */
+  trackInputs?: boolean;
+  /** Track `fetch` and XHR requests as breadcrumbs (default: true) */
+  trackRequests?: boolean;
+  /** Track route changes as breadcrumbs (default: true) */
+  trackNavigation?: boolean;
+  /** Track console output as breadcrumbs: `true` is `["error", "warn"]` (default), or list the methods */
+  trackConsole?: boolean | ConsoleMethod[];
   /** Capture Response errors with status >= 400 (default: true) */
   captureResponseErrors?: boolean;
 }
@@ -107,6 +117,8 @@ let remixConfig: Required<Pick<RemixConfig, "captureLoaderErrors" | "captureActi
   captureRouteChanges: true,
   captureResponseErrors: true,
 };
+/** What `setupBrowserTracking` records, from `init`'s options. */
+let browserBreadcrumbs: BrowserBreadcrumbOptions = {};
 
 // =============================================================================
 // Remix Specific Initialization
@@ -120,6 +132,11 @@ export function init(config: RemixConfig = {}): void {
     captureActionErrors = true,
     captureRouteChanges = true,
     captureResponseErrors = true,
+    trackNavigation = captureRouteChanges,
+    trackClicks,
+    trackInputs,
+    trackRequests,
+    trackConsole,
     ...coreConfig
   } = config;
 
@@ -133,6 +150,7 @@ export function init(config: RemixConfig = {}): void {
     captureRouteChanges,
     captureResponseErrors,
   };
+  browserBreadcrumbs = { trackClicks, trackInputs, trackRequests, trackNavigation, trackConsole };
 }
 
 // =============================================================================
@@ -323,7 +341,8 @@ export function captureRemixServerError(error: unknown, request: RemixRequest): 
 
 /**
  * Set up browser-side tracking for Remix client entry.
- * Tracks route changes via history API and captures unhandled errors.
+ * Records the browser breadcrumbs (clicks, inputs, `fetch` and XHR, route changes, console output; see `RemixConfig`)
+ * and captures unhandled errors.
  *
  * @example
  * ```typescript
@@ -355,14 +374,12 @@ export function setupBrowserTracking(): void {
     }),
   );
 
-  // Route change tracking
-  if (remixConfig.captureRouteChanges) {
-    stops.add(trackNavigation());
-  }
+  // Clicks, inputs, requests, route changes and console output: the set every browser entry records.
+  stops.add(installBrowserBreadcrumbs(browserBreadcrumbs));
 }
 
 /**
- * Ends what `init` and `setupBrowserTracking` started: the global handlers and the route breadcrumbs (the `history`
+ * Ends what `init` and `setupBrowserTracking` started: the global handlers and the breadcrumbs (the `console`, `fetch`, XHR and `history`
  * patches go back when they are still on top, and otherwise only pass calls on), then the core client, which sends what
  * it holds. A later `init` starts clean, with its own config. An error captured after `close` and before the next `init`
  * is sent once, without retries.
@@ -371,6 +388,7 @@ export function close(): void {
   stops.run();
   isInitialized = false;
   remixConfig = { captureLoaderErrors: true, captureActionErrors: true, captureRouteChanges: true, captureResponseErrors: true };
+  browserBreadcrumbs = {};
   coreClose();
 }
 
