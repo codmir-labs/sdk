@@ -307,7 +307,7 @@ flowchart LR
         direction TB
         B1["parseStackTrace()<br/>addSourceContext() in Node"]
         B2["sanitizeExtra()<br/>scrubUrl()"]
-        B3["Breadcrumbs<br/>the last 100"]
+        B3["Breadcrumbs<br/>the last 20"]
         B4["envContexts()<br/>browser, os, runtime, device"]
     end
     subgraph deliver["Deliver"]
@@ -567,9 +567,12 @@ addBreadcrumb({ category: 'checkout', message: 'coupon applied' });
 | Uncaught errors | `window` `error` events, captured with the file, line and column (`captureGlobalErrors`, default on) |
 | Unhandled rejections | `unhandledrejection` events (`captureUnhandledRejections`, default on) |
 | Click breadcrumbs | Tag, id, class and, for buttons and links, up to 50 characters of their text |
-| Request breadcrumbs | `fetch` and XHR: method, origin and path, status and duration; never the query string |
+| Request breadcrumbs | `fetch` and XHR: method, origin and path, status and duration; never the query string. The message names the path and the outcome: `GET /api/cart 500`, or `GET /api/cart failed` when no answer came back |
+| Navigation breadcrumbs | The first page (`/checkout`), then `pushState /checkout`, `replaceState /cart` and `popstate /`: the message names the page after the move, never its query or fragment |
 | Spans | Every `fetch` and XHR made inside a trace becomes an `http.client` span; same-origin requests and your `tracePropagationTargets` get a `traceparent` header |
 | Transactions | With `tracesSampleRate` above 0: one `pageload` transaction, then one `navigation` transaction per client-side route change, with web vitals on the pageload |
+
+An error carries its last 20 breadcrumbs, so the trail is short: add the ones that matter.
 
 `init()` in `@codmir/sdk/browser` does nothing outside a browser and logs a warning, so it is safe in code that also
 renders on a server. Add [session replay](#session-replay) with one more import.
@@ -739,7 +742,7 @@ CustomError.getInitialProps = async (ctx) => {
 
 - `window` `error` and `unhandledrejection` are captured (`captureUnhandledErrors`, `captureUnhandledRejections`, both on).
 - Route changes become `navigation` breadcrumbs: the first page, `pushState`, `replaceState` and `popstate`, each with
-  origin and path only (`trackRouteChanges`, on).
+  origin and path only (`trackRouteChanges`, on). A move reads `pushState /checkout`, with the path after the move.
 - `captureRouterTransitionStart(route)` adds a `Navigating to <route>` breadcrumb when you call it.
 - It starts no pageload transaction and no replay. For replay call `startReplay()` from
   [`@codmir/sdk/replay`](#session-replay) after `init()`; the `enableReplay` option is accepted but not read at this
@@ -819,7 +822,7 @@ user and leaves the process-wide one, and every other request, alone; outside a 
 request with no user of its own (no `extractUser`, no `setUser`) takes the process-wide one, such as `initialUser`.
 
 `setTag`, `setTags` and `addBreadcrumb` work the same way. Inside a request they write that request's own tags and
-breadcrumbs (the newest 100) and leave the process-wide ones, and every other request, alone; this includes the
+breadcrumbs (the newest 20) and leave the process-wide ones, and every other request, alone; this includes the
 breadcrumbs `instrumentFetch()` records, which go through `addBreadcrumb`. An error, a message or a transaction carries the
 process-wide tags with the request's on top (the request's win, key by key) and the process-wide breadcrumbs followed by the
 request's. Outside a request all three are process-wide, as before.
@@ -1727,7 +1730,7 @@ back to `CODMIR_API_KEY`. The AI-call monitoring options that used to be listed 
 | `captureMessage(message, level = 'info')` | Sends a message event at `fatal`, `error`, `warning`, `info` or `debug` |
 | `setUser(user \| null)` | `{ id, email, username, ip_address, ... }` on every later event; unless `sendDefaultPii` is on, only the `id` and `username` are sent (the `email` when there is no `id`). Inside a server request (see [Express](#express)) it is that request's user only |
 | `setTag(key, value)`, `setTags(tags)` | String tags on every later event and transaction |
-| `addBreadcrumb(breadcrumb)` | `{ category, message, data, level, type }`; the last 100 are kept |
+| `addBreadcrumb(breadcrumb)` | `{ category, message, data, level, type }`; the last 20 are kept, the same 20 an error carries |
 | `flush(timeout?)` | Sends everything queued; resolves `true` when all of it was sent or refused, `false` when a batch failed and was put back for a retry or when `timeout` (ms) ran out first; the sending goes on. Each caller has its own time, and the timer never keeps a process alive |
 | `close(timeoutMs?)` | Stops timers, listeners (the `captureProcessErrors` hooks too) and the patch runtime, then flushes. Returns a `Promise<boolean>`: `true` when the queue was sent within `timeoutMs` (default 2000), `false` otherwise. In `/browser`, `/nextjs`, `/express`, `/remix` and `/react-native`, `close()` also ends what that entry's `init` started (its error handlers, route breadcrumbs, `fetch`, XHR, `history` and `console.error` patches, its pageload transactions), so a later `init` starts clean with its new config; a second `init` before `close()` is ignored. A patch that another library or a second copy of the SDK put over one of ours stays in place and only passes calls on. An error captured after `close()` and before the next `init` is sent once, without retries |
 | `setConversationId(id)`, `setSessionId(id)` | Attach ids to every error (`extra` and `contexts`); the session id is also sent with each request. On a server, inside a request (see [Express](#express)), they apply to that request only: another request's errors never carry them, and a batch, which can hold many requests' events, carries only a session id set outside any request |
@@ -1830,7 +1833,7 @@ Each framework's `init()` takes the core options plus its own:
 | Retry | Network error, 5xx, 408 and 429; 1 s doubling to 60 s, or `Retry-After` when longer | `retryDelayMs()`, `isRetryableStatus()` |
 | Not retried | Any other 4xx | `isRetryableStatus()` |
 | Page hide | `pagehide` or `visibilitychange` to hidden sends the queue with `keepalive`, under 60,000 bytes per request | `flushOnHide()` |
-| Breadcrumbs | The last 100 | `addBreadcrumb()` |
+| Breadcrumbs | The last 20 (the server keeps an error's last 20) | `addBreadcrumb()` |
 | Spans per transaction | 1,000 | `MAX_SPANS_PER_TRANSACTION` |
 | Source context | 3 frames, 5 lines each side, 240 characters per line, files up to 1 MB | `addSourceContext()` |
 | Replay request | About 1.8 MB and 10,000 events; the newest 500 error ids per segment | `chunkEvents()`, `buildSegmentBody()` |

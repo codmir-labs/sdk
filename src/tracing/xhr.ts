@@ -85,7 +85,7 @@ export function instrumentXhr(options: InstrumentXhrOptions = {}): () => void {
         if (breadcrumbs) {
           addBreadcrumb({
             category: "xhr",
-            message: `${state.rawMethod} ${state.rawUrl}`,
+            message: `${state.rawMethod} ${state.url?.pathname ?? state.rawUrl} ${this.status > 0 ? this.status : "failed"}`,
             data: { method: state.rawMethod, url: state.rawUrl, status: this.status, duration: Date.now() - state.startTime },
             level: this.status >= 400 ? "error" : "info",
           });

@@ -91,7 +91,7 @@ describe("one event over the cap", () => {
       },
     });
     c.init();
-    crumbs(c, 100, 3000); // about 300 KB
+    crumbs(c, 20, 15000); // about 300 KB
     c.captureMessage("big");
     expect(await c.flush()).toBe(true);
 
@@ -99,9 +99,9 @@ describe("one event over the cap", () => {
     expect(bytesOf(bodies[0])).toBeLessThanOrEqual(MAX_BATCH_BYTES);
     const [sent] = JSON.parse(bodies[0]).events;
     expect(sent.breadcrumbs.length).toBeGreaterThan(0);
-    expect(sent.breadcrumbs.length).toBeLessThan(100);
-    expect(sent.breadcrumbs.at(-1).message.startsWith("99:")).toBe(true);
-    expect(held[0].breadcrumbs).toHaveLength(100);
+    expect(sent.breadcrumbs.length).toBeLessThan(20);
+    expect(sent.breadcrumbs.at(-1).message.startsWith("19:")).toBe(true);
+    expect(held[0].breadcrumbs).toHaveLength(20);
     expect(onDropped).not.toHaveBeenCalled();
   });
 

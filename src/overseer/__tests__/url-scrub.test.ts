@@ -65,7 +65,7 @@ describe("fetch breadcrumbs", () => {
     stub(async () => new Response("{}", { status: 200 }));
     await fetch(`https://api.example.com/v1/users${Q}${F}`);
     expectScrubbed(capture(), "https://api.example.com/v1/users");
-    expect(events[0]!.breadcrumbs!.at(-1)).toMatchObject({ category: "fetch", message: "GET https://api.example.com/v1/users", data: { url: "https://api.example.com/v1/users" } });
+    expect(events[0]!.breadcrumbs!.at(-1)).toMatchObject({ category: "fetch", message: "GET /v1/users 200", data: { url: "https://api.example.com/v1/users" } });
   });
 
   it("a failed fetch: the same", async () => {
@@ -96,7 +96,7 @@ describe("xhr breadcrumbs", () => {
     xhr.send();
     await new Promise((r) => setTimeout(r, 5));
     expectScrubbed(capture(), "https://api.example.com/v1/items");
-    expect(events[0]!.breadcrumbs!.at(-1)).toMatchObject({ category: "xhr", message: "GET https://api.example.com/v1/items" });
+    expect(events[0]!.breadcrumbs!.at(-1)).toMatchObject({ category: "xhr", message: "GET /v1/items failed" });
   });
 });
 

@@ -71,7 +71,7 @@ export function instrumentFetch(options: InstrumentFetchOptions = {}): () => voi
       if (breadcrumbs) {
         addBreadcrumb({
           category: "fetch",
-          message: `${method} ${rawUrl}`,
+          message: `${method} ${url.pathname} ${response.status}`,
           data: { method, url: rawUrl, status: response.status, duration: Date.now() - started },
           level: response.ok ? "info" : "error",
         });
@@ -82,7 +82,7 @@ export function instrumentFetch(options: InstrumentFetchOptions = {}): () => voi
       if (breadcrumbs) {
         addBreadcrumb({
           category: "fetch",
-          message: `${method} ${rawUrl}`,
+          message: `${method} ${url.pathname} failed`,
           data: {
             method,
             url: rawUrl,
