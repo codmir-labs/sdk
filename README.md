@@ -209,9 +209,12 @@ server reads the host, each value trimmed and the first non-empty one winning:
   (Heroku), `CF_PAGES_COMMIT_SHA`, `COMMIT_REF` (Netlify), `GITHUB_SHA`; else `unknown`;
 - environment: `CODMIR_ENVIRONMENT`, `VERCEL_ENV`, `NODE_ENV`; else `development`.
 
-Nothing is read where there is no `process` (browsers, workers, React Native). In `@codmir/sdk/nextjs` a browser build
-also reads `NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA` and `NEXT_PUBLIC_VERCEL_ENV`, which Vercel exposes to client bundles when
-system environment variables are exposed. Any other browser bundle passes the value from a build-time variable:
+Each variable is read on its own, so where there is no `process` (browsers, workers, React Native) a variable the bundler
+did not inline is skipped and the others are still read. Vite and webpack production builds inline `process.env.NODE_ENV`
+in every module, so a browser bundle gets `NODE_ENV` as its environment. The release is never inlined that way: outside
+Next.js on Vercel, pass it from your own build variable. In `@codmir/sdk/nextjs` a browser build also reads
+`NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA` and `NEXT_PUBLIC_VERCEL_ENV`, which Vercel exposes to client bundles when system
+environment variables are exposed. Any other browser bundle passes the value from a build-time variable:
 
 ```ts
 // Vite
