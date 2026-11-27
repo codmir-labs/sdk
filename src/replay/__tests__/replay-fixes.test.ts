@@ -223,3 +223,32 @@ describe("an error that beforeSend drops", () => {
     browser.close();
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe("an error history split into chunks", () => {
+  it("puts the error id on the last chunk, which ends at the error", async () => {
+    useFakeClock();
+    // ~1.1 MB of DOM: two generations (prev + cur) of the on-error buffer exceed one 1.8 MB request.
+    document.body.innerHTML = `<main>${Array.from({ length: 5_500 }, (_, i) => `<p>row ${i} ${"lorem ipsum dolor sit amet ".repeat(3)}</p>`).join("")}</main>`;
+    const { overseer, replay } = await load({ replaysOnErrorSampleRate: 1 });
+    replay.startReplay();
+    await settle();
+    await vi.advanceTimersByTimeAsync(35_000);
+    click(); // past 30 s: rrweb takes a checkout (a second full snapshot)
+    await vi.advanceTimersByTimeAsync(20_000);
+    click();
+    const errAt = Date.now();
+    const errId = overseer.captureException(new Error("boom"));
+    await vi.advanceTimersByTimeAsync(0);
+    const segs = replayCalls().map((c) => ({
+      seg: c.body.segment,
+      ids: c.body.error_event_ids as string[],
+      secondsBeforeError: (errAt - Date.parse(c.body.ended_at)) / 1000,
+    }));
+    expect(segs.length).toBeGreaterThan(1);
+    const last = segs[segs.length - 1];
+    expect(last.ids).toEqual([errId]);
+    expect(last.secondsBeforeError).toBeLessThan(1);
+    for (const earlier of segs.slice(0, -1)) expect(earlier.ids).toEqual([]);
+  });
+});

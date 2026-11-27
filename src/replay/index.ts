@@ -508,7 +508,8 @@ export class ReplayRecorder {
         startTime: chunk[0].timestamp,
         endTime: chunk[chunk.length - 1].timestamp,
         events: chunk,
-        errorIds: index === 0 ? errorIds : [],
+        // The player seeks to the end of the earliest segment that lists the error, so the last chunk is the one that ends at it.
+        errorIds: index === chunks.length - 1 ? errorIds : [],
       };
       this.session?.segments.push({ ...segment, events: [] });
       try {

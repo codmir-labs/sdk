@@ -1077,6 +1077,8 @@ when `upload.debug` is on), and the rest of its list still applies.
 - Each upload is one `POST <dsn>/replay` with `x-overseer-key`, cut to stay under about 1.8 MB and 10,000 events; a
   network error, 5xx, 408 or 429 is retried once. When the page hides, a small enough segment goes out with
   `keepalive`.
+- An error history over that size is sent as several segments in order; the error's id rides on the last one, which
+  ends at the error, so the player lands on the error and not on the end of an earlier chunk.
 - If the server answers that it stored nothing (`202` with `stored: false`), the recorder stops uploading for the
   rest of the session.
 - `createReplayRecorder(config)` gives you a `ReplayRecorder` without the client wiring: with no `upload` target it
