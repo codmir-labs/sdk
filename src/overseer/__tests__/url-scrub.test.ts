@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureException, close, flush, init, type OverseerEvent } from "../index";
 import { MAX_URL_LENGTH, scrubUrl, scrubUrlsIn } from "../url-scrub";
 import { instrumentFetch, instrumentXhr } from "../../tracing/index";
+import { scrubRequestUrl } from "../../tracing/url-match";
 import { startBrowserTracing } from "../../tracing/browser";
 import { sentTransactions, type FetchCall } from "../../tracing/__tests__/helpers";
 
@@ -200,5 +201,49 @@ describe("browser transactions", () => {
     expect(body).toContain("/start");
     expect(body).not.toContain("SECRET");
     expect(body).not.toContain("access_token");
+  });
+});
+
+describe("linear time on a hostile input", () => {
+  const N = 200_000;
+  const time = (fn: () => unknown): number => {
+    const t0 = performance.now();
+    fn();
+    return performance.now() - t0;
+  };
+
+  it("free text with a URL whose path is punctuation then a letter is scrubbed in under 1 s and keeps no query", () => {
+    let result = "";
+    const ms = time(() => { result = scrubUrlsIn(`see https://example.com/${".".repeat(N)}a?token=SECRET_Q for details`); });
+    expect(ms).toBeLessThan(1000);
+    expect(result).not.toContain("SECRET_Q");
+    expect(result).not.toContain("?");
+  });
+
+  it("a trailing run of punctuation still stays outside the URL", () => {
+    expect(scrubUrlsIn("go to https://a.example.com/x?q=1).")).toBe("go to https://a.example.com/x).");
+  });
+
+  it("a scheme-like run with no colon (SCHEME)", () => {
+    expect(time(() => scrubUrl("a".repeat(N)))).toBeLessThan(1000);
+    expect(time(() => scrubUrl("a.+-".repeat(N / 4)))).toBeLessThan(1000);
+  });
+
+  it("a long authority with no @ or with the cut's fallback (userinfo cut)", () => {
+    expect(time(() => scrubUrl(`//${"a".repeat(N)}`))).toBeLessThan(1000);
+    expect(time(() => scrubUrl(`http://${"a".repeat(N)} b?q=1`))).toBeLessThan(1000);
+    expect(time(() => scrubUrl(`//${"u:".repeat(N / 2)}`))).toBeLessThan(1000);
+  });
+
+  it("a long run of // characters, and many short ones (the // run finder)", () => {
+    expect(time(() => scrubUrlsIn("/".repeat(N)))).toBeLessThan(1000);
+    expect(time(() => scrubUrlsIn(`${"a".repeat(N)}://x`))).toBeLessThan(1000);
+    expect(time(() => scrubUrlsIn("// ".repeat(N / 3)))).toBeLessThan(1000);
+    expect(time(() => scrubUrlsIn(`${"a:".repeat(N / 2)}//x`))).toBeLessThan(1000);
+  });
+
+  it("long whitespace before no slashes (the protocol-relative test)", () => {
+    expect(time(() => scrubRequestUrl(`${" ".repeat(N)}x`))).toBeLessThan(1000);
+    expect(time(() => scrubRequestUrl(`${" ".repeat(N)}/x`))).toBeLessThan(1000);
   });
 });

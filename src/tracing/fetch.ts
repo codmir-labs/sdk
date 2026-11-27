@@ -1,8 +1,7 @@
 import { addBreadcrumb, getClient } from "../overseer/index";
 import { isLive, type Installed } from "../overseer/lifecycle";
-import { scrubUrlsIn } from "../overseer/url-scrub";
 import { getActiveSpan } from "./context";
-import { isSdkRequest, requestPath, resolveUrl, scrubRequestUrl, shouldPropagate } from "./url-match";
+import { isSdkRequest, requestPath, resolveUrl, scrubErrorText, scrubRequestUrl, shouldPropagate, spanUrl } from "./url-match";
 
 export { resolveUrl, shouldPropagate };
 
@@ -47,7 +46,7 @@ export function instrumentFetch(options: InstrumentFetchOptions = {}): () => voi
 
     const parent = getActiveSpan();
     const span = parent?.startChild({ op: "http.client", name: `${method} ${path}` }) ?? null;
-    span?.setData("url", rawUrl);
+    span?.setData("url", spanUrl(url, rawUrl));
     span?.setData("http.request.method", method);
 
     let nextInit = init;
@@ -82,7 +81,7 @@ export function instrumentFetch(options: InstrumentFetchOptions = {}): () => voi
           data: {
             method,
             url: rawUrl,
-            error: error instanceof Error ? scrubUrlsIn(error.message) : "Network error",
+            error: error instanceof Error ? scrubErrorText(error.message, fullUrl) : "Network error",
             duration: Date.now() - started,
           },
           level: "error",

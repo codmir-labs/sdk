@@ -9,6 +9,8 @@ export const MAX_URL_LENGTH = 1024;
 
 const SCHEME = /^([A-Za-z][A-Za-z0-9+.-]*):/;
 
+const TRAILING = ".,;:!)]}";
+
 const clip = (s: string): string => (s.length > MAX_URL_LENGTH ? s.slice(0, MAX_URL_LENGTH) : s);
 
 /** The text up to the first `?` or `#`, without a `userinfo@` after a leading `//` (or `scheme://`). */
@@ -76,8 +78,10 @@ export function scrubUrlsIn(text: string): string {
       if (i < start - 1) start = i;
     }
     const url = text.slice(start, m.index + m[0].length);
-    const tail = /[.,;:!)\]}]*$/.exec(url)![0];
-    out += text.slice(last, start) + scrubUrl(url.slice(0, url.length - tail.length)) + tail;
+    // Trailing punctuation belongs to the sentence, not the URL; a backward loop, since a regex here backtracks quadratically.
+    let end = url.length;
+    while (end > 0 && TRAILING.includes(url[end - 1]!)) end--;
+    out += text.slice(last, start) + scrubUrl(url.slice(0, end)) + url.slice(end);
     last = m.index + m[0].length;
   }
   return out + text.slice(last);

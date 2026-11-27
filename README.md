@@ -1625,7 +1625,7 @@ that undoes them. Cloud mode is off unless you pass `cloud`.
   not ride along with your errors, and neither does a `user:password@` (a protocol-relative or padded URL included). A `data:` URL
   is its media type and payload size (`data:image/png;base64,[80000 bytes]`), `blob:` keeps the scrubbed URL inside it, `about:`
   its path, any other scheme without `//` (`javascript:`, `mailto:`) only the scheme, and no URL is longer than 1,024
-  characters; a URL in a failed `fetch`'s error text is cut the same way. Session replay's meta events carry the page's address as origin and path too, and
+  characters; a URL in a failed `fetch`'s error text is cut the same way, and so is the request's own URL as your app wrote it, even a relative one (`/x?t=1` becomes `/x`). Session replay's meta events carry the page's address as origin and path too, and
   so does a recorded link or source that points at the page itself, such as `href="#top"`, which keeps its own
   fragment, and a `url(...)` in CSS that rrweb resolved against it. The rest of the recorded page is content (its
   text, other links, CSS with its own addresses), so still keep tokens out of the URLs of pages you record.

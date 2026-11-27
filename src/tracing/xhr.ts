@@ -1,7 +1,7 @@
 import { addBreadcrumb, getClient } from "../overseer/index";
 import { isLive, type Installed } from "../overseer/lifecycle";
 import { getActiveSpan } from "./context";
-import { requestPath, scrubRequestUrl } from "./url-match";
+import { requestPath, scrubRequestUrl, spanUrl } from "./url-match";
 import { isOwnRequest, resolveUrl, shouldPropagate } from "./fetch";
 import type { Span } from "./span";
 
@@ -68,7 +68,7 @@ export function instrumentXhr(options: InstrumentXhrOptions = {}): () => void {
     let span: Span | null = null;
     if (state.url && !own) {
       span = getActiveSpan()?.startChild({ op: "http.client", name: `${state.method} ${requestPath(state.url, state.rawUrl)}` }) ?? null;
-      span?.setData("url", state.rawUrl);
+      span?.setData("url", spanUrl(state.url, state.rawUrl));
       span?.setData("http.request.method", state.method);
       if (span && !state.hasTraceparent && shouldPropagate(state.url, getClient()?.getTracePropagationTargets() ?? [])) {
         originalSetRequestHeader.call(this, "traceparent", span.toTraceparent());
