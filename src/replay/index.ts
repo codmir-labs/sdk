@@ -37,6 +37,7 @@ import { ComposedPrivacyFilter } from "./composed-privacy";
 import { dropPageQuery } from "./page-query";
 import {
   resolvePrivacy,
+  unknownDefaultDrops,
   toRrwebPrivacy,
   type ReplayPrivacyConfig,
 } from "./privacy";
@@ -517,6 +518,11 @@ export class ReplayRecorder {
         if (!this.config.upload?.debug) return;
         console.log(`[Overseer replay] privacy.${list}: skipped invalid selector ${JSON.stringify(selector)}`);
       });
+      if (this.config.upload?.debug) {
+        for (const entry of unknownDefaultDrops(this.config.privacy)) {
+          console.log(`[Overseer replay] privacy.dropDefaultSelectors: ignored ${JSON.stringify(entry)}, it names no default selector`);
+        }
+      }
       const choices = new ChoiceFilter(hiddenChoices(this.config.privacy));
       const composed = new ComposedPrivacyFilter({
         maskSelector: rrwebPrivacy.maskTextSelector,

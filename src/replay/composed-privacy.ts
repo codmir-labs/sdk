@@ -12,9 +12,14 @@
  *   tested on its composed ancestors: from a ShadowRoot on at its `host`, from a Document on at its `defaultView.frameElement`.
  *   Under a block the add or the text is dropped; under a mask the text becomes `*` for every character but a space,
  *   as rrweb masks it in a snapshot (the text of a `<style>` or `<script>` is not text and stays);
+ * - under a mask, in a full snapshot, an add and an attribute change, the attributes that hold what a person wrote or
+ *   picked are covered: `title`, `alt`, `aria-label`, `aria-description`, `placeholder` and the `value` of a button are
+ *   masked like text, an `href` of `mailto:` or `tel:` is cut to its scheme, and a `data:` URL in `src`, `srcset`,
+ *   `poster`, `href` or `xlink:href` becomes one fixed placeholder. Every other attribute stays as it is;
  * - each `attributes` entry of a mutation under a block is dropped, and so is any other incremental event (input, mouse
  *   interaction, scroll, media) whose `data.id` is under a block, as the recorder drops them itself for a light-DOM
- *   block. Under a mask, attributes and input values stay as the recorder sends them, its own light-DOM rule.
+ *   block. Under a mask, input values stay as the recorder sends them, its own light-DOM rule, and attributes follow
+ *   the rule above.
  *
  * - any other incremental event whose numeric `data.id` is negative, or names a node the mirror does not know, is dropped:
  *   the recorder sends id -1 for a node it never serialized (an input in a blocked shadow root at the first snapshot), and
@@ -40,6 +45,37 @@ const FRAGMENT_NODE = 11;
 /** rrweb's serialized node types. */
 const SERIALIZED_ELEMENT = 2;
 const SERIALIZED_TEXT = 3;
+
+/** What a `data:` URL under a mask becomes: a 1x1 transparent GIF, none of the original. */
+export const DATA_URL_PLACEHOLDER = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
+const MASKED_ATTRIBUTES = new Set(["title", "alt", "aria-label", "aria-description", "placeholder"]);
+const DATA_URL_ATTRIBUTES = new Set(["src", "srcset", "poster", "href", "xlink:href"]);
+const BUTTON_INPUT_TYPES = new Set(["button", "submit", "reset"]);
+
+/** A URL as a browser reads its start: without leading spaces and control characters. */
+function urlStart(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/^[\u0000-\u0020]+/, "");
+}
+
+/**
+ * `attributes` of an element as they may be kept under a mask: the same object when nothing changes. `type` is the
+ * element's input type, which a change of another attribute does not carry.
+ */
+function coverAttributes(tag: string, type: string | undefined, attributes: Record<string, unknown>): Record<string, unknown> {
+  let result: Record<string, unknown> | undefined;
+  const button = tag === "button" || (tag === "input" && BUTTON_INPUT_TYPES.has((type ?? "").trim().toLowerCase()));
+  for (const [name, value] of Object.entries(attributes)) {
+    if (typeof value !== "string" || value === "") continue;
+    let next = value;
+    if (MASKED_ATTRIBUTES.has(name) || (name === "value" && button)) next = mask(value);
+    else if (name === "href" && /^(mailto|tel):/i.test(urlStart(value))) next = urlStart(value).slice(0, urlStart(value).indexOf(":") + 1).toLowerCase();
+    else if (DATA_URL_ATTRIBUTES.has(name) && (name === "srcset" ? /(^|[\s,])data:/i.test(value) : /^data:/i.test(urlStart(value)))) next = DATA_URL_PLACEHOLDER;
+    if (next !== value) (result ??= { ...attributes })[name] = next;
+  }
+  return result ?? attributes;
+}
 
 /** How many ids of blocked subtrees the filter keeps; the oldest go first. The live mirror is the check that does not forget. */
 export const BLOCKED_ID_LIMIT = 50_000;
@@ -129,7 +165,7 @@ export class ComposedPrivacyFilter {
         this.blocked = new Set();
         const root = (event.data as { node?: SerializedNode } | undefined)?.node;
         this.learn(root);
-        const clean = root && this.blankMetas(root);
+        const clean = root && this.coverMasked(this.blankMetas(root));
         return clean && clean !== root ? { ...event, data: { ...(event.data as object), node: clean } } : event;
       }
       const data = event.data as MutationData | undefined;
@@ -184,7 +220,7 @@ export class ComposedPrivacyFilter {
     let attributes = data.attributes;
     if (attributes?.length) {
       let kept = attributes.filter((entry) => this.scopeOf(entry.id) !== "blocked");
-      const blanked = kept.map((entry) => this.blankAttributes(entry));
+      const blanked = kept.map((entry) => this.coverChange(this.blankAttributes(entry)));
       if (blanked.some((entry, i) => entry !== kept[i])) kept = blanked;
       if (kept.length !== attributes.length || kept.some((entry, i) => entry !== attributes![i])) {
         changed = true;
@@ -218,9 +254,10 @@ export class ComposedPrivacyFilter {
     }
     if (this.isPlaceholder(node)) this.remember(node.id);
     let result = blankMeta(node);
+    if (here === "masked") result = this.coverNode(result);
     if (node.type === SERIALIZED_TEXT && here === "masked" && node.textContent && !this.isStyleOrScript(node, parent)) {
       const textContent = mask(node.textContent);
-      if (textContent !== node.textContent) result = { ...node, textContent };
+      if (textContent !== node.textContent) result = { ...result, textContent };
     }
     if (node.childNodes?.length) {
       const children: SerializedNode[] = [];
@@ -231,6 +268,32 @@ export class ComposedPrivacyFilter {
         if (next) children.push(next);
       }
       if (childrenChanged) result = { ...result, childNodes: children };
+    }
+    return result;
+  }
+
+  /** `node` with its attributes covered when it is an element. */
+  private coverNode(node: SerializedNode): SerializedNode {
+    if (node.type !== SERIALIZED_ELEMENT || !node.attributes) return node;
+    const tag = (node as { tagName?: string }).tagName?.toLowerCase() ?? "";
+    const attributes = coverAttributes(tag, node.attributes.type as string | undefined, node.attributes);
+    return attributes === node.attributes ? node : { ...node, attributes };
+  }
+
+  /** A full snapshot with the attributes of every element under a mask covered: the same object when there are none. */
+  private coverMasked(node: SerializedNode): SerializedNode {
+    let result = node;
+    if (node.id !== undefined && node.type === SERIALIZED_ELEMENT && this.scopeOf(node.id) === "masked") result = this.coverNode(node);
+    if (node.childNodes?.length) {
+      let children: SerializedNode[] | undefined;
+      node.childNodes.forEach((child, i) => {
+        const next = this.coverMasked(child);
+        if (next !== child) {
+          children ??= node.childNodes!.slice();
+          children[i] = next;
+        }
+      });
+      if (children) result = { ...result, childNodes: children };
     }
     return result;
   }
@@ -250,6 +313,20 @@ export class ComposedPrivacyFilter {
       if (children) result = { ...result, childNodes: children };
     }
     return result;
+  }
+
+  /** An attribute change of a live element under a mask, covered: the same entry when it is not under one. */
+  private coverChange(entry: { id: number; attributes?: Record<string, unknown> }): typeof entry {
+    try {
+      if (!entry.attributes || this.scopeOf(entry.id) !== "masked") return entry;
+      const live = this.options.getNode(entry.id) as Element | null;
+      if (!live || live.nodeType !== ELEMENT_NODE) return entry;
+      const type = live.getAttribute("type") ?? undefined;
+      const attributes = coverAttributes(live.nodeName.toLowerCase(), type, entry.attributes);
+      return attributes === entry.attributes ? entry : { ...entry, attributes };
+    } catch {
+      return entry;
+    }
   }
 
   /**
