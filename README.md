@@ -274,7 +274,7 @@ means you wrap a handler. **manual** means you call the API. **opt-in** means yo
 
 ### Where the SDK says it runs
 
-Every error event carries `contexts.runtime`, found in this order:
+An error event says where it ran. The SDK checks in this order and uses the first match:
 
 | `runtime.name` | Where | `runtime.version` | Other contexts |
 | --- | --- | --- | --- |
@@ -1799,7 +1799,7 @@ Leave it off unless you serve that manifest.
 | `dsn` | `https://www.codmir.com/api/v1/overseer` once a key is set | Where events go: errors to `<dsn>/ingest`, replay to `<dsn>/replay`. A DSN ending in `/ingest` is used as it is |
 | `environment` | the first set of `CODMIR_ENVIRONMENT`, `VERCEL_ENV`, `NODE_ENV`, else `'development'` | On every event and request (the request field is cut to 32 characters) |
 | `release` | the first set of `CODMIR_RELEASE`, `VERCEL_GIT_COMMIT_SHA`, `RAILWAY_GIT_COMMIT_SHA`, `RENDER_GIT_COMMIT`, `SOURCE_VERSION`, `CF_PAGES_COMMIT_SHA`, `COMMIT_REF`, `GITHUB_SHA`, else `'unknown'` | Your release version (request field cut to 64 characters) |
-| `dist` | none | The distribution of the release, such as a build number. Bundled apps (React Native, for one) use it to tell builds apart and to match source maps. Sent with every event as `dist` beside `release`; cut to 64 characters |
+| `dist` | none | The distribution of the release, such as a build number. Bundled apps (React Native, for one) use it to tell builds apart and to match source maps. Sent on error and message events as `dist` beside `release`, not on transactions; cut to 64 characters |
 | `service` | none | Service name on each request (cut to 64 characters) |
 | `enabled` | `true` | `false` makes every capture a no-op that returns `''` |
 | `debug` | `false` | Logs `[Overseer]` lines: init, failed sends, retries, events the server dropped |
