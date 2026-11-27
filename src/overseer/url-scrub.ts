@@ -1,7 +1,8 @@
 /**
  * A URL as an event field keeps its origin and path and nothing after them. A query string or fragment can hold
  * `access_token=`, a reset code or an OAuth `#access_token=`, and a breadcrumb or transaction would carry it with every error.
- * Browser-safe: no Node import. Same rule as the request scope's `requestScopeFrom`.
+ * The one exception is a route fragment (`#/settings`, `#!/users/42`): a hash router keeps its page there, so it stays, cut
+ * at its own `?`. Every other fragment goes. Browser-safe: no Node import. Same rule as the request scope's `requestScopeFrom`.
  */
 
 /** The longest string `scrubUrl` returns; a longer result is cut here. */
@@ -13,6 +14,22 @@ const TRAILING = ".,;:!)]}";
 
 const clip = (s: string): string => (s.length > MAX_URL_LENGTH ? s.slice(0, MAX_URL_LENGTH) : s);
 
+/**
+ * The route a fragment holds: `#/a/b` or `#!/a/b` without its own query (or a second `#`), else "". Anything else
+ * (`#access_token=…`, `#id_token=…`, `#section-2`) is not a route and is dropped. Path segments are kept as they are, as in a path.
+ */
+export function routeFragment(hash: string): string {
+  if (!/^#!?\//.test(hash)) return "";
+  const end = hash.slice(1).search(/[?#]/);
+  return end < 0 ? hash : hash.slice(0, end + 1);
+}
+
+/** The text from the first `#` on, or "". */
+const fragmentOf = (s: string): string => {
+  const i = s.indexOf("#");
+  return i < 0 ? "" : s.slice(i);
+};
+
 /** The text up to the first `?` or `#`, without a `userinfo@` after a leading `//` (or `scheme://`). */
 function cut(s: string): string {
   const head = s.split(/[?#]/)[0] ?? "";
@@ -20,7 +37,7 @@ function cut(s: string): string {
 }
 
 /**
- * What a URL is: origin and path of a hierarchical one (credentials, query and fragment dropped), a relative URL keeps
+ * What a URL is: origin and path of a hierarchical one (credentials and query dropped; a fragment dropped unless it is a route, see `routeFragment`), a relative URL keeps
  * its path. A `data:` URL keeps its media type and the size of its payload, `blob:` the scrubbed URL inside it, `about:`
  * its path, and any other scheme without `//` (`javascript:`, `mailto:`) only the scheme, since the rest can be code or an address.
  * With `base` (the page's own address) a relative or protocol-relative URL is resolved first, so `?page=2` or `../x` still
@@ -44,9 +61,9 @@ export function scrubUrl(raw: unknown, base?: string): string {
   if (!rest.startsWith("//")) return `${name}:`;
   try {
     const u = new URL(text);
-    return clip(`${u.origin === "null" ? `${u.protocol}//` : u.origin}${u.pathname}`);
+    return clip(`${u.origin === "null" ? `${u.protocol}//` : u.origin}${u.pathname}${routeFragment(u.hash)}`);
   } catch {
-    return clip(cut(text));
+    return clip(cut(text) + routeFragment(fragmentOf(text)));
   }
 }
 
@@ -54,12 +71,12 @@ function relative(text: string, base: string | undefined): string {
   if (base) {
     try {
       const u = new URL(text, base);
-      return `${u.origin === "null" ? `${u.protocol}//` : u.origin}${u.pathname}`;
+      return `${u.origin === "null" ? `${u.protocol}//` : u.origin}${u.pathname}${routeFragment(u.hash)}`;
     } catch {
       // fall through to the cut
     }
   }
-  return cut(text);
+  return cut(text) + routeFragment(fragmentOf(text));
 }
 
 /**

@@ -128,6 +128,23 @@ describe("navigation transactions", () => {
     ]);
   });
 
+  it("starts a navigation when only the route fragment changes, and none for a fragment that is no route", async () => {
+    start(1);
+    window.history.pushState(null, "", "/start#access_token=hashsecret");
+    window.history.pushState(null, "", "/start#section-2");
+    expect(getActiveSpan()?.op).toBe("pageload");
+    window.history.pushState(null, "", "/start#/settings");
+    expect(getActiveSpan()?.op).toBe("navigation");
+    window.history.pushState(null, "", "/start#/billing");
+    window.location.hash = "#/team";
+    await vi.advanceTimersByTimeAsync(2000);
+    await flush();
+    const txs = await sent();
+    expect(txs.filter((t) => t.op === "pageload")).toHaveLength(1);
+    expect(txs.filter((t) => t.op === "navigation")).toHaveLength(3);
+    expect(JSON.stringify(calls.map((c) => c.init?.body))).not.toContain("hashsecret");
+  });
+
   it("starts a navigation on popstate", async () => {
     start(1);
     window.history.pushState(null, "", "/a");

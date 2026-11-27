@@ -4,6 +4,8 @@
  * Nothing here reads headers, cookies, a body or a query string.
  */
 
+import { routeFragment } from "./url-scrub";
+
 export interface ContextEntry {
   name?: string;
   version?: string;
@@ -138,10 +140,10 @@ export function resetEnvContexts(): void {
   cached = undefined;
 }
 
-/** The page's origin and path in a browser: no query, no hash, no credentials. Node has no request in scope here, so none. */
+/** The page's origin and path in a browser, plus a route fragment (`#/settings`): no query, no other hash, no credentials. Node has no request in scope here, so none. */
 export function browserRequest(): { url: string } | undefined {
   if (typeof window === "undefined" || !window.location) return undefined;
-  const { protocol, host, pathname } = window.location;
+  const { protocol, host, pathname, hash } = window.location;
   if (!protocol) return undefined;
-  return { url: `${protocol}//${host}${pathname}` };
+  return { url: `${protocol}//${host}${pathname}${routeFragment(hash ?? "")}` };
 }
