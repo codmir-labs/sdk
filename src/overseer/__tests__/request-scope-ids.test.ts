@@ -41,34 +41,26 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-class Barrier {
-  private arrived = 0;
-  private release!: () => void;
-  private readonly open = new Promise<void>((resolve) => (this.release = resolve));
-  constructor(private readonly n: number) {}
-  wait(): Promise<void> {
-    if (++this.arrived === this.n) this.release();
-    return this.open;
-  }
-}
-
 const serve = <T>(name: string, fn: () => Promise<T>): Promise<T> =>
   traceServerRequest({ method: "GET", route: `/t/${name}`, url: `https://app.test/t/${name}` }, fn);
 
 describe("conversation and session ids on a server", () => {
   it("two overlapping requests each carry their own ids", async () => {
-    const setA = new Barrier(1);
-    const setB = new Barrier(1);
+    let aHasSet!: () => void;
+    let bHasSet!: () => void;
+    const aSet = new Promise<void>((resolve) => (aHasSet = resolve));
+    const bSet = new Promise<void>((resolve) => (bHasSet = resolve));
     const request = async (id: "a" | "b"): Promise<void> => {
-      if (id === "b") await setA.wait();
+      // B sets its ids after A has set its own and before A captures.
+      if (id === "b") await aSet;
       overseer.setConversationId(`conv-${id}`);
       overseer.setSessionId(`sess-${id}`);
       if (id === "a") {
-        setA.wait();
-        // B sets its ids after A and before A captures.
-        await setB.wait();
+        aHasSet();
+        await bSet;
       } else {
-        setB.wait();
+        bHasSet();
+        await Promise.resolve();
       }
       expect(overseer.getConversationId()).toBe(`conv-${id}`);
       expect(overseer.getSessionId()).toBe(`sess-${id}`);
