@@ -113,8 +113,18 @@ export function init(config: NextjsConfig = {}): void {
     ...coreConfig
   } = config;
 
+  // Vercel exposes these two to client bundles when system environment variables are exposed. They are read as
+  // literals so the bundler inlines them; an explicit value, and on a server the plain variables, win.
+  const inBrowser = typeof window !== "undefined" && typeof process !== "undefined" && !!process.env;
+  const release = coreConfig.release || (inBrowser ? process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA : "");
+  const environment = coreConfig.environment || (inBrowser ? process.env.NEXT_PUBLIC_VERCEL_ENV : "");
+
   // Initialize core
-  coreInit(coreConfig);
+  coreInit({
+    ...coreConfig,
+    ...(release?.trim() ? { release: release.trim() } : {}),
+    ...(environment?.trim() ? { environment: environment.trim() } : {}),
+  });
   isInitialized = true;
 
   // Browser-only setup
