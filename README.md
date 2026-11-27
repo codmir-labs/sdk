@@ -2351,7 +2351,7 @@ only when `cloud` is on.
   and 22.
 - Source lines in Node from an ES module need `process.getBuiltinModule` (Node 20.16 or 22.3 and later); CommonJS
   works on any supported Node.
-- TypeScript 5.0 or later, optional.
+- TypeScript 5.0 or later, optional. Every resolution mode types every entry point: `node16`, `nodenext` and `bundler` through `exports`, and `node10` (the default of `module: commonjs` without `moduleResolution`) through `typesVersions`, which points at the `.d.cts` declarations. `nodenext` or `bundler` is recommended.
 - One optional peer dependency: `hono` 4 or later, for `@codmir/sdk/hono`. `next`, `react` and `react-native` are not peer
   dependencies, because no file of the package loads them, so an app on any version of them installs the SDK. Express and
   Remix are typed structurally and are not dependencies.

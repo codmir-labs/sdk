@@ -6,6 +6,34 @@
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "dist/index.d.ts": [
+        "dist/index.d.cts"
+      ],
+      "client": [
+        "dist/client.d.cts"
+      ],
+      "types": [
+        "dist/types.d.cts"
+      ],
+      "nextjs/server": [
+        "dist/nextjs/server.d.cts"
+      ],
+      "logs/node": [
+        "dist/logs/node.d.cts"
+      ],
+      "logs/parse": [
+        "dist/logs/parse.d.cts"
+      ],
+      "remix/server": [
+        "dist/remix/server.d.cts"
+      ],
+      "*": [
+        "dist/*/index.d.cts"
+      ]
+    }
+  },
   "exports": {
     ".": {
       "import": {
