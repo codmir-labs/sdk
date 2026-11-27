@@ -162,7 +162,8 @@ describe("wire shape (criterion 1)", () => {
     });
     expect(fp[0]).toBe("Error");
     expect(fp[1]).toBe("/app/b.ts:7");
-    expect(fp[2].startsWith("user <ID><N> got <N> zzz")).toBe(true);
+    // deadbeef12 is one run of 10 hex characters, so it masks to <ID> before digits are masked.
+    expect(fp[2].startsWith("user <ID> got <N> zzz")).toBe(true);
     expect(fp[2]).toHaveLength(100);
     // 1001 and 2002 differ only in digits: same group.
     const a = sdkFingerprint({ ...base, exception: { type: "E", value: "order 1001 not found" } });

@@ -48,8 +48,8 @@ export interface WireSourceEvent {
 
 /**
  * Group fingerprint, identical to `sdkFingerprint` in the platform:
- * error name, `file:line` of the first in-app frame, then the message with digits masked to `<N>` and runs of
- * 8+ hex characters masked to `<ID>`, cut to 100 characters.
+ * error name, `file:line` of the first in-app frame, then the message with UUIDs masked to `<UUID>`, runs of
+ * 8+ hex characters masked to `<ID>` and digits masked to `<N>` (in that order), cut to 100 characters.
  */
 export function sdkFingerprint(event: WireSourceEvent): string[] {
   const exception = event.exception;
@@ -61,8 +61,9 @@ export function sdkFingerprint(event: WireSourceEvent): string[] {
   const message = exception?.value ?? event.message ?? "";
   parts.push(
     message
-      .replace(/\d+/g, "<N>")
+      .replace(/\b[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b/gi, "<UUID>")
       .replace(/[a-f0-9]{8,}/gi, "<ID>")
+      .replace(/\d+/g, "<N>")
       .slice(0, 100),
   );
   return parts;
