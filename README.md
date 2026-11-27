@@ -510,6 +510,16 @@ export function register() {
 export const onRequestError = Codmir.captureRouterError;
 ```
 
+Next.js bundles the SDK once for `instrumentation.ts` and again for each route, and only the copy that ran `init` has a
+client of its own. The copies share it, so `captureException`, `setUser`, `withCodmirTracing` and the rest work from any
+route handler, and a request's user, tags and active span are seen by every copy. To keep a single copy anyway, add
+`serverExternalPackages` to `next.config.js`; it is optional:
+
+```js
+// next.config.js
+module.exports = { serverExternalPackages: ['@codmir/sdk'] };
+```
+
 Each server error carries `request.url` (origin from `Host` and `X-Forwarded-Proto`, path without its query),
 `request.method`, and the route as `routerKind`, `routePath`, `routeType` and `route`. No header is sent.
 
