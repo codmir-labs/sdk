@@ -6,6 +6,8 @@
  * so every error is converted here before it leaves the process. Other event types are sent as they are.
  */
 
+import { normalizeFrameFile } from "./frame-file";
+
 /** Public ingest base. Never derived from `window.location`: that is the customer's own origin. */
 /**
  * The address that answers itself. The apex answers every request with a redirect to `www`, and a browser refuses a
@@ -37,7 +39,9 @@ const MAX_RELEASE = 64;
 
 interface FrameLike {
   filename?: string;
+  function?: string;
   lineno?: number;
+  context_line?: string;
   in_app?: boolean;
 }
 
@@ -76,8 +80,8 @@ function culpritFrame(exception: WireSourceEvent["exception"]): FrameLike | unde
 }
 
 /**
- * Group fingerprint. Identical to `sdkFingerprint` in the platform for an event without `causes`; the platform's copy
- * adds the causes rule below in its own part.
+ * The grouping key before v2, kept as it was. Identical to the platform's own copy of the fingerprint for an event
+ * without `causes`; that copy adds the causes rule below in its own part.
  *
  * - primary: the top exception when it has an in-app frame; otherwise the first `causes` entry, in walk order, that has
  *   one; otherwise the top exception.
@@ -88,7 +92,7 @@ function culpritFrame(exception: WireSourceEvent["exception"]): FrameLike | unde
  *   `source: "cause"` links from the top. If the top has no `cause`, the type of `causes[0]`.
  * - An event without `causes` gives the first three parts only, as before.
  */
-export function sdkFingerprint(event: WireSourceEvent): string[] {
+export function legacyFingerprint(event: WireSourceEvent): string[] {
   const exception = event.exception;
   const causes = exception?.causes?.length ? exception.causes : undefined;
   const parts: string[] = [exception?.type || "Error"];
@@ -111,6 +115,75 @@ export function sdkFingerprint(event: WireSourceEvent): string[] {
       .replace(/\d+/g, "<N>")
       .slice(0, 100),
   );
+
+  if (causes) {
+    let at = -1;
+    for (let i = 0; i < causes.length; i++) {
+      if (causes[i]!.parent === at && causes[i]!.source === "cause") at = i;
+    }
+    parts.push(causes[Math.max(at, 0)]!.type);
+  }
+  return parts;
+}
+
+const ANONYMOUS = /^(?:|\?|anonymous|\(anonymous\)|<anonymous>|<unknown>|<computed>)$|\.<anonymous>$/;
+const RECEIVERS = /^(?:(?:module\.)?exports|Object|Module|Function|Array|Promise|Generator|AsyncFunction|Proxy|Reflect|globalThis|global|window|self)\./;
+
+/** A function name without what differs between engines and call styles: `async `, `new `, `[as x]`, a generic receiver (`Object.`, `Module.`) and Firefox's `promise callback*`. */
+export function normalizeFunctionName(name: string | undefined): string {
+  let n = (name ?? "").trim().replace(/\s*\[as [^\]]*\]$/, "");
+  for (let prev = ""; prev !== n; ) {
+    prev = n;
+    n = n.replace(/^(?:async|new)\s+/, "").replace(/^promise callback\*/, "").replace(RECEIVERS, "");
+  }
+  return n;
+}
+
+/** One frame of the key: `<normalized file>:<normalized function>`; an anonymous function by its trimmed source line, else its line number. */
+function frameKey(frame: FrameLike): string {
+  const fn = normalizeFunctionName(frame.function);
+  const what = ANONYMOUS.test(fn) ? frame.context_line?.trim().slice(0, 100) || String(frame.lineno ?? "?") : fn;
+  return `${normalizeFrameFile(frame.filename ?? "")}:${what}`;
+}
+
+const KEY_FRAMES = 3;
+
+/**
+ * Group fingerprint, v2: where the error is, not what it says.
+ *
+ * - primary: the top exception when it has an in-app frame; otherwise the first `causes` entry, in walk order, that has
+ *   one; otherwise there is no primary.
+ * - Parts: the top exception's type, then the first 3 in-app frames of primary, each `<file>:<function>`. The file is
+ *   normalized by {@link normalizeFrameFile}; the function loses `async `, `new `, `[as x]`, generic receivers such as
+ *   `Object.` and `Module.`, and Firefox's `promise callback*`; an anonymous function is its trimmed `context_line`
+ *   when source context gives one, else its line number. Fewer than 3 in-app frames means fewer parts.
+ * - No line number and no message is in the key of an error that has a frame, so an edit above the throw, another
+ *   engine's wording or a user's text never starts a new group.
+ * - With no in-app frame the message is the second part, masked as before: UUIDs masked to `<UUID>`, runs of 8+ hex
+ *   characters holding at least one letter a-f masked to `<ID>` and digits masked to `<N>` (in that order), cut to 100.
+ * - Root type: when `causes` is not empty, the last part is the type of the deepest entry reached by following
+ *   `source: "cause"` links from the top. If the top has no `cause`, the type of `causes[0]`.
+ */
+export function sdkFingerprint(event: WireSourceEvent): string[] {
+  const exception = event.exception;
+  const causes = exception?.causes?.length ? exception.causes : undefined;
+  const parts: string[] = [exception?.type || "Error"];
+
+  const inApp = (frames?: FrameLike[]): FrameLike[] => (frames ?? []).filter((f) => f.in_app === true && f.filename);
+  let frames = inApp(exception?.stacktrace);
+  if (!frames.length && causes) frames = inApp(causes.find((c) => inApp(c.stacktrace).length)?.stacktrace);
+
+  if (frames.length) {
+    for (const f of frames.slice(0, KEY_FRAMES)) parts.push(frameKey(f));
+  } else {
+    parts.push(
+      (exception?.value ?? event.message ?? "")
+        .replace(/\b[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b/gi, "<UUID>")
+        .replace(/(?=[0-9a-f]*[a-f])[0-9a-f]{8,}/gi, "<ID>")
+        .replace(/\d+/g, "<N>")
+        .slice(0, 100),
+    );
+  }
 
   if (causes) {
     let at = -1;

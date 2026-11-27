@@ -30,8 +30,8 @@ describe("a frame with no file and line is not an app frame", () => {
     const orders = fingerprintOf(stack("ordersRoute", "gen-all.cjs:3:47"));
     const profile = fingerprintOf(stack("profileRoute", "gen-all.cjs:4:55"));
     expect(orders).not.toEqual(profile);
-    expect(orders[1]).toBe("/srv/app/src/gen-all.cjs:3");
-    expect(profile[1]).toBe("/srv/app/src/gen-all.cjs:4");
+    expect(orders[1]).toBe("/srv/app/src/gen-all.cjs:ordersRoute");
+    expect(profile[1]).toBe("/srv/app/src/gen-all.cjs:profileRoute");
   });
 
   it("index 0 and index 1 are one group, and equal to a plain await of the same call", () => {

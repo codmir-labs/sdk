@@ -110,7 +110,10 @@ describe("repeat cap", () => {
   it("sends 100 of 150 distinct errors in one minute and reports 50", async () => {
     const c = client();
     for (let i = 0; i < 150; i++) {
-      c.captureException(new Error(`kind ${i.toString(36)}-x`.replace(/\d/g, (d) => "abcdefghij"[+d])));
+      // Distinct groups are distinct throw sites: the message is not in the key of an error that has a frame.
+      const site = new Error("poll failed");
+      site.stack = `Error: poll failed\n    at kind${i} (/srv/app/src/poll.js:1:1)`;
+      c.captureException(site);
       await vi.advanceTimersByTimeAsync(300);
     }
     await vi.advanceTimersByTimeAsync(1000);
@@ -161,9 +164,10 @@ describe("repeat cap", () => {
   it("does not make an event dropped by the cap the last error feedback links to", async () => {
     const c = client({ rateLimit: { perGroupPerMinute: 1 } });
     const capture = () => c.captureException(new Error("same"));
-    const first = capture();
-    await vi.advanceTimersByTimeAsync(5000);
-    const second = capture();
+    const ids: string[] = [];
+    // One call line, so both captures are one group.
+    for (const wait of [0, 5000]) (await vi.advanceTimersByTimeAsync(wait), ids.push(capture()));
+    const [first, second] = ids as [string, string];
 
     expect(second).not.toBe(first);
     expect(c.feedbackContext().lastError?.id).toBe(first);

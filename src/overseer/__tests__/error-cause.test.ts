@@ -208,10 +208,15 @@ describe("culprit", () => {
 
 describe("grouping", () => {
   const fp = async (error: unknown) => (await wireOf(error)).fingerprint as string[];
+  /** Runs `make` for each input from one source line, so the errors it makes share their frames (the key holds three). */
+  const each = async <T>(inputs: T[], make: (input: T) => Promise<string[]>): Promise<string[][]> => {
+    const out: string[][] = [];
+    for (const input of inputs) out.push(await make(input));
+    return out;
+  };
 
   it("splits wrappers at one line by the type of their root cause", async () => {
-    const a = await fp(wrap("could not load the cart", new TypeError("boom")));
-    const b = await fp(wrap("could not load the cart", new RangeError("boom")));
+    const [a, b] = await each([TypeError, RangeError], (Root) => fp(wrap("could not load the cart", new Root("boom"))));
     expect(a).not.toEqual(b);
     expect(a.slice(0, -1)).toEqual(b.slice(0, -1));
     expect(a.at(-1)).toBe("TypeError");
@@ -224,8 +229,7 @@ describe("grouping", () => {
   });
 
   it("keeps one group for one root type with different ids in its message", async () => {
-    const a = await fp(wrap("could not load the cart", failA("no row for user 1001")));
-    const b = await fp(wrap("could not load the cart", failA("no row for user 2002")));
+    const [a, b] = await each([1001, 2002], (id) => fp(wrap("could not load the cart", failA(`no row for user ${id}`))));
     expect(a).toEqual(b);
   });
 
@@ -237,8 +241,7 @@ describe("grouping", () => {
         return e;
       }
     };
-    const fromA1 = await anyOf(() => failA("upstream down"));
-    const fromA2 = await anyOf(() => failA("upstream down"));
+    const [fromA1, fromA2] = await Promise.all([1, 2].map(() => anyOf(() => failA("upstream down"))));
     const fromB = await anyOf(() => failB("upstream down"));
     expect(fromA1).toBeInstanceOf(AggregateError);
     const [a1, a2, b] = [await fp(fromA1), await fp(fromA2), await fp(fromB)];
@@ -247,12 +250,12 @@ describe("grouping", () => {
     expect(a1).not.toEqual(b);
   });
 
-  it("is unchanged for an error with no cause", async () => {
+  it("is the type and the in-app frames for an error with no cause", async () => {
     const err = new TypeError("order 1001 not found");
     err.stack = "TypeError: order 1001 not found\n    at handleCheckout (/srv/app/src/checkout.ts:42:13)";
     const wire = await wireOf(err);
-    // What the base computes for this error: type, first in-app file:line, masked message.
-    expect(wire.fingerprint).toEqual(["TypeError", "/srv/app/src/checkout.ts:42", "order <N> not found"]);
-    expect(sdkFingerprint({ id: "x", type: "error", timestamp: "", level: "error", exception: { type: "TypeError", value: "order 1001 not found", stacktrace: [{ filename: "/srv/app/src/checkout.ts", lineno: 42, in_app: true }] } })).toEqual(wire.fingerprint);
+    // Type, then the in-app frame as file and function; no line and no message.
+    expect(wire.fingerprint).toEqual(["TypeError", "/srv/app/src/checkout.ts:handleCheckout"]);
+    expect(sdkFingerprint({ id: "x", type: "error", timestamp: "", level: "error", exception: { type: "TypeError", value: "order 1001 not found", stacktrace: [{ filename: "/srv/app/src/checkout.ts", function: "handleCheckout", lineno: 42, in_app: true }] } })).toEqual(wire.fingerprint);
   });
 });

@@ -32,7 +32,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-/** One line throws every error, so that the place in the fingerprint is the same. */
+/** One line throws every error, and one line captures them, so that the place in the fingerprint is the same. */
 const resetError = (secret: string): Error => new Error(`reset failed: token=${secret}`);
 
 describe("secrets in text do not reach the wire", () => {
@@ -105,8 +105,7 @@ describe("secrets in text do not reach the wire", () => {
 
   it("(f) two errors that differ only by the secret have the same fingerprint", async () => {
     start();
-    captureException(resetError("kqzwvtpn"));
-    captureException(resetError("mrdhgxsl"));
+    for (const secret of ["kqzwvtpn", "mrdhgxsl"]) captureException(resetError(secret));
     await flush();
     const [a, b] = items();
     expect(a.group.fingerprint).toEqual(b.group.fingerprint);
@@ -115,8 +114,7 @@ describe("secrets in text do not reach the wire", () => {
 
   it("(f) the rate limit groups them too", async () => {
     start({ rateLimit: { perGroupPerMinute: 1, perMinute: 100 } });
-    captureException(resetError("kqzwvtpn"));
-    captureException(resetError("mrdhgxsl"));
+    for (const secret of ["kqzwvtpn", "mrdhgxsl"]) captureException(resetError(secret));
     await flush();
     expect(items()).toHaveLength(1);
   });

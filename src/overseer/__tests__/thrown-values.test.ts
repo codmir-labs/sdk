@@ -107,7 +107,9 @@ describe("where a string capture is", () => {
       expect(item!.event.exception.stacktrace.some(insideSdk)).toBe(false);
     }
     expect(a!.group.fingerprint).not.toEqual(b!.group.fingerprint);
-    expect(a!.group.fingerprint[2]).toBe("Cart is empty");
+    // The place is in the key, the message is not.
+    expect(a!.group.fingerprint[1]).toMatch(/:cartA$/);
+    expect(a!.group.fingerprint).not.toContain("Cart is empty");
   });
 
   it("(e) is the app's call also where Error.captureStackTrace is missing", async () => {
