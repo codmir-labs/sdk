@@ -32,6 +32,7 @@ import { normalizeThrown, syntheticStack, type Caller } from "./thrown-value";
 import { browserRequest, envContexts } from "./runtime-context";
 import { addSourceContext } from "./source-context";
 import { parseStackTrace } from "./stack";
+import { installProcessErrors } from "./process-errors";
 import {
   DEFAULT_DSN,
   KEEPALIVE_MAX_BYTES,
@@ -125,6 +126,15 @@ export interface OverseerConfig {
    * 240 characters; files over 1 MB are skipped). Default true in Node; the browser never sends source lines.
    */
   includeSourceContext?: boolean;
+  /**
+   * Node only: capture the errors that end a process, and send what is queued before it ends. An uncaught exception and
+   * an unhandled rejection are captured as fatal (mechanism `onuncaughtexception` and `onunhandledrejection`, not
+   * handled), the queue is flushed for 2 seconds at most, and the process then ends as it would have: exit code 1 for a
+   * crash. SIGTERM and SIGINT flush the queue and, when the app has no listener of its own, end the process by that signal.
+   * An app's own `uncaughtException`, `unhandledRejection` or signal listener is left to decide what happens next.
+   * `close()` removes the hooks. Default `false` here, `true` in `@codmir/sdk/express`.
+   */
+  captureProcessErrors?: boolean;
 }
 
 export interface OverseerEvent {
@@ -198,7 +208,7 @@ export type SeverityLevel = "fatal" | "error" | "warning" | "info" | "debug";
 // Core Client
 // =============================================================================
 
-type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'selfHealing' | 'apiKey' | 'includeSourceContext' | 'onDropped' | 'rateLimit'> & {
+type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'selfHealing' | 'apiKey' | 'includeSourceContext' | 'captureProcessErrors' | 'onDropped' | 'rateLimit'> & {
   initialUser?: UserContext;
   onDropped?: OverseerConfig["onDropped"];
   selfHealing?: SelfHealingConfig;
@@ -642,7 +652,11 @@ class OverseerClient {
     return Promise.race([sending, late]).finally(() => clearTimeout(timer));
   }
 
-  close(): void {
+  /**
+   * Stops the client and makes one last send. Resolves `true` when the queue was sent (or refused) within `timeoutMs`
+   * (default 2000), `false` otherwise; it never rejects, and a caller that ignores the result is unaffected.
+   */
+  close(timeoutMs = 2000): Promise<boolean> {
     this.closed = true;
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
@@ -660,7 +674,10 @@ class OverseerClient {
       document.removeEventListener("visibilitychange", this.onVisibilityChange);
     }
     this.patchRuntime?.stop();
-    this.flushQuietly();
+    return this.flush(timeoutMs).catch((err) => {
+      this.log("Flush failed:", err);
+      return false;
+    });
   }
 
   // Private methods
@@ -1118,11 +1135,22 @@ function slotClient(): OverseerClient | null {
   return value as OverseerClient;
 }
 
+/** Ends the process hooks `captureProcessErrors` installed; null when none are. */
+let stopProcessErrors: (() => void) | null = null;
+
 export function init(config: OverseerConfig = {}): void {
   // The client being replaced stops here: its timers, retries, listeners and runtime patches.
-  client?.close();
+  stopProcessErrors?.();
+  stopProcessErrors = null;
+  void client?.close();
   client = new OverseerClient(config);
   client.init();
+  if (config.captureProcessErrors === true) {
+    stopProcessErrors = installProcessErrors({
+      capture: (error, context) => captureException(error, context),
+      flush: (timeoutMs) => flush(timeoutMs),
+    });
+  }
   // The slot lets `@codmir/sdk/feedback` and `@codmir/sdk/logs` find the client without importing this module.
   slots[CLIENT_SLOT] = client;
 }
@@ -1163,10 +1191,17 @@ export function flush(timeout?: number): Promise<boolean> {
   return getClient()?.flush(timeout) || Promise.resolve(true);
 }
 
-/** Closes this copy's own client and empties the slot when it holds that client; another copy's client is left alone. */
-export function close(): void {
-  client?.close();
+/**
+ * Closes this copy's own client and empties the slot when it holds that client; another copy's client is left alone.
+ * Removes the hooks `captureProcessErrors` installed. Resolves `true` when the queue was sent within `timeoutMs`
+ * (default 2000), `false` otherwise, so a shutdown hook can wait for it; a caller that ignores the result is unaffected.
+ */
+export function close(timeoutMs?: number): Promise<boolean> {
+  stopProcessErrors?.();
+  stopProcessErrors = null;
+  const sent = client ? client.close(timeoutMs) : Promise.resolve(true);
   if (client && slots[CLIENT_SLOT] === client) delete slots[CLIENT_SLOT];
+  return sent;
 }
 
 export function setConversationId(conversationId: string | null): void {

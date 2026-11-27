@@ -820,8 +820,9 @@ Codmir.trackScreenView('HomeScreen'); // navigation breadcrumb: "Screen: HomeScr
 
 ### Node.js
 
-Any Node.js service, worker or script can use the root import. The core installs no process handlers, so add your own
-for crashes:
+Any Node.js service, worker or script can use the root import. Node ends a crashed process, and one that is told to
+stop (SIGTERM on a deploy), before the one-second send timer, so errors queued just before are lost. The simple way is
+`captureProcessErrors: true`:
 
 ```ts
 import { init, captureException, flush, setTag } from '@codmir/sdk';
@@ -831,19 +832,44 @@ init({
   environment: process.env.NODE_ENV ?? 'development',
   release: process.env.APP_VERSION,
   service: 'billing-worker',
+  captureProcessErrors: true,
 });
 setTag('queue', 'invoices');
+```
 
+With it, an uncaught exception and an unhandled rejection are captured as `fatal` (mechanism `onuncaughtexception` and
+`onunhandledrejection`, `handled: false`), the queue is flushed for 2 seconds at most, and the process then ends as it
+would have: the error is printed and the exit code is 1. SIGTERM and SIGINT flush the queue the same way and then end the
+process by that signal. If your app has its own `uncaughtException`, `unhandledRejection` or signal listener, the SDK
+only captures and flushes, and the listener decides what happens next. `close()` removes everything the option
+installed. The option is off by default in the core `init` and on in `@codmir/sdk/express`'s `init` unless you set it to
+`false`.
+
+To do it by hand, remember that **a listener switches Node's default off**: with an `unhandledRejection` listener a
+rejection no longer ends the process, so the listener must end it. Flush with a time limit, so a network that hangs
+cannot keep a crashed process alive:
+
+```ts
 process.on('uncaughtException', async (err) => {
   captureException(err);
   await flush(2000);
   process.exit(1);
 });
 
-process.on('unhandledRejection', (reason) => {
+process.on('unhandledRejection', async (reason) => {
   captureException(reason);
+  await flush(2000);
+  process.exit(1); // Node's default for a rejection, which a listener turns off
 });
 ```
+
+`close(timeoutMs?)` returns a promise: `true` when the queue was sent within the time (2000 ms by default), `false`
+otherwise, so a shutdown hook can wait for it: `await close(2000)`. A caller that ignores the result works as before.
+
+> [!NOTE]
+> Express 4 does not pass the rejection of an `async` route handler to `errorHandler()`: the request hangs and Node
+> reports an unhandled rejection. Catch inside the handler and call `next(err)`, or upgrade to Express 5, which does it.
+> With `captureProcessErrors` on, such a rejection is captured as a fatal crash and the process ends.
 
 In Node, events carry `contexts.runtime` (`node` and its version) and `contexts.os` (platform and release), and the first
 three in-app frames carry source lines. The retry timer is `unref`'d, so a pending retry never keeps the process alive.
@@ -1429,6 +1455,7 @@ Leave it off unless you serve that manifest.
 | `initialUser` | none | The user from the first event on |
 | `initialTags` | `{}` | Tags from the first event on |
 | `includeSourceContext` | `true` | Node only: source lines around the first three in-app frames |
+| `captureProcessErrors` | `false` (`true` in `/express`) | Node only: capture uncaught exceptions and unhandled rejections as fatal, flush for up to 2 s, then end the process as Node would (exit code 1); flush on SIGTERM and SIGINT and end by the signal. Your own listeners are left to decide. `close()` removes the hooks |
 | `selfHealing` | off | Browser patch runtime ([details](#privacy-and-safety)) |
 | `secretKey` | none | Accepted; not sent by this version |
 
@@ -1474,7 +1501,7 @@ back to `CODMIR_API_KEY`. The AI-call monitoring options that used to be listed 
 | `setTag(key, value)`, `setTags(tags)` | String tags on every later event and transaction |
 | `addBreadcrumb(breadcrumb)` | `{ category, message, data, level, type }`; the last 100 are kept |
 | `flush(timeout?)` | Sends everything queued; resolves `true` when all of it was sent or refused, `false` when a batch failed and was put back for a retry or when `timeout` (ms) ran out first; the sending goes on. Each caller has its own time, and the timer never keeps a process alive |
-| `close()` | Stops timers, listeners and the patch runtime, then flushes. In `/browser`, `/nextjs`, `/express`, `/remix` and `/react-native`, `close()` also ends what that entry's `init` started (its error handlers, route breadcrumbs, `fetch`, XHR, `history` and `console.error` patches, its pageload transactions), so a later `init` starts clean with its new config; a second `init` before `close()` is ignored. A patch that another library or a second copy of the SDK put over one of ours stays in place and only passes calls on. An error captured after `close()` and before the next `init` is sent once, without retries |
+| `close(timeoutMs?)` | Stops timers, listeners (the `captureProcessErrors` hooks too) and the patch runtime, then flushes. Returns a `Promise<boolean>`: `true` when the queue was sent within `timeoutMs` (default 2000), `false` otherwise. In `/browser`, `/nextjs`, `/express`, `/remix` and `/react-native`, `close()` also ends what that entry's `init` started (its error handlers, route breadcrumbs, `fetch`, XHR, `history` and `console.error` patches, its pageload transactions), so a later `init` starts clean with its new config; a second `init` before `close()` is ignored. A patch that another library or a second copy of the SDK put over one of ours stays in place and only passes calls on. An error captured after `close()` and before the next `init` is sent once, without retries |
 | `setConversationId(id)`, `setSessionId(id)` | Attach ids to every error (`extra` and `contexts`); the session id is also sent with each request |
 | `getClient()`, `getDsn()`, `getEnvironment()`, `getClientKey()` | Read the current client and its settings |
 
