@@ -217,6 +217,88 @@ describe("F6: where the code was served or installed is not in the key", () => {
   });
 });
 
+describe("file names: Rollup, webpack and CRA hashes", () => {
+  const NAMES: Record<string, [string, string]> = {
+    vite_base64_plain: ["/assets/index-BhJ5ieo2.js", "/assets/index.js"],
+    vite_underscore: ["/assets/index-Dx_9lC-p.js", "/assets/index.js"],
+    vite_dash: ["/assets/index-C-4aQx3w.js", "/assets/index.js"],
+    vite_two_words: ["/assets/vendor-react-DgK_1xYz.js", "/assets/vendor-react.js"],
+    cra_main_chunk: ["/static/js/main.3f2a9c1e.chunk.js", "/static/js/main.chunk.js"],
+    cra_numbered_chunk: ["/static/js/787.8b7d4e6f.chunk.js", "/static/js/787.chunk.js"],
+    next_chunk: ["/_next/static/chunks/app/page-1a2b3c4d5e6f7a8b.js", "/_next/static/chunks/app/page.js"],
+    bundle_ext: ["/dist/app.3f2a9c1e.bundle.js", "/dist/app.bundle.js"],
+    min_ext: ["/dist/app-Dx_9lC-p.min.mjs", "/dist/app.min.mjs"],
+    lower_case_word: ["/assets/app-settings.js", "/assets/app-settings.js"],
+    plain_words: ["/assets/index-header.js", "/assets/index-header.js"],
+    vendor_react: ["/assets/vendor-react.js", "/assets/vendor-react.js"],
+    my_application: ["/assets/my-application.js", "/assets/my-application.js"],
+    short_segment: ["/assets/main.abc123.js", "/assets/main.abc123.js"],
+    plain_chunk: ["/static/js/main.chunk.js", "/static/js/main.chunk.js"],
+  };
+
+  it.each(Object.entries(NAMES))("%s", (_name, [file, expected]) => {
+    expect(normalizeFrameFile(file)).toBe(expected);
+  });
+
+  it("two Vite builds of one bundle are one fingerprint, whatever the hash holds", () => {
+    const one = (hash: string) => fpOf("Error", "x", `Error: x\n    at render (https://shop.example.com/assets/index-${hash}:10:5)`);
+    expect(one("Dx_9lC-p.js")).toEqual(one("BhJ5ieo2.js"));
+    expect(one("C-4aQx3w.js")).toEqual(one("BhJ5ieo2.js"));
+  });
+});
+
+describe("minified bundles", () => {
+  const stack = (file: string, frames: Array<[string, number]>, message = "Card declined for order 42") =>
+    `TypeError: ${message}\n${frames.map(([fn, col]) => `    at ${fn} (https://app.example.com/assets/${file}:1:${col})`).join("\n")}`;
+  const build1 = (message?: string) => stack("main.3f2a9c1e.js", [["p", 544], ["x", 630], ["Object.C", 656]], message);
+  const build2 = (message?: string) => stack("main.8b7d4e6f.js", [["s", 678], ["x", 783], ["Object._", 809]], message);
+  const keep1 = stack("main.3f2a9c1e.js", [["chargeCard", 614], ["checkout", 718], ["Object.handleClick", 760]]);
+  const keep2 = stack("main.8b7d4e6f.js", [["chargeCard", 772], ["checkout", 895], ["Object.handleClick", 937]]);
+
+  it("a redeploy that renames the functions is one fingerprint, with the folded message", () => {
+    const a = fpOf("TypeError", "Card declined for order 42", build1());
+    expect(fpOf("TypeError", "Card declined for order 42", build2())).toEqual(a);
+    expect(a).toEqual(["TypeError", "/assets/main.js", "/assets/main.js", "/assets/main.js", "Card declined for order #"]);
+  });
+
+  it("two messages thrown in one minified bundle are two fingerprints", () => {
+    expect(fpOf("TypeError", "Card declined for order 42", build1("Card declined for order 42"))).not.toEqual(
+      fpOf("TypeError", "Cart is empty", build1("Cart is empty")),
+    );
+  });
+
+  it("with the names kept the key holds the functions and no message", () => {
+    const a = fpOf("TypeError", "Card declined for order 42", keep1);
+    expect(fpOf("TypeError", "Card declined for order 42", keep2)).toEqual(a);
+    expect(a).toEqual(["TypeError", "/assets/main.js:chargeCard", "/assets/main.js:checkout", "/assets/main.js:handleClick"]);
+  });
+
+  it("a real 1 or 2 character name in unminified code keys as file plus message", () => {
+    const at = (fn: string, message: string) => fpOf("Error", message, `Error: ${message}\n    at ${fn} (/srv/app/src/util.js:40:12)`);
+    expect(at("go", "bad input 7")).toEqual(["Error", "/srv/app/src/util.js", "bad input #"]);
+    expect(at("fn", "bad input 7")).toEqual(["Error", "/srv/app/src/util.js", "bad input #"]);
+    expect(at("go", "bad input 7")).not.toEqual(at("go", "no input"));
+  });
+
+  it("a 3 character name is mangled only deep inside a one-line bundle", () => {
+    const at = (line: number, col: number) => fpOf("Error", "x", `Error: x\n    at run (https://app.example.com/a.js:${line}:${col})`);
+    expect(at(1, 2400)).toEqual(["Error", "/a.js", "x"]);
+    expect(at(1, 40)).toEqual(["Error", "/a.js:run"]);
+    expect(at(30, 2400)).toEqual(["Error", "/a.js:run"]);
+  });
+
+  it("an anonymous frame deep in a one-line bundle keys as the file, unless it has a source line", () => {
+    const event = (context_line?: string, lineno = 1, colno = 5000) => ({
+      id: "e", type: "error", timestamp: "t", level: "error",
+      exception: { type: "Error", value: "x", stacktrace: [{ filename: "/assets/a.js", function: "<anonymous>", lineno, colno, context_line, in_app: true }] },
+    });
+    expect(sdkFingerprint(event())).toEqual(["Error", "/assets/a.js", "x"]);
+    expect(sdkFingerprint(event("return a.b;"))).toEqual(["Error", "/assets/a.js:return a.b;"]);
+    expect(sdkFingerprint(event(undefined, 7, 5000))).toEqual(["Error", "/assets/a.js:7"]);
+    expect(sdkFingerprint(event(undefined, 1, 40))).toEqual(["Error", "/assets/a.js:1"]);
+  });
+});
+
 describe("frameless: the folded message is the key", () => {
   const frameless = (message: string, type = "Error") => captured(fail(type, message, `${type}: x`)).group.fingerprint;
   const messageEvent = (message: string) => sdkFingerprint({ id: "m", type: "message", timestamp: "t", level: "error", message });

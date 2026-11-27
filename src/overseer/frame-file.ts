@@ -9,9 +9,12 @@
  *   app-data directory (`/data/user/0/<package>/`, `/data/data/<package>/`) and an `app.asar/` prefix.
  * - A path inside the app root (`process.cwd()` when `init()` ran) is made relative to it.
  * - A `/releases/<id>/` directory segment becomes `/releases/<release>/`.
- * - A content hash in the file name is removed: a `.` or `-` segment of 8 or more characters, just before the
- *   extension, made of hex digits or of base36 with at least one digit and one letter (`main.3f2a9c1e.js` gives
- *   `main.js`). A plain word (`index-header.js`) is never removed.
+ * - A content hash in the file name is removed, just before the extension. `.chunk`, `.bundle` and `.min` before `.js`,
+ *   `.mjs` or `.cjs` are part of the extension (`main.3f2a9c1e.chunk.js` gives `main.chunk.js`). A hash is either
+ *   a `.` or `-` segment of 8 or more characters made of hex digits or of base36 with at least one digit and one
+ *   letter (`main.3f2a9c1e.js` gives `main.js`), or Rollup's: exactly the last 8 characters of the name, preceded by
+ *   `-` or `.`, made of `A-Z a-z 0-9 _ -` and holding at least one digit or one upper-case letter
+ *   (`index-Dx_9lC-p.js` gives `index.js`). A plain word (`index-header.js`, `app-settings.js`) is never removed.
  */
 
 let appRoot: string | undefined;
@@ -28,14 +31,23 @@ const INSTALL_PREFIXES: readonly RegExp[] = [
   /^.*?\/app\.asar(?:\.unpacked)?\//,
 ];
 
-const HASH_BEFORE_EXT = /^(.+)[.-]([A-Za-z0-9]{8,})(\.[A-Za-z0-9]+)$/;
+const EXTENSION = /((?:\.(?:chunk|bundle|min))*\.[cm]?js|\.[A-Za-z0-9]+)$/;
+const HASH_SEGMENT = /^(.+)[.-]([A-Za-z0-9]{8,})$/;
+const ROLLUP_HASH = /^(.+)[.-]([A-Za-z0-9_-]{8})$/;
 
 const isHash = (s: string): boolean => /^[0-9a-f]+$/i.test(s) || (/\d/.test(s) && /[a-z]/i.test(s));
+const isRollupHash = (s: string): boolean => /[\dA-Z]/.test(s);
 
 function dropHash(path: string): string {
   const at = path.lastIndexOf("/") + 1;
-  const m = HASH_BEFORE_EXT.exec(path.slice(at));
-  return m && isHash(m[2]!) ? path.slice(0, at) + m[1]! + m[3]! : path;
+  const name = path.slice(at);
+  const ext = EXTENSION.exec(name);
+  if (!ext) return path;
+  const stem = name.slice(0, ext.index);
+  const m = HASH_SEGMENT.exec(stem);
+  if (m && isHash(m[2]!)) return path.slice(0, at) + m[1]! + ext[1]!;
+  const r = ROLLUP_HASH.exec(stem);
+  return r && isRollupHash(r[2]!) ? path.slice(0, at) + r[1]! + ext[1]! : path;
 }
 
 export function normalizeFrameFile(filename: string): string {

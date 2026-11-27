@@ -42,6 +42,7 @@ interface FrameLike {
   filename?: string;
   function?: string;
   lineno?: number;
+  colno?: number;
   context_line?: string;
   in_app?: boolean;
 }
@@ -140,11 +141,22 @@ export function normalizeFunctionName(name: string | undefined): string {
   return n;
 }
 
-/** One frame of the key: `<normalized file>:<normalized function>`; an anonymous function by its trimmed source line, else its line number. */
-function frameKey(frame: FrameLike): string {
+const SHORT_NAME = /^[A-Za-z0-9_$]{1,2}$/;
+const MID_NAME = /^[A-Za-z0-9_$]{3}$/;
+
+/** Whether a frame sits deep inside a one-line bundle: line 1 or 2, column above 1000. */
+const deepInBundle = (frame: FrameLike): boolean => (frame.lineno === 1 || frame.lineno === 2) && (frame.colno ?? 0) > 1000;
+
+/** One frame of the key and whether it is minified: `<normalized file>:<normalized function>`; an anonymous function by its trimmed source line, else its line number; a minified frame by its file alone. */
+function frameKey(frame: FrameLike): { key: string; minified: boolean } {
   const fn = normalizeFunctionName(frame.function);
-  const what = ANONYMOUS.test(fn) ? frame.context_line?.trim().slice(0, 100) || String(frame.lineno ?? "?") : fn;
-  return `${normalizeFrameFile(frame.filename ?? "")}:${what}`;
+  const file = normalizeFrameFile(frame.filename ?? "");
+  const anonymous = ANONYMOUS.test(fn);
+  const context = anonymous ? frame.context_line?.trim().slice(0, 100) : undefined;
+  if (anonymous ? !context && deepInBundle(frame) : SHORT_NAME.test(fn) || (MID_NAME.test(fn) && deepInBundle(frame))) {
+    return { key: file, minified: true };
+  }
+  return { key: `${file}:${anonymous ? context || String(frame.lineno ?? "?") : fn}`, minified: false };
 }
 
 const KEY_FRAMES = 3;
@@ -173,7 +185,13 @@ function foldMessage(message: string): string {
  *   normalized by {@link normalizeFrameFile}; the function loses `async `, `new `, `[as x]`, generic receivers such as
  *   `Object.` and `Module.`, and Firefox's `promise callback*`; an anonymous function is its trimmed `context_line`
  *   when source context gives one, else its line number. Fewer than 3 in-app frames means fewer parts.
- * - No line number and no message is in the key of an error that has a frame, so an edit above the throw, another
+ * - A frame whose function looks mangled by a minifier keys as its normalized file alone, with no function: the
+ *   normalized name is 1 or 2 characters (letters, digits, `_`, `$`), or 3 such characters on a frame at line 1 or 2
+ *   and column above 1000 (deep inside a one-line bundle). An anonymous frame with no `context_line`, at line 1 or 2
+ *   and column above 1000, keys as its file alone too: its line number says nothing there. When any of the key's
+ *   frames is one of these, the folded message (as below) is added after the frame parts and before the root type, so
+ *   a minified app with no source maps keeps two errors of one bundle apart and the key survives a redeploy.
+ * - Otherwise no line number and no message is in the key of an error that has a frame, so an edit above the throw, another
  *   engine's wording or a user's text never starts a new group.
  * - With no in-app frame (a frameless error, or a message event) the message is the second part, folded: a URL in it is
  *   cut to its path (`pathPattern`), then the log monitor's `messageKey` rules apply (emails, quoted values, dates,
@@ -192,7 +210,9 @@ export function sdkFingerprint(event: WireSourceEvent): string[] {
   if (!frames.length && causes) frames = inApp(causes.find((c) => inApp(c.stacktrace).length)?.stacktrace);
 
   if (frames.length) {
-    for (const f of frames.slice(0, KEY_FRAMES)) parts.push(frameKey(f));
+    const keys = frames.slice(0, KEY_FRAMES).map(frameKey);
+    for (const k of keys) parts.push(k.key);
+    if (keys.some((k) => k.minified)) parts.push(foldMessage(exception?.value ?? event.message ?? ""));
   } else {
     parts.push(foldMessage(exception?.value ?? event.message ?? ""));
   }
