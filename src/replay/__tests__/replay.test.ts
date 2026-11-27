@@ -641,12 +641,30 @@ describe("error linking and wire shape", () => {
   });
 });
 
+describe("a DSN with a trailing slash", () => {
+  it("sends errors to `<base>/ingest` and uploads to `<base>/replay`, never `//`", async () => {
+    useFakeClock();
+    const { overseer, replay } = await load({ dsn: `${DSN}/`, replaysSessionSampleRate: 1 });
+    expect(replay.startReplay()).toBeTruthy();
+    await settle();
+    click();
+    overseer.captureException(new Error("boom"));
+    await overseer.flush();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(replayCalls().length).toBeGreaterThan(0);
+    expect(ingestCalls().length).toBeGreaterThan(0);
+    expect(calls.every((c) => !c.url.replace("https://", "").includes("//"))).toBe(true);
+  });
+});
+
 describe("upload helpers", () => {
   it("builds `<dsn>/replay`, swapping a trailing /ingest", async () => {
     const { replayEndpoint } = await import("../upload");
     expect(replayEndpoint("https://codmir.com/api/overseer")).toBe("https://codmir.com/api/overseer/replay");
     expect(replayEndpoint("https://codmir.com/api/overseer/")).toBe("https://codmir.com/api/overseer/replay");
+    expect(replayEndpoint("https://codmir.com/api/overseer//")).toBe("https://codmir.com/api/overseer/replay");
     expect(replayEndpoint("https://codmir.com/api/overseer/ingest")).toBe("https://codmir.com/api/overseer/replay");
+    expect(replayEndpoint("https://codmir.com/api/overseer/ingest/")).toBe("https://codmir.com/api/overseer/replay");
   });
 
   it("splits events so every body is under 2 MB and 10,000 events, dropping a single event that cannot fit", async () => {

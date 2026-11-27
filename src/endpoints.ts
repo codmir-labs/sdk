@@ -12,20 +12,17 @@ export const ENDPOINT_PATHS = {
   patchesManifest: "/patches/manifest",
 } as const;
 
-/** `<base>`: the DSN without a trailing `/ingest` and trailing slashes. */
+/** `<base>`: the DSN without a trailing `/ingest` and trailing slashes, so `…/a`, `…/a/` and `…/a/ingest/` share one base. */
 export const baseOf = (dsn: string): string => dsn.replace(/(\/ingest)?\/*$/, "");
 
-/** `<base>/ingest`, the DSN itself when it already ends in `/ingest`. */
+/** `<base>/ingest`. */
 export function ingestUrl(dsn: string): string {
-  return dsn.endsWith(ENDPOINT_PATHS.ingest) ? dsn : `${dsn}${ENDPOINT_PATHS.ingest}`;
+  return `${baseOf(dsn)}${ENDPOINT_PATHS.ingest}`;
 }
 
-/** `<base>/replay`; a DSN already ending in `/ingest` is swapped. */
+/** `<base>/replay`. */
 export function replayUrl(dsn: string): string {
-  const base = dsn.replace(/\/+$/, "");
-  return base.endsWith(ENDPOINT_PATHS.ingest)
-    ? `${base.slice(0, -ENDPOINT_PATHS.ingest.length)}${ENDPOINT_PATHS.replay}`
-    : `${base}${ENDPOINT_PATHS.replay}`;
+  return `${baseOf(dsn)}${ENDPOINT_PATHS.replay}`;
 }
 
 /** `<base>/feedback`, or `<base>/feedback/<id><suffix>` for one piece of feedback. */
@@ -36,5 +33,5 @@ export function feedbackUrl(dsn: string, id?: string, suffix = ""): string {
 
 /** `<base>/patches/manifest`. */
 export function patchesManifestUrl(dsn: string): string {
-  return `${dsn.replace(/\/ingest$/, "")}${ENDPOINT_PATHS.patchesManifest}`;
+  return `${baseOf(dsn)}${ENDPOINT_PATHS.patchesManifest}`;
 }

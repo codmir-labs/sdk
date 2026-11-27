@@ -18,6 +18,8 @@ const DSNS = [
   "https://www.example.com/api/v1/overseer",
   "https://www.example.com/api/v1/overseer/ingest",
   "https://www.example.com/api/v1/overseer/ingest/",
+  "https://www.example.com/api/v1/overseer/",
+  "https://www.example.com/api/v1/overseer//",
 ];
 
 describe("the URLs, byte for byte", () => {
@@ -42,6 +44,42 @@ describe("the URLs, byte for byte", () => {
     expect(ingestUrl("https://app.example.com")).toBe("https://app.example.com/ingest");
     expect(replayUrl("https://app.example.com/")).toBe("https://app.example.com/replay");
     expect(feedbackUrl("https://app.example.com/")).toBe("https://app.example.com/feedback");
+  });
+});
+
+describe("a trailing slash changes nothing", () => {
+  const BASE = "https://www.example.com/api/v1/overseer";
+  const FORMS = [BASE, `${BASE}/`, `${BASE}//`, `${BASE}/ingest`, `${BASE}/ingest/`];
+  const EXPECTED = {
+    ingest: [`${BASE}/ingest`],
+    replay: [`${BASE}/replay`],
+    feedback: [`${BASE}/feedback`, `${BASE}/feedback/fb_1`, `${BASE}/feedback/fb_1/answer`, `${BASE}/feedback/a%20b%2Fc/status`],
+    patchesManifest: [`${BASE}/patches/manifest`],
+  } satisfies Record<keyof typeof ENDPOINT_PATHS, string[]>;
+
+  for (const dsn of FORMS) {
+    it(`every builder returns the single-slash URL for ${dsn}`, () => {
+      for (const key of Object.keys(BUILDERS) as Array<keyof typeof BUILDERS>) {
+        expect(BUILDERS[key].map((build) => build(dsn)), key).toEqual(EXPECTED[key]);
+      }
+    });
+  }
+
+  it("a root DSN with one or two slashes", () => {
+    for (const dsn of ["https://x.test", "https://x.test/", "https://x.test//"]) {
+      expect(ingestUrl(dsn)).toBe("https://x.test/ingest");
+      expect(replayUrl(dsn)).toBe("https://x.test/replay");
+      expect(patchesManifestUrl(dsn)).toBe("https://x.test/patches/manifest");
+    }
+  });
+
+  it("isSdkRequest matches what is sent for a DSN with a trailing slash", () => {
+    for (const dsn of [`${BASE}/`, `${BASE}//`, `${BASE}/ingest/`]) {
+      for (const path of ["/ingest", "/replay", "/feedback", "/feedback/fb_1", "/patches/manifest"]) {
+        expect(isSdkRequest(new URL(`https://www.example.com/api/v1/overseer${path}`), dsn), `${dsn} ${path}`).toBe(true);
+      }
+      expect(isSdkRequest(new URL("https://www.example.com/api/v1/overseer/issues"), dsn)).toBe(false);
+    }
   });
 });
 

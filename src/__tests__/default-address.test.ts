@@ -42,3 +42,20 @@ describe("every default address answers itself: www, never the apex", () => {
     expect(urls.map((u) => new URL(u).origin)).toEqual(["https://www.codmir.com"]);
   });
 });
+
+describe("a DSN written with a trailing slash sends to the same ingest URL", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each(["", "/", "//", "/ingest", "/ingest/"])("captureException, flush: DSN suffix %j", async (suffix) => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      urls.push(String(url));
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const client = new OverseerClient({ dsn: `https://www.example.com/api/v1/overseer${suffix}`, clientKey: "osk_test" });
+    client.captureException(new Error("x"));
+    await client.flush();
+    client.close();
+    expect(urls).toEqual(["https://www.example.com/api/v1/overseer/ingest"]);
+  });
+});
