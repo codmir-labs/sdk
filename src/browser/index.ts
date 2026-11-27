@@ -37,6 +37,7 @@ import {
 } from "../overseer/index";
 import { listen, patch, Stops } from "../overseer/lifecycle";
 import { withHint, crash, eventFrame } from "../overseer/capture-hint";
+import { frameFilename } from "../overseer/stack";
 import { instrumentFetch } from "../tracing/fetch";
 import { instrumentXhr } from "../tracing/xhr";
 import { startBrowserTracing, type BrowserTracingOptions } from "../tracing/browser";
@@ -109,7 +110,7 @@ export function init(config: BrowserConfig = {}): void {
         coreCaptureException(
           event.error || event.message,
           // With no error of its own, the event's place is the one frame: the SDK has none to give.
-          withHint({ filename: event.filename, lineno: event.lineno, colno: event.colno }, crash("onerror", undefined, eventFrame(event))),
+          withHint({ filename: typeof event.filename === "string" ? frameFilename(event.filename) : event.filename, lineno: event.lineno, colno: event.colno }, crash("onerror", undefined, eventFrame(event))),
         );
       }),
     );

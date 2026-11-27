@@ -368,7 +368,8 @@ captureException(err, { orderId: 'ord_123', password: 'hunter2', req: { headers:
 1. **Sampling and id.** `enabled` and `sampleRate` decide whether the error is kept; if it is, it gets a 21-character id,
    which `captureException` returns at once.
 2. **Stack.** `parseStackTrace` reads every frame and marks `in_app` false for `node_modules`, Node internals and the
-   SDK's own files. In Node, the first three in-app frames whose file can be read also get `pre_context`,
+   SDK's own files. A script URL in a frame (`https://`, `blob:`, `webpack-internal:`) keeps its origin and path only, never the query
+   or fragment, so a token or a `?v=` cache-buster never reaches the culprit or the fingerprint. In Node, the first three in-app frames whose file can be read also get `pre_context`,
    `context_line` and `post_context` (5 lines each side).
 3. **Cleaning.** `sanitizeExtra` drops `password` and `req` from the context, and `addBreadcrumb` already dropped
    `authToken` from the breadcrumb.

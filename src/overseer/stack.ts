@@ -13,6 +13,17 @@ import type { StackFrame } from "./index";
 
 const SDK_PATH = /[\\/]@codmir[\\/]sdk[\\/]/;
 
+const URL_SHAPED = /^(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/|blob:|webpack-internal:)/i;
+
+/**
+ * A frame's file as it is stored: a URL-shaped one (a scheme and `//`, `blob:`, `webpack-internal:`) loses its query and
+ * fragment, which can hold a token or a cache-buster and would split one bug into one issue per value. A plain path,
+ * `node:` internal or `<anonymous>` is returned as it is, a `#` or `?` included.
+ */
+export function frameFilename(filename: string): string {
+  return URL_SHAPED.test(filename) ? (filename.split(/[?#]/)[0] ?? "") : filename;
+}
+
 function isInApp(filename: string | undefined): boolean {
   if (!filename) return false;
   if (filename.startsWith("node:") || filename.startsWith("<") || filename === "native" || filename === "[native code]") return false;
@@ -25,11 +36,11 @@ function frameOf(fn: string | undefined, location: string): StackFrame {
   const frame: StackFrame = {};
   if (fn) frame.function = fn;
   if (m) {
-    frame.filename = m[1];
+    frame.filename = frameFilename(m[1]!);
     frame.lineno = parseInt(m[2]!, 10);
     if (m[3] !== undefined) frame.colno = parseInt(m[3], 10);
   } else if (location) {
-    frame.filename = location; // `native`, `<anonymous>`, `[native code]`
+    frame.filename = frameFilename(location); // `native`, `<anonymous>`, `[native code]`
   }
   frame.in_app = isInApp(frame.filename);
   return frame;
