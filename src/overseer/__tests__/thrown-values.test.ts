@@ -211,6 +211,28 @@ describe("an error and an event", () => {
   });
 });
 
+describe("a value that is not a plain object", () => {
+  it("an event with no error and no reason is named by its type, with no copy in extra", async () => {
+    captureException(new Event("error"));
+    const [{ event }] = await sent();
+    expect(event.exception.type).toBe("Event");
+    expect(event.exception.value).toBe("Event captured: error");
+    expect(event.extra).not.toHaveProperty("thrown");
+  });
+
+  it("a class instance with no message is named by its kind", async () => {
+    captureException(new Response(null, { status: 404 }));
+    const [{ event }] = await sent();
+    expect(event.exception.value).toBe("Response captured with no keys");
+  });
+
+  it("a plain object is still named Object", async () => {
+    captureException({});
+    const [{ event }] = await sent();
+    expect(event.exception.value).toBe("Object captured with no keys");
+  });
+});
+
 describe("any other primitive", () => {
   it.each([
     [null, "null"],

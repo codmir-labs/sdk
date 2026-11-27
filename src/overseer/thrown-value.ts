@@ -99,9 +99,16 @@ function normalizeObject(value: object, depth: number): ThrownError {
     if (typeof e.stack === "string") return { name, message, stack: e.stack };
     return { name, message, stack: undefined, thrown: value };
   }
+  // What the value is, from its tag: `Object` for a plain object, else `Event`, `Response` and the like.
+  const kind = tag.slice(8, -1) || "Object";
+  // An event that holds no error and no reason (a failed image or script load): its type says what happened.
+  const eventType = (value as { type?: unknown }).type;
+  if (kind.endsWith("Event") && typeof eventType === "string") {
+    return { name: kind, message: `${kind} captured: ${eventType}`, stack: undefined };
+  }
   const o = value as { name?: unknown; message?: unknown };
   const keys = Object.keys(value).slice(0, MAX_KEYS);
-  const message = typeof o.message === "string" ? o.message : keys.length ? `Object captured with keys: ${keys.join(", ")}` : "Object captured with no keys";
+  const message = typeof o.message === "string" ? o.message : keys.length ? `${kind} captured with keys: ${keys.join(", ")}` : `${kind} captured with no keys`;
   const name = typeof o.name === "string" && o.name ? o.name : "Error";
   return { name, message, stack: undefined, thrown: value };
 }
