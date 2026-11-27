@@ -1328,6 +1328,8 @@ init({
 });
 ```
 
+`beforeSend` gets copies of `user`, the breadcrumbs and `contexts`, so editing them never changes your own objects. If it throws, the event is dropped (never sent unscrubbed) and `onDropped` hears `before_send`. An async hook is awaited, and `flush()` and `close()` wait for it.
+
 > [!WARNING]
 > Some fields are yours to keep out. `setUser` sends what you give it, `ip_address` included. Express's
 > `errorHandler()` adds `clientIp` and the `extractUser` result to `extra`. Click breadcrumbs carry up to 50

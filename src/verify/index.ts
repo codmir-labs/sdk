@@ -142,7 +142,7 @@ async function probe(client: OverseerClient, config: OverseerConfig, where: stri
     ...meta,
     sdk: { ...SDK_INFO },
   };
-  const event = config.beforeSend ? config.beforeSend(draft) : draft; // a throw is caught by the caller
+  const event = config.beforeSend ? await config.beforeSend(draft) : draft; // a throw is caught by the caller
   if (!event) return why("beforeSend returned null");
   sending();
 

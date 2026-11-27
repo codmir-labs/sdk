@@ -88,12 +88,17 @@ export interface OverseerConfig {
   replaysOnErrorSampleRate?: number;
   /** Service name sent in the ingest envelope (max 64 chars). */
   service?: string;
-  /** Hook to modify/filter events before sending */
-  beforeSend?: (event: OverseerEvent) => OverseerEvent | null;
+  /**
+   * Hook to modify/filter events before sending. It gets copies of the event's `user`, breadcrumbs and `contexts`, so
+   * editing them never reaches the app's own objects. `null` drops the event; a throw, or a result that is not an
+   * event, drops it too and reports `before_send` to `onDropped`. A hook that returns a Promise is awaited, and
+   * `flush()` waits for it.
+   */
+  beforeSend?: (event: OverseerEvent) => OverseerEvent | null | PromiseLike<OverseerEvent | null>;
   /**
    * Called when the server did not take events: a batch it refused (`status` 401 for a wrong key, say), or events it
    * dropped out of a batch it answered 200 to (`reason`, such as `payment_required`), or that the client gave up on
-   * (`status` 0: the queue was full, or the client was closed before the last try went through). They are not sent again.
+   * (`status` 0: the queue was full, the client was closed before the last try went through, or `beforeSend` threw). They are not sent again.
    * `eventIds` are the ids `captureEvent` returned for those events, when they are known.
    */
   onDropped?: (dropped: { events: number; status: number; reason?: string; eventIds?: string[] }) => void;
@@ -232,6 +237,8 @@ class OverseerClient {
   // Once closed, the client never schedules a retry.
   private closed = false;
   private flushing: Promise<boolean> | null = null;
+  // `beforeSend` hooks that returned a Promise and have not settled; `flush()` waits for them.
+  private pendingHooks = new Set<Promise<void>>();
   private onPageHide = (): void => this.flushOnHide();
   private onVisibilityChange = (): void => {
     if (typeof document !== "undefined" && document.visibilityState === "hidden") this.flushOnHide();
@@ -533,7 +540,7 @@ class OverseerClient {
   /** Sends everything queued: true when all of it was sent or refused, false when a batch is put back for a retry or `timeout` ms ran out first. */
   flush(timeout?: number): Promise<boolean> {
     if (!this.flushing) {
-      this.flushing = this.drain().finally(() => {
+      this.flushing = (this.pendingHooks.size > 0 ? this.settleHooks().then(() => this.drain()) : this.drain()).finally(() => {
         this.flushing = null;
       });
     }
@@ -588,10 +595,45 @@ class OverseerClient {
   }
 
   private sendEvent(event: OverseerEvent): void {
-    const processed = this.config.beforeSend(event);
-    if (!processed) return;
+    let result: ReturnType<NonNullable<OverseerConfig["beforeSend"]>>;
+    try {
+      result = this.config.beforeSend(copyForHook(event));
+    } catch (err) {
+      this.hookFailed(event, err);
+      return;
+    }
+    if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+      const pending: Promise<void> = Promise.resolve(result as PromiseLike<OverseerEvent | null>)
+        .then(
+          (processed) => this.afterHook(event, processed),
+          (err) => this.hookFailed(event, err),
+        )
+        .finally(() => this.pendingHooks.delete(pending));
+      this.pendingHooks.add(pending);
+      return;
+    }
+    this.afterHook(event, result as OverseerEvent | null);
+  }
+
+  /** What the hook returned: `null` is the app dropping the event on purpose; anything else that is not an event is a failed hook. */
+  private afterHook(original: OverseerEvent, processed: OverseerEvent | null | undefined): void {
+    if (processed === null || processed === undefined) return;
+    if (typeof processed !== "object") {
+      this.hookFailed(original, new Error("beforeSend returned something that is not an event"));
+      return;
+    }
     if (processed.type === "error") this.lastError = { id: processed.id, at: Date.now() };
     this.enqueue(processed);
+  }
+
+  /** A failed hook drops the event: it may have been half way through scrubbing it. */
+  private hookFailed(event: OverseerEvent, err: unknown): void {
+    this.log("beforeSend failed; dropping the event:", err);
+    this.tellDropped(1, 0, "before_send", [event]);
+  }
+
+  private async settleHooks(): Promise<void> {
+    while (this.pendingHooks.size > 0) await Promise.allSettled([...this.pendingHooks]);
   }
 
   private enqueue(event: QueuedEvent): void {
@@ -929,3 +971,16 @@ export function getOverseerKey(): string {
 export { OverseerClient };
 export { PatchRuntime } from "./patch-runtime";
 export type { SelfHealingConfig, PatchManifest, PatchEntry, PatchOp } from "./patch-runtime";
+
+/** The event as `beforeSend` sees it: its own copies of `user`, each breadcrumb and its `data`, and `contexts`, so edits never reach the app's objects or the shared breadcrumb buffer. */
+function copyForHook(event: OverseerEvent): OverseerEvent {
+  const copy: OverseerEvent = { ...event };
+  if (event.user) copy.user = { ...event.user };
+  if (event.breadcrumbs) copy.breadcrumbs = event.breadcrumbs.map((b) => ({ ...b, ...(b.data ? { data: { ...b.data } } : {}) }));
+  if (event.contexts) {
+    copy.contexts = Object.fromEntries(
+      Object.entries(event.contexts).map(([k, v]) => [k, v && typeof v === "object" && !Array.isArray(v) ? { ...(v as object) } : v]),
+    );
+  }
+  return copy;
+}

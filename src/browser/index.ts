@@ -141,20 +141,24 @@ export function init(config: BrowserConfig = {}): void {
   // Click tracking
   if (trackClicks) {
     const onClick = (event: Event): void => {
-      const target = event.target as HTMLElement;
-      if (!target) return;
+      try {
+        const target = event.target as HTMLElement;
+        if (typeof target?.tagName !== "string") return;
 
-      const breadcrumb: Breadcrumb = {
-        category: "ui.click",
-        message: getElementDescription(target),
-        data: {
-          tag: target.tagName.toLowerCase(),
-          id: target.id || undefined,
-          class: target.className || undefined,
-        },
-      };
+        const breadcrumb: Breadcrumb = {
+          category: "ui.click",
+          message: getElementDescription(target),
+          data: {
+            tag: target.tagName.toLowerCase(),
+            id: target.id || undefined,
+            class: classOf(target) || undefined,
+          },
+        };
 
-      coreAddBreadcrumb(breadcrumb);
+        coreAddBreadcrumb(breadcrumb);
+      } catch {
+        // a listener of the SDK never throws into the page
+      }
     };
     stops.add(listen(typeof document === "undefined" ? undefined : document, "click", onClick));
   }
@@ -162,20 +166,24 @@ export function init(config: BrowserConfig = {}): void {
   // Input tracking (masked)
   if (trackInputs) {
     const onInput = (event: Event): void => {
-      const target = event.target as HTMLInputElement;
-      if (!target) return;
+      try {
+        const target = event.target as HTMLInputElement;
+        if (typeof target?.tagName !== "string") return;
 
-      const breadcrumb: Breadcrumb = {
-        category: "ui.input",
-        message: getElementDescription(target),
-        data: {
-          tag: target.tagName.toLowerCase(),
-          type: target.type || "text",
-          // Never log actual values
-        },
-      };
+        const breadcrumb: Breadcrumb = {
+          category: "ui.input",
+          message: getElementDescription(target),
+          data: {
+            tag: target.tagName.toLowerCase(),
+            type: target.type || "text",
+            // Never log actual values
+          },
+        };
 
-      coreAddBreadcrumb(breadcrumb);
+        coreAddBreadcrumb(breadcrumb);
+      } catch {
+        // a listener of the SDK never throws into the page
+      }
     };
     stops.add(listen(typeof document === "undefined" ? undefined : document, "input", onInput));
   }
@@ -196,13 +204,19 @@ export function init(config: BrowserConfig = {}): void {
 // Helpers
 // =============================================================================
 
+/** The class attribute as a string: on an SVG element `className` is an object, not a string. */
+function classOf(el: Element): string {
+  return el.getAttribute?.("class") ?? "";
+}
+
 function getElementDescription(el: HTMLElement): string {
   let description = el.tagName.toLowerCase();
+  const cls = classOf(el);
 
   if (el.id) {
     description += `#${el.id}`;
-  } else if (el.className) {
-    description += `.${el.className.split(" ")[0]}`;
+  } else if (cls) {
+    description += `.${cls.split(" ")[0]}`;
   }
 
   // Add text content for buttons/links
