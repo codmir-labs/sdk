@@ -20,8 +20,12 @@ export const DEFAULT_DSN = "https://www.codmir.com/api/v1/overseer";
 export const MAX_BATCH_EVENTS = 100;
 /** UTF-8 bytes per request body: a margin under the 256 KB the server takes before it answers 413. */
 export const MAX_BATCH_BYTES = 240_000;
-/** Events kept while the network is down. Past this the oldest are dropped. */
+/** Errors, messages and every other event except a transaction kept while the network is down. Past this the oldest of them are dropped. */
 export const MAX_QUEUE_SIZE = 1000;
+/** Transactions kept while the network is down, a cap of their own so that they never push errors out. Past this the oldest transactions are dropped. */
+export const MAX_QUEUED_TRANSACTIONS = 200;
+/** Wire bytes the whole queue may hold while the network is down. Past this the oldest transactions are dropped first, then the oldest of everything else. */
+export const MAX_QUEUE_BYTES = 5 * 1024 * 1024;
 /** Retry delay is `RETRY_BASE_MS * 2^attempt`, never more than `RETRY_MAX_MS`. */
 export const RETRY_BASE_MS = 1000;
 export const RETRY_MAX_MS = 60_000;
