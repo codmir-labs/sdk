@@ -330,9 +330,12 @@ sequenceDiagram
     C->>B: stackFor(err.stack), sanitizeExtra(context), requestOf(), envContexts()
     B-->>C: frames, cleaned extra, request url and method, contexts
     opt startReplay() is recording
-        C->>H: getReplayId() and onError(eventId)
+        C->>H: getReplayId()
     end
     C->>C: sendEvent() runs beforeSend(event), then enqueue()
+    opt the event was queued and startReplay() is recording
+        C->>H: onError(eventId)
+    end
     C-->>App: event id
     Note over C: flush timer, 1 s after the first unsent capture; at once when a batch is full
     C->>C: flush() then drain() then sendBatch(up to 100 events)
@@ -980,7 +983,8 @@ startReplay();
 ```
 
 Both rates at 0 record nothing and never load rrweb. While a replay records, every error event carries
-`tags.replay_id`, and the replay's segments list the ids of the errors captured while they recorded.
+`tags.replay_id`, and the replay's segments list the ids of the errors that were queued while they recorded: an error
+your `beforeSend` drops (or one that is rate limited) never makes an on-error replay upload.
 `startReplay()` returns the replay id, or `null` when nothing records: no client, no client key, not in a browser, or
 neither rate hit.
 

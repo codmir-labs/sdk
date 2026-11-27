@@ -151,3 +151,75 @@ describe("an error before rrweb has loaded (on-error mode)", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe("an error that beforeSend drops", () => {
+  async function capture(beforeSend: (event: any) => any, replaysOnErrorSampleRate = 1) {
+    useFakeClock();
+    document.body.innerHTML = `<p>visible page text</p>`;
+    const { overseer, replay } = await load({ replaysOnErrorSampleRate, beforeSend });
+    replay.startReplay();
+    await settle();
+    const id = overseer.captureException(new Error("an error the app filters out"));
+    await vi.advanceTimersByTimeAsync(31_000);
+    return { id, overseer };
+  }
+
+  it("uploads no replay when the hook returns null", async () => {
+    await capture(() => null);
+    expect(ingestCalls()).toHaveLength(0);
+    expect(replayCalls()).toHaveLength(0);
+  });
+
+  it("uploads the replay, naming the error, when the hook keeps the event", async () => {
+    const { id } = await capture((event) => event);
+    const errors = ingestCalls().flatMap((c) => c.body.events).filter((e: any) => e.type === "error");
+    expect(errors).toHaveLength(1);
+    expect(replayCalls()).toHaveLength(1);
+    expect(replayCalls()[0].body.error_event_ids).toEqual([id]);
+    expect(errors[0].event.tags.replay_id).toBe(replayCalls()[0].body.replay_id);
+  });
+
+  it("uploads no replay when an async hook resolves null", async () => {
+    await capture(async () => null);
+    expect(replayCalls()).toHaveLength(0);
+  });
+
+  it("uploads the replay when an async hook resolves the event", async () => {
+    const { id } = await capture(async (event) => event);
+    expect(replayCalls()).toHaveLength(1);
+    expect(replayCalls()[0].body.error_event_ids).toEqual([id]);
+  });
+
+  it("uploads no replay when the hook throws", async () => {
+    await capture(() => {
+      throw new Error("hook bug");
+    });
+    expect(replayCalls()).toHaveLength(0);
+  });
+
+  it("uploads none for a README-style noise filter, however often the noise repeats", async () => {
+    useFakeClock();
+    const browser = await import("../../browser/index");
+    const replay = await import("../index");
+    browser.init({
+      dsn: DSN,
+      clientKey: "osk_test",
+      replaysOnErrorSampleRate: 1,
+      beforeSend(event: any) {
+        if (event.message?.includes("ResizeObserver loop")) return null;
+        return event;
+      },
+    } as any);
+    replay.startReplay();
+    await settle();
+    for (let i = 0; i < 30; i++) {
+      window.dispatchEvent(new ErrorEvent("error", { message: "ResizeObserver loop completed with undelivered notifications." }));
+      click();
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    expect(ingestCalls().flatMap((c) => c.body.events).filter((e: any) => e.type === "error")).toHaveLength(0);
+    expect(replayCalls()).toHaveLength(0);
+    browser.close();
+  });
+});
