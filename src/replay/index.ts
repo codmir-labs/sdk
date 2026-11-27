@@ -534,6 +534,8 @@ export class ReplayRecorder {
           if (safe) this.onEvent(safe, isCheckout === true);
         },
         ...rrwebPrivacy,
+        // rrweb drops the meta tags that hold verification tokens (a CSRF token among them); the composed filter blanks the rest
+        slimDOMOptions: { headMetaVerification: true },
         // On-error mode needs a full snapshot at the start of whatever window is uploaded; a session takes one every
         // few minutes, so one lost segment costs a few minutes of the replay, not the rest of it.
         checkoutEveryNms: this.buffered ? Math.max(1000, Math.floor(this.config.bufferDuration / 2)) : SESSION_CHECKOUT_MS,

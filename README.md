@@ -1204,7 +1204,8 @@ page hide sends what waits in the queue, oldest first, then the new segment; a h
 
 Privacy is on by default: every input is masked, a picked radio button or checkbox is not recorded, `[data-private]`
 and `.private` text is masked, `[data-codmir-block]` subtrees are not recorded, and password fields are masked
-whatever the config says (the exact rules are [below](#what-a-recording-holds)). Pass
+whatever the config says (the exact rules are [below](#what-a-recording-holds)). Meta tags carrying a token (CSRF, XSRF,
+nonce, secret or key) are never recorded. Pass
 `startReplay({ privacy: { maskSelectors: [...], blockSelectors: [...] } })` to change the selectors:
 
 ```ts
