@@ -30,6 +30,16 @@ let respond: (call: Call) => Response;
 let online: boolean;
 
 const ok = () => new Response(JSON.stringify({ stored: true }), { status: 202 });
+const refused400 = () => new Response("", { status: 400 });
+/** Eleven segments of an offline page: the first goes to the retry queue, and the eleventh is one too many, so the queue is dropped. */
+async function loseSegmentsOffline() {
+  online = false;
+  respond = offlineError;
+  for (let i = 0; i < 11; i++) {
+    click();
+    await tick();
+  }
+}
 const offlineError = (): never => {
   throw new TypeError("Failed to fetch");
 };
@@ -150,11 +160,7 @@ describe("a snapshot that cannot fit one request", () => {
 describe("a lost segment is followed by a fresh full snapshot", () => {
   it("waits while offline, takes one snapshot on the online event, and no stored segment holds the lost state", async () => {
     const { recorder, snapshot } = await start();
-    online = false;
-    respond = offlineError;
-    click();
-    await tick(); // segment 0 goes out and fails, twice, 1 s apart
-    await tick(1_100);
+    await loseSegmentsOffline(); // segment 0 goes out and fails, twice, 1 s apart; 1 to 10 queue behind it and are dropped
     expect(calls.map((c) => c.body.segment)).toEqual([0, 0]);
     expect(snapshot).not.toHaveBeenCalled();
 
@@ -182,10 +188,7 @@ describe("a lost segment is followed by a fresh full snapshot", () => {
 
   it("takes the snapshot at the first flush back online when no online event came", async () => {
     const { recorder, snapshot } = await start();
-    online = false;
-    respond = offlineError;
-    await tick();
-    await tick(1_100);
+    await loseSegmentsOffline();
     expect(snapshot).not.toHaveBeenCalled();
 
     online = true;
@@ -199,11 +202,11 @@ describe("a lost segment is followed by a fresh full snapshot", () => {
 
   it("takes one snapshot for several segments lost together", async () => {
     const { recorder, snapshot } = await start({ maxSegmentEvents: 2 });
-    respond = (call) => (call.body.segment <= 2 ? offlineError() : ok());
+    respond = (call) => (call.body.segment <= 2 ? refused400() : ok());
     for (let i = 0; i < 5; i++) click();
     await tick(0);
     expect(new Set(calls.map((c) => c.body.segment)).size).toBeGreaterThanOrEqual(3);
-    await tick(1_100); // every one of them fails its second try
+    await tick(10); // every one of them is refused
     expect(snapshot).toHaveBeenCalledTimes(1);
 
     await tick();
@@ -232,19 +235,16 @@ describe("a lost segment is followed by a fresh full snapshot", () => {
 
   it("recovers in the post-error window of on-error mode", async () => {
     const { recorder, snapshot } = await start({ sessionSampleRate: 0, errorSampleRate: 1 });
-    respond = offlineError;
+    respond = refused400;
     recorder.markError("0123456789abcdef");
-    await tick(1_100); // the history segment failed
+    await tick(10); // the history segment failed
     expect(snapshot).toHaveBeenCalledTimes(1);
     recorder.stop();
   });
 
   it("takes no snapshot after stop, even when the page comes back online", async () => {
     const { recorder, snapshot } = await start();
-    online = false;
-    respond = offlineError;
-    await tick();
-    await tick(1_100);
+    await loseSegmentsOffline();
     recorder.stop();
     online = true;
     window.dispatchEvent(new Event("online"));
@@ -281,12 +281,9 @@ describe("recovery is bounded", () => {
     expect(snapshot).toHaveBeenCalledTimes(3); // the checkout is rrweb's own, not a recovery
 
     // a stored segment reset the count: a later single loss recovers at once
-    respond = () => {
-      throw new TypeError("Failed to fetch");
-    };
+    respond = unauthorized;
     click();
     await tick();
-    await tick(1_100);
     expect(snapshot).toHaveBeenCalledTimes(4);
     recorder.stop();
   });

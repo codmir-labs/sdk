@@ -21,14 +21,30 @@ export const MAX_EVENTS_PER_SEGMENT = 10_000;
 /** `fetch(..., { keepalive: true })` bodies are limited to 64 KB by browsers. */
 export const KEEPALIVE_MAX_BYTES = 60_000;
 export const RETRY_DELAY_MS = 1000;
+/** A 429 without a readable `Retry-After`: the server's rate window is 60 s. */
+export const DEFAULT_RETRY_AFTER_MS = 60_000;
+/** A `Retry-After` is trusted between these bounds. */
+export const MIN_RETRY_AFTER_MS = 1000;
+export const MAX_RETRY_AFTER_MS = 10 * 60_000;
 /** The server accepts at most 500; the newest are kept. */
 export const MAX_ERROR_EVENT_IDS = 500;
 
 /**
+ * The segment was not stored but may be later: the server is rate limiting (`delayMs` is its `Retry-After`, or 60 s
+ * without a readable one), or the request failed twice (a network error, a 5xx or a 408; `delayMs` is `null`, the caller
+ * picks a backoff).
+ */
+export interface RetryLater {
+  outcome: "retry_later";
+  delayMs: number | null;
+}
+
+/**
  * `stored`: accepted. `refused`: 202 `{stored:false}` (no card, or no credits): stop uploading this session.
  * `too_large`: 413, the body is over what the server takes; the caller may send it in halves. `failed`: dropped.
+ * {@link RetryLater}: try again later. Internal: the replay entry does not export this type.
  */
-export type UploadOutcome = "stored" | "refused" | "too_large" | "failed";
+export type UploadOutcome = "stored" | "refused" | "too_large" | "failed" | RetryLater;
 
 export interface RrwebEvent {
   type: number;
@@ -142,19 +158,51 @@ const sleep = (ms: number) =>
     (t as { unref?: () => void }).unref?.();
   });
 
-const isRetryable = (status: number) => status >= 500 || status === 408 || status === 429;
+const isRetryable = (status: number) => status >= 500 || status === 408;
 const TOO_LARGE = 413;
+const RATE_LIMITED = 429;
 
 /**
- * POSTs one segment. A network error or a retryable status is retried once; everything else, and the second
- * failure, drops the segment, except a 413, which is not retried and resolves `too_large` so the caller can split it.
- * Resolves the {@link UploadOutcome}. Never rejects.
+ * How long a `Retry-After` header asks to wait, in ms, clamped to 1 s .. 10 min: whole seconds, or an HTTP date.
+ * `null` when it is absent or unreadable.
+ */
+export function parseRetryAfter(value: string | null | undefined, now = Date.now()): number | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (text === "") return null;
+  let ms: number;
+  if (/^\d+$/.test(text)) ms = Number(text) * 1000;
+  else {
+    if (!/[a-z]/i.test(text)) return null; // an HTTP date has a month and a day name; "-3" is no date
+    const at = Date.parse(text);
+    if (Number.isNaN(at)) return null;
+    ms = at - now;
+  }
+  return Math.min(MAX_RETRY_AFTER_MS, Math.max(MIN_RETRY_AFTER_MS, ms));
+}
+
+type Attempt =
+  | { kind: "ok" | "refused" | "retry" | "drop" | "too_large" }
+  | { kind: "rate_limited"; delayMs: number };
+
+/**
+ * POSTs one segment. A network error or a 5xx/408 is retried once, about 1 s later; a second failure resolves
+ * {@link RetryLater} with no delay. A 429 is not retried at once: it resolves {@link RetryLater} with the server's
+ * `Retry-After` (60 s without one). A 413 is not retried and resolves `too_large` so the caller can split it; any other
+ * status drops the segment (`failed`). Never rejects.
  *
- * `hiding` is the pagehide path: the request goes out with `keepalive` when the body fits 64 KB (UTF-8 bytes), no retry.
+ * `hiding` is the pagehide path: the request goes out with `keepalive` when the body fits 64 KB (UTF-8 bytes), no retry,
+ * and every failure, a 429 included, resolves `failed`: the page is going away, so nothing waits.
+ * `immediateRetry: false` skips the 1 s retry (the caller's queue paces its own attempts).
  * `sendBeacon` is deliberately not used: it cannot set `x-overseer-key`, so the server would see an unkeyed
  * request (the same reason the error transport does not use it).
  */
-export async function postSegment(target: UploadTarget, body: SegmentUploadBody, hiding = false): Promise<UploadOutcome> {
+export async function postSegment(
+  target: UploadTarget,
+  body: SegmentUploadBody,
+  hiding = false,
+  immediateRetry = true,
+): Promise<UploadOutcome> {
   if (typeof fetch !== "function") return "failed";
   const payload = JSON.stringify(body);
   const keepalive = hiding && utf8Bytes(payload) <= KEEPALIVE_MAX_BYTES;
@@ -162,7 +210,7 @@ export async function postSegment(target: UploadTarget, body: SegmentUploadBody,
     if (target.debug) console.log("[Overseer replay]", ...args);
   };
 
-  const attempt = async (): Promise<"ok" | "refused" | "retry" | "drop" | "too_large"> => {
+  const attempt = async (): Promise<Attempt> => {
     try {
       const res = await fetch(target.url, {
         method: "POST",
@@ -173,24 +221,42 @@ export async function postSegment(target: UploadTarget, body: SegmentUploadBody,
       if (res.ok) {
         // 202 `{ stored: false, reason }` is the pay-as-you-go refusal: nothing was stored, do not keep sending.
         const answer = (await res.json().catch(() => null)) as { stored?: unknown } | null;
-        return answer?.stored === false ? "refused" : "ok";
+        return { kind: answer?.stored === false ? "refused" : "ok" };
       }
       log(`segment ${body.segment} answered ${res.status}`);
-      if (res.status === TOO_LARGE) return "too_large";
-      return isRetryable(res.status) ? "retry" : "drop";
+      if (res.status === TOO_LARGE) return { kind: "too_large" };
+      if (res.status === RATE_LIMITED) {
+        const header = res.headers?.get?.("Retry-After");
+        return { kind: "rate_limited", delayMs: parseRetryAfter(header) ?? DEFAULT_RETRY_AFTER_MS };
+      }
+      return { kind: isRetryable(res.status) ? "retry" : "drop" };
     } catch (err) {
       log("segment upload failed", err);
-      return "retry";
+      return { kind: "retry" };
     }
   };
 
   try {
-    let outcome = await attempt();
-    if (outcome === "retry" && !hiding) {
+    let result = await attempt();
+    if (hiding && (result.kind === "retry" || result.kind === "rate_limited")) return "failed";
+    if (result.kind === "retry" && immediateRetry) {
       await sleep(RETRY_DELAY_MS);
-      outcome = await attempt();
+      result = await attempt();
     }
-    return outcome === "ok" ? "stored" : outcome === "refused" ? "refused" : outcome === "too_large" ? "too_large" : "failed";
+    switch (result.kind) {
+      case "ok":
+        return "stored";
+      case "refused":
+        return "refused";
+      case "too_large":
+        return "too_large";
+      case "rate_limited":
+        return { outcome: "retry_later", delayMs: result.delayMs };
+      case "retry":
+        return { outcome: "retry_later", delayMs: null };
+      default:
+        return "failed";
+    }
   } catch {
     return "failed";
   }
