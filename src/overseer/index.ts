@@ -39,6 +39,7 @@ import {
   buildBody,
   fitEventToBytes,
   isRetryableStatus,
+  requestTimeoutMs,
   readDroppedEvents,
   retryDelayMs,
   sdkFingerprint,
@@ -237,6 +238,16 @@ const DEFAULT_PER_MINUTE = 100;
 const MAX_REPORTED_IDS = 1000;
 /** Above this many groups, groups with no event in the last minute are forgotten. */
 const MAX_TRACKED_GROUPS = 1000;
+
+/** True when this runtime's `fetch` takes `signal`. One from another realm (jsdom's, beside Node's fetch) makes it throw. */
+function signalAccepted(signal: AbortSignal): boolean {
+  if (typeof Request !== "function") return false;
+  try {
+    return !!new Request("http://localhost/", { signal });
+  } catch {
+    return false;
+  }
+}
 
 class OverseerClient {
   private lastError: { id: string; at: number } | null = null;
@@ -949,12 +960,39 @@ class OverseerClient {
       return { kind: "ok" };
     }
 
+    // A request that never answers is given up on and retried, so it cannot hold back every later flush. The race frees
+    // the queue in every runtime; the signal, where this runtime's fetch takes it, also frees the socket.
+    const limit = requestTimeoutMs();
+    const abort = typeof AbortController === "function" ? new AbortController() : null;
+    const signal = abort && signalAccepted(abort.signal) ? abort.signal : undefined;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<{ kind: "retry" }>((resolve) => {
+      deadline = setTimeout(() => {
+        this.log(`No answer in ${limit} ms; retrying`);
+        resolve({ kind: "retry" });
+        abort?.abort();
+      }, limit);
+      // Never keep a Node process alive for a request that may not answer.
+      (deadline as { unref?: () => void }).unref?.();
+    });
+    try {
+      return await Promise.race([this.sendBatchOnce(events, signal), timedOut]);
+    } finally {
+      clearTimeout(deadline);
+    }
+  }
+
+  private async sendBatchOnce(
+    events: QueuedEvent[],
+    signal: AbortSignal | undefined,
+  ): Promise<{ kind: "ok" } | { kind: "drop" } | { kind: "too_large" } | { kind: "retry"; retryAfterMs?: number }> {
     let res: Response;
     try {
       res = await fetch(this.endpoint(), {
         method: "POST",
         headers: this.requestHeaders(),
         body: this.body(events),
+        ...(signal ? { signal } : {}),
       });
     } catch (err) {
       this.log("Network error:", err);

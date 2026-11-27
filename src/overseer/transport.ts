@@ -22,6 +22,10 @@ export const MAX_QUEUE_SIZE = 1000;
 /** Retry delay is `RETRY_BASE_MS * 2^attempt`, never more than `RETRY_MAX_MS`. */
 export const RETRY_BASE_MS = 1000;
 export const RETRY_MAX_MS = 60_000;
+/** Time one request may take before it is given up on and retried: 10 s under Node, 30 s in a browser and in React Native. */
+export function requestTimeoutMs(): number {
+  return typeof process !== "undefined" && process.versions?.node ? 10_000 : 30_000;
+}
 /** `fetch(..., { keepalive: true })` bodies are limited to 64 KB by browsers; stay under it. */
 export const KEEPALIVE_MAX_BYTES = 60_000;
 

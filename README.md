@@ -192,14 +192,16 @@ try {
   captureException(err);
 }
 
-await flush(); // before a short-lived process exits
+await flush(2000); // before a short-lived process exits; gives up after 2 s
 ```
 
 **3. Check the setup** with [`verify()`](#verify-your-setup), then pick your framework below.
 
 > [!TIP]
 > Events are sent at most one second after the first unsent capture, or at once when a batch is full, in batches. A script that exits right away should
-> `await flush()` first, or the queue dies with the process.
+> `await flush(2000)` first, or the queue dies with the process. A request that is not answered within 10 seconds in Node (30 in a browser
+> and in React Native) is given up on and retried with the usual backoff, so one request that hangs never stops later sends; `flush(timeout)`
+> resolves `false` at its timeout and leaves the events queued for that retry.
 
 ## Platforms
 
@@ -800,7 +802,7 @@ setTag('queue', 'invoices');
 
 process.on('uncaughtException', async (err) => {
   captureException(err);
-  await flush();
+  await flush(2000);
   process.exit(1);
 });
 
@@ -1962,7 +1964,7 @@ only when `cloud` is on.
    events are logged in debug mode and dropped.
 3. Captures before `init()` are ignored: `captureException` returns `''`.
 4. `sampleRate` below 1 drops a share of errors on purpose, and `enabled: false` drops all of them.
-5. A short-lived script must `await flush()` before it exits.
+5. A short-lived script must `await flush(2000)` before it exits.
 6. A `beforeSend` that returns `null` drops the event.
 
 </details>
@@ -2059,7 +2061,7 @@ Nothing is written to disk.
 <details>
 <summary><b>Does it work in serverless functions?</b></summary>
 
-Yes, with one rule: `await flush()` before the function returns, because events are sent one second after the last
+Yes, with one rule: `await flush(2000)` before the function returns, because events are sent one second after the last
 capture and a frozen function never gets that second.
 
 </details>
