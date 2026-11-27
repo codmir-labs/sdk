@@ -2061,8 +2061,8 @@ Nothing is written to disk.
 <details>
 <summary><b>Does it work in serverless functions?</b></summary>
 
-Yes, with one rule: `await flush(2000)` before the function returns, because events are sent one second after the last
-capture and a frozen function never gets that second.
+Yes, with one rule: `await flush(2000)` before the function returns, because events are sent up to one second after the first
+unsent capture and a frozen function never gets that second.
 
 </details>
 
