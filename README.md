@@ -195,6 +195,13 @@ try {
 await flush(2000); // before a short-lived process exits; gives up after 2 s
 ```
 
+Anything can be thrown, and `captureException` takes any of it. An `Error` (also one from an iframe or a `vm` context) keeps its type, message and
+stack. An error event (`ErrorEvent`, or an object with an `error` that is an error) is the error it holds, and a `PromiseRejectionEvent` its reason.
+A plain object is captured under its `message` (else `Object captured with keys: a, b, c`, the first 10 keys) and its `name` (else `Error`), with a
+cleaned copy in `extra.thrown` (secret keys dropped, depth capped). A string is the message; any other value is its string. For a value that is not an
+error the stack starts at your call to `captureException`, never inside the SDK, so two such captures from two functions are two places; a global
+handler's rejection with no error in it has no frames, and a window `error` with none has the one frame the event names.
+
 **3. Check the setup** with [`verify()`](#verify-your-setup), then pick your framework below.
 
 > [!TIP]

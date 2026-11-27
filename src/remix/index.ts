@@ -50,7 +50,7 @@ import {
   type SeverityLevel,
 } from "../overseer/index";
 import { listen, Stops } from "../overseer/lifecycle";
-import { withHint, crash } from "../overseer/capture-hint";
+import { withHint, crash, eventFrame } from "../overseer/capture-hint";
 import { trackNavigation } from "../overseer/navigation";
 import { scrubUrl } from "../overseer/url-scrub";
 
@@ -215,10 +215,7 @@ export function wrapLoader<T extends DataFunction>(loader: T): T {
       return await loader(args);
     } catch (error) {
       if (remixConfig.captureLoaderErrors) {
-        coreCaptureException(
-          error instanceof Error ? error : new Error(String(error)),
-          withHint({}, crash("remix-loader")),
-        );
+        coreCaptureException(error, withHint({}, crash("remix-loader", undefined, "none")));
       }
       throw error;
     }
@@ -261,7 +258,7 @@ export function wrapAction<T extends DataFunction>(action: T): T {
       return await action(args);
     } catch (error) {
       if (remixConfig.captureActionErrors) {
-        const context: Record<string, unknown> = withHint({}, crash("remix-action"));
+        const context: Record<string, unknown> = withHint({}, crash("remix-action", undefined, "none"));
 
         // Capture form data keys (not values) for context
         try {
@@ -273,7 +270,7 @@ export function wrapAction<T extends DataFunction>(action: T): T {
           // formData() may fail if body was already consumed — that's fine
         }
 
-        coreCaptureException(error instanceof Error ? error : new Error(String(error)), context);
+        coreCaptureException(error, context);
       }
       throw error;
     }
@@ -347,14 +344,14 @@ export function setupBrowserTracking(): void {
   // Global error handler
   stops.add(
     listen(window, "error", (event: ErrorEvent) => {
-      coreCaptureException(event.error || event.message, withHint({}, crash("onerror")));
+      coreCaptureException(event.error || event.message, withHint({}, crash("onerror", undefined, eventFrame(event))));
     }),
   );
 
   // Unhandled rejection handler
   stops.add(
     listen(window, "unhandledrejection", (event: PromiseRejectionEvent) => {
-      coreCaptureException(event.reason, withHint({}, crash("onunhandledrejection")));
+      coreCaptureException(event.reason, withHint({}, crash("onunhandledrejection", undefined, "none")));
     }),
   );
 

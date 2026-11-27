@@ -28,6 +28,7 @@ import { PatchRuntime, type SelfHealingConfig } from "./patch-runtime";
 import { getRequestScope } from "./request-scope";
 import { sanitizeExtra } from "./sanitize-extra";
 import { readHint } from "./capture-hint";
+import { normalizeThrown, syntheticStack, type Caller } from "./thrown-value";
 import { browserRequest, envContexts } from "./runtime-context";
 import { addSourceContext } from "./source-context";
 import { parseStackTrace } from "./stack";
@@ -361,13 +362,24 @@ class OverseerClient {
   }
 
   captureException(error: Error | unknown, context?: Record<string, unknown>): string {
+    return this.captureFrom(error, context, this.captureException);
+  }
+
+  /**
+   * `captureException` for a `caller` that is the function the app called (this method, or the module's own
+   * `captureException`): a stack made up for a thrown value that is not an error starts at that function's caller.
+   * Not part of the stable API.
+   */
+  captureFrom(error: Error | unknown, context: Record<string, unknown> | undefined, caller: Caller): string {
     if (!this.config.enabled) return "";
     if (!this.shouldSample(this.config.sampleRate)) return "";
 
     const eventId = generateId();
-    const err = error instanceof Error ? error : new Error(String(error));
     // Set by an integration only (a symbol key): a caller's own `handled` or `mechanism` is plain data in `extra`.
     const hint = readHint(context);
+    const err = normalizeThrown(error);
+    // Kept in this function (not in a helper): the stack of an error made up for the value starts at the app's call.
+    const stack = err.stack ?? syntheticStack(err.name, err.message, caller, hint?.frames);
 
     const event: OverseerEvent = {
       id: eventId,
@@ -378,13 +390,14 @@ class OverseerClient {
       exception: {
         type: err.name,
         value: err.message,
-        stacktrace: this.stackFor(err.stack),
+        stacktrace: this.stackFor(stack),
         mechanism: hint?.mechanism ?? { type: "generic", handled: true },
       },
       user: this.userOf() || undefined,
       tags: this.tagsOf(),
       extra: {
         // No request, headers, cookies, query, params or body, whatever the caller passed.
+        ...(err.thrown === undefined ? {} : sanitizeExtra({ thrown: err.thrown })),
         ...sanitizeExtra(context),
         conversationId: this.conversationId,
         sessionId: this.sessionId,
@@ -1105,7 +1118,7 @@ export function getClient(): OverseerClient | null {
 }
 
 export function captureException(error: Error | unknown, context?: Record<string, unknown>): string {
-  return client?.captureException(error, context) || "";
+  return client?.captureFrom(error, context, captureException) || "";
 }
 
 export function captureMessage(message: string, level?: SeverityLevel): string {
