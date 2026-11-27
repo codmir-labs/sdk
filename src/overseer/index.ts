@@ -282,7 +282,8 @@ export interface FeedbackContext {
 }
 
 /** Breadcrumbs kept, process-wide and per request. */
-const MAX_BREADCRUMBS = 100;
+// The server keeps an error's last 20 breadcrumbs, so the SDK neither buffers nor sends more.
+const MAX_BREADCRUMBS = 20;
 const RATE_WINDOW_MS = 60_000;
 const DEFAULT_PER_GROUP_PER_MINUTE = 10;
 const DEFAULT_PER_MINUTE = 100;
@@ -618,7 +619,7 @@ class OverseerClient {
     return { ...this.tags, ...getRequestScope()?.tags };
   }
 
-  /** The breadcrumbs an event gets: the process-wide ones, then the request's own, the newest 100. A copy. */
+  /** The breadcrumbs an event gets: the process-wide ones, then the request's own, the newest 20. A copy. */
   private breadcrumbsOf(): Breadcrumb[] {
     const own = getRequestScope()?.breadcrumbs;
     return own ? [...this.breadcrumbs, ...own].slice(-MAX_BREADCRUMBS) : [...this.breadcrumbs];

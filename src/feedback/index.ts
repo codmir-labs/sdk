@@ -12,7 +12,7 @@
  */
 
 import type { FeedbackContext } from "../overseer/index";
-import { resolveUrl, shouldPropagate } from "../tracing/url-match";
+import { isSdkRequest, resolveUrl, shouldPropagate } from "../tracing/url-match";
 import { SDK_INFO } from "../version";
 
 export interface FeedbackStorage {
@@ -162,8 +162,6 @@ function contextOf(): FeedbackContext | null {
 
 /** The newest request breadcrumb of the last 5 minutes that failed with an answer, to this page or a propagation target. */
 function lastFailed(ctx: FeedbackContext, now: number): unknown {
-  const base = resolveUrl(baseOf(ctx.dsn));
-  const dir = base?.pathname.replace(/\/$/, "");
   // our own breadcrumbs: plain objects the client built, so no getter can throw here
   for (const crumb of [...ctx.breadcrumbs].reverse()) {
     const data: { url?: unknown; status?: unknown; method?: unknown } = crumb.data ?? {};
@@ -172,7 +170,7 @@ function lastFailed(ctx: FeedbackContext, now: number): unknown {
     if (!/^(fetch|xhr)$/.test(crumb.category as string) || !at || !url || now - Date.parse(at) > 300000 || !isStatus(data.status, 400)) continue;
     if (!shouldPropagate(url, ctx.tracePropagationTargets)) continue;
     // the SDK's own requests (ingest, replay, feedback) are not the app's
-    if (base && url.origin === base.origin && url.pathname.startsWith(`${dir}/`)) continue;
+    if (isSdkRequest(url, ctx.dsn)) continue;
     return { method: data.method, path: url.pathname, status: data.status, at };
   }
   return undefined;

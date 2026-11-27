@@ -27,7 +27,7 @@ export interface RequestScope {
   user?: UserContext | null;
   /** The request's own tags, set by `setTag` and `setTags` inside it. They win over the process-wide tags, key by key. */
   tags?: Record<string, string>;
-  /** The request's own breadcrumbs, at most the newest 100, which an event carries after the process-wide ones. */
+  /** The request's own breadcrumbs, at most the newest 20, which an event carries after the process-wide ones. */
   breadcrumbs?: Breadcrumb[];
   /** The request's conversation id, set by `setConversationId` inside it. `undefined`: not set, so the client's is used; `null`: none. */
   conversationId?: string | null;

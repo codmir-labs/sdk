@@ -34,15 +34,15 @@ describe("remix navigation breadcrumbs", () => {
     window.history.replaceState(null, "", `?only=${"QSECRET"}`);
     window.history.pushState(null, "", `https://app.example.com/abs${Q}${F}`.replace("https://app.example.com", window.location.origin));
     const list = crumbs();
-    expect(list.find((b) => b.message === "pushState")!.data).toEqual({ to: `${window.location.origin}/next/page` });
-    expect(list.filter((b) => b.message === "replaceState").at(-1)!.data!.to).toMatch(/^http:\/\/localhost(:\d+)?\/next\/page$/);
-    expect(list.filter((b) => b.message === "pushState").at(-1)!.data!.to).toMatch(/\/abs$/);
+    expect(list.find((b) => b.message?.startsWith("pushState "))!.data).toEqual({ to: `${window.location.origin}/next/page` });
+    expect(list.filter((b) => b.message?.startsWith("replaceState ")).at(-1)!.data!.to).toMatch(/^http:\/\/localhost(:\d+)?\/next\/page$/);
+    expect(list.filter((b) => b.message?.startsWith("pushState ")).at(-1)!.data!.to).toMatch(/\/abs$/);
   });
 
   it("popstate is scrubbed", () => {
     window.history.replaceState(null, "", `/back${Q}${F}`);
     window.dispatchEvent(new PopStateEvent("popstate"));
-    const pop = crumbs().filter((b) => b.message === "popstate").at(-1)!;
+    const pop = crumbs().filter((b) => b.message?.startsWith("popstate ")).at(-1)!;
     expect(pop.data).toEqual({ to: `${window.location.origin}/back` });
   });
 });

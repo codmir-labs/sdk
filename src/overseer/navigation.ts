@@ -26,7 +26,7 @@ export function trackNavigation(): Stop {
     function (this: History, ...args) {
       const result = original.apply(this, args);
       const now = here();
-      if (now !== undefined) addBreadcrumb({ category: "navigation", message, data: { to: scrubUrl(args[2], now) } });
+      if (now !== undefined) addBreadcrumb({ category: "navigation", message: `${message} ${window.location.pathname}`, data: { to: scrubUrl(args[2], now) } });
       return result;
     };
   const stops = [
@@ -34,7 +34,7 @@ export function trackNavigation(): Stop {
     patch(history, "replaceState", move("replaceState")),
     listen(typeof window === "undefined" ? undefined : window, "popstate", () => {
       const now = here();
-      if (now !== undefined) addBreadcrumb({ category: "navigation", message: "popstate", data: { to: scrubUrl(now) } });
+      if (now !== undefined) addBreadcrumb({ category: "navigation", message: `popstate ${window.location.pathname}`, data: { to: scrubUrl(now) } });
     }),
   ];
   return () => stops.forEach((stop) => stop());

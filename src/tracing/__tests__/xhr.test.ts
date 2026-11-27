@@ -163,7 +163,7 @@ describe("xhr http.client spans", () => {
     await flush();
     expect(sentTransactions(calls)).toHaveLength(0);
     const crumbs = (getClient() as any).breadcrumbs;
-    expect(crumbs.some((b: any) => b.category === "xhr" && b.message === "GET /api/quiet")).toBe(true);
+    expect(crumbs.some((b: any) => b.category === "xhr" && b.message === "GET /api/quiet 200")).toBe(true);
   });
 });
 
@@ -173,7 +173,7 @@ describe("xhr patching", () => {
     outcome = { status: 404, event: "load" };
     await xhr("/api/missing", "get");
     const crumb = (getClient() as any).breadcrumbs.find((b: any) => b.category === "xhr");
-    expect(crumb).toMatchObject({ message: "get /api/missing", level: "error", data: { method: "get", url: "/api/missing", status: 404 } });
+    expect(crumb).toMatchObject({ message: "get /api/missing 404", level: "error", data: { method: "get", url: "/api/missing", status: 404 } });
     expect(typeof crumb.data.duration).toBe("number");
   });
 

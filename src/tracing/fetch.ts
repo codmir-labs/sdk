@@ -2,7 +2,7 @@ import { addBreadcrumb, getClient } from "../overseer/index";
 import { isLive, type Installed } from "../overseer/lifecycle";
 import { scrubUrl } from "../overseer/url-scrub";
 import { getActiveSpan } from "./context";
-import { resolveUrl, shouldPropagate } from "./url-match";
+import { isSdkRequest, resolveUrl, shouldPropagate } from "./url-match";
 
 export { resolveUrl, shouldPropagate };
 
@@ -14,21 +14,16 @@ export interface InstrumentFetchOptions {
 const INSTALLED = Symbol.for("@codmir/sdk.fetch-instrumented");
 type PatchedFetch = typeof fetch & { [INSTALLED]?: Installed };
 
-/** The ingest URL, and the feedback door next to it (`<base>/feedback`): requests the SDK makes itself are left alone. */
-export function isIngestUrl(url: URL): boolean {
+/** Whether a request is one the SDK makes itself (errors, replay, feedback) for the running client: never a breadcrumb or span. */
+export function isOwnRequest(url: URL): boolean {
   const ingest = getClient()?.getIngestUrl();
-  if (!ingest) return false;
-  const target = resolveUrl(ingest);
-  if (!target || url.origin !== target.origin) return false;
-  if (url.pathname === target.pathname) return true;
-  const feedback = `${target.pathname.replace(/\/ingest$/, "")}/feedback`;
-  return url.pathname === feedback || url.pathname.startsWith(`${feedback}/`);
+  return !!ingest && isSdkRequest(url, ingest);
 }
 
 /**
  * Wraps `globalThis.fetch` (browser, and Node 18+): every request made while a span is active becomes an
  * `http.client` child span and, for same-origin URLs and `tracePropagationTargets`, carries a `traceparent`
- * header naming that span. Requests to the Codmir ingest URL are left completely alone. Idempotent while its wrapper
+ * header naming that span. The SDK's own requests (ingest, replay, feedback) are left completely alone. Idempotent while its wrapper
  * works; returns a function that restores the previous fetch if the wrapper is on top, and otherwise leaves the wrapper
  * in place, passing every call on, so a patch over it (a second copy of the SDK) keeps working.
  */
@@ -47,7 +42,7 @@ export function instrumentFetch(options: InstrumentFetchOptions = {}): () => voi
     const rawUrl = scrubUrl(fullUrl);
     const method = (init?.method || (typeof input === "object" && "method" in input ? input.method : "") || "GET").toUpperCase();
     const url = resolveUrl(fullUrl);
-    if (!url || isIngestUrl(url)) return original.call(globalThis, input, init);
+    if (!url || isOwnRequest(url)) return original.call(globalThis, input, init);
 
     const parent = getActiveSpan();
     const span = parent?.startChild({ op: "http.client", name: `${method} ${url.pathname}` }) ?? null;
@@ -71,7 +66,7 @@ export function instrumentFetch(options: InstrumentFetchOptions = {}): () => voi
       if (breadcrumbs) {
         addBreadcrumb({
           category: "fetch",
-          message: `${method} ${rawUrl}`,
+          message: `${method} ${url.pathname} ${response.status}`,
           data: { method, url: rawUrl, status: response.status, duration: Date.now() - started },
           level: response.ok ? "info" : "error",
         });
@@ -82,7 +77,7 @@ export function instrumentFetch(options: InstrumentFetchOptions = {}): () => voi
       if (breadcrumbs) {
         addBreadcrumb({
           category: "fetch",
-          message: `${method} ${rawUrl}`,
+          message: `${method} ${url.pathname} failed`,
           data: {
             method,
             url: rawUrl,

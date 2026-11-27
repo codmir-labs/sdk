@@ -117,19 +117,19 @@ describe("breadcrumbs", () => {
     expect((eventOf("b:error").breadcrumbs ?? []).filter((c) => c.category === "fetch")).toEqual([]);
   });
 
-  it("(f) a request that adds 150 breadcrumbs sends the newest 100", async () => {
+  it("(f) a request that adds 150 breadcrumbs sends the newest 20", async () => {
     await serve("many", async () => {
       for (let i = 1; i <= 150; i++) crumb(`c-${i}`);
       boom("many:error");
     });
     await overseer.flush();
     const crumbs = crumbsOf("many:error");
-    expect(crumbs).toHaveLength(100);
-    expect(crumbs[0]).toBe("c-51");
-    expect(crumbs[99]).toBe("c-150");
+    expect(crumbs).toHaveLength(20);
+    expect(crumbs[0]).toBe("c-131");
+    expect(crumbs[19]).toBe("c-150");
   });
 
-  it("(f) process-wide breadcrumbs and the request's own are cut to the newest 100 together", async () => {
+  it("(f) process-wide breadcrumbs and the request's own are cut to the newest 20 together", async () => {
     for (let i = 1; i <= 60; i++) crumb(`g-${i}`);
     await serve("mix", async () => {
       for (let i = 1; i <= 60; i++) crumb(`r-${i}`);
@@ -137,10 +137,9 @@ describe("breadcrumbs", () => {
     });
     await overseer.flush();
     const crumbs = crumbsOf("mix:error");
-    expect(crumbs).toHaveLength(100);
-    expect(crumbs[0]).toBe("g-21");
-    expect(crumbs[40]).toBe("r-1");
-    expect(crumbs[99]).toBe("r-60");
+    expect(crumbs).toHaveLength(20);
+    expect(crumbs[0]).toBe("r-41");
+    expect(crumbs[19]).toBe("r-60");
   });
 });
 

@@ -2,7 +2,7 @@ import { addBreadcrumb, getClient } from "../overseer/index";
 import { isLive, type Installed } from "../overseer/lifecycle";
 import { scrubUrl } from "../overseer/url-scrub";
 import { getActiveSpan } from "./context";
-import { isIngestUrl, resolveUrl, shouldPropagate } from "./fetch";
+import { isOwnRequest, resolveUrl, shouldPropagate } from "./fetch";
 import type { Span } from "./span";
 
 export interface InstrumentXhrOptions {
@@ -28,7 +28,7 @@ interface XhrState {
 /**
  * Patches `XMLHttpRequest.prototype` once: every request made while a span is active becomes an `http.client`
  * child span that ends on `loadend` (load, error, abort and timeout alike), mirroring `instrumentFetch`, including
- * the `traceparent` rules and leaving the Codmir ingest URL alone. Also records the `xhr` breadcrumb. Idempotent while
+ * the `traceparent` rules and leaving the SDK's own requests alone. Also records the `xhr` breadcrumb. Idempotent while
  * its patch works; returns a function that restores the previous methods that are still its own, and makes the others
  * pass every call on.
  */
@@ -63,8 +63,10 @@ export function instrumentXhr(options: InstrumentXhrOptions = {}): () => void {
     if (!state) return originalSend.call(this, body);
     state.startTime = Date.now();
 
+    // The SDK's own requests (errors, replay, feedback) are neither a span nor a breadcrumb.
+    const own = !!state.url && isOwnRequest(state.url);
     let span: Span | null = null;
-    if (state.url && !isIngestUrl(state.url)) {
+    if (state.url && !own) {
       span = getActiveSpan()?.startChild({ op: "http.client", name: `${state.method} ${state.url.pathname}` }) ?? null;
       span?.setData("url", `${state.url.origin}${state.url.pathname}`);
       span?.setData("http.request.method", state.method);
@@ -82,10 +84,10 @@ export function instrumentXhr(options: InstrumentXhrOptions = {}): () => void {
           span.setStatus(this.status > 0 && this.status < 400 ? "ok" : "error");
           span.end();
         }
-        if (breadcrumbs) {
+        if (breadcrumbs && !own) {
           addBreadcrumb({
             category: "xhr",
-            message: `${state.rawMethod} ${state.rawUrl}`,
+            message: `${state.rawMethod} ${state.url?.pathname ?? state.rawUrl} ${this.status > 0 ? this.status : "failed"}`,
             data: { method: state.rawMethod, url: state.rawUrl, status: this.status, duration: Date.now() - state.startTime },
             level: this.status >= 400 ? "error" : "info",
           });
