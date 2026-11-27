@@ -12,6 +12,7 @@
  */
 
 import type { FeedbackContext } from "../overseer/index";
+import { feedbackUrl } from "../endpoints";
 import { isSdkRequest, resolveUrl, shouldPropagate } from "../tracing/url-match";
 import { SDK_INFO } from "../version";
 
@@ -149,7 +150,6 @@ const pathOf = (v: unknown): string | undefined => {
   }
 };
 const isStatus = (v: unknown, min: number): v is number => Number.isInteger(v) && (v as number) >= min && (v as number) <= 599;
-const baseOf = (dsn: string): string => dsn.replace(/(\/ingest)?\/*$/, "");
 
 function contextOf(): FeedbackContext | null {
   try {
@@ -252,7 +252,7 @@ async function run(ctx: FeedbackContext, text: string, input: unknown): Promise<
   const given = get(input, "timeoutMs");
   const ms = Number.isFinite(given) ? Math.min(Math.max(given as number, 1000), 60000) : 10000;
   const answer = await call(
-    `${baseOf(ctx.dsn)}/feedback`,
+    feedbackUrl(ctx.dsn),
     { method: "POST", headers: { "Content-Type": "application/json", "x-overseer-key": ctx.key }, body: bodyOf(ctx, text, input, Date.now()) },
     ms,
   );
@@ -308,7 +308,7 @@ export async function deleteFeedback(id: string, reporterToken?: string): Promis
   const token = reporterToken ?? (own ? receiptsOf(local.getItem(STORAGE_KEY), ctx.key).find((r) => r.id === id)?.token : undefined);
   if (!str(id, 200) || !str(token, 1000)) return fail("not_found");
   const answer = await call(
-    `${baseOf(ctx.dsn)}/feedback/${encodeURIComponent(id)}`,
+    feedbackUrl(ctx.dsn, id),
     { method: "DELETE", headers: { "x-overseer-key": ctx.key, "x-reporter-token": token as string } },
     10000,
   );
@@ -346,7 +346,7 @@ async function entryCall(ctx: FeedbackContext, id: string, token: string, send: 
   const headers: Record<string, string> = { "x-overseer-key": ctx.key, "x-reporter-token": token };
   if (send.body !== undefined) headers["Content-Type"] = "application/json";
   const answer = await call(
-    `${baseOf(ctx.dsn)}/feedback/${encodeURIComponent(id)}${send.suffix}`,
+    feedbackUrl(ctx.dsn, id, send.suffix),
     { method: send.method, headers, body: send.body, ...(send.method === "GET" ? { cache: "no-store" as const } : {}) },
     10000,
     true,

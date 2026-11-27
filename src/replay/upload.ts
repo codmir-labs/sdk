@@ -3,6 +3,7 @@
  * `@codmir/types`, mirrored in `__tests__/helpers.ts`. Nothing here throws into the page.
  */
 
+import { replayUrl } from "../endpoints";
 import { utf8Bytes } from "../overseer/transport";
 import { scrubUrl } from "../overseer/url-scrub";
 import { SDK_INFO } from "../version";
@@ -57,8 +58,7 @@ export interface UploadTarget {
 
 /** `<dsn>/replay`, the same shape as the error ingest `<dsn>/ingest`; a DSN already ending in `/ingest` is swapped. */
 export function replayEndpoint(dsn: string): string {
-  const base = dsn.replace(/\/+$/, "");
-  return base.endsWith("/ingest") ? `${base.slice(0, -"/ingest".length)}/replay` : `${base}/replay`;
+  return replayUrl(dsn);
 }
 
 /**

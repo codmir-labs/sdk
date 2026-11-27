@@ -1,3 +1,4 @@
+import { patchesManifestUrl } from "../endpoints";
 import { captureException } from "./index";
 
 // =============================================================================
@@ -123,8 +124,7 @@ export class PatchRuntime {
 
   private async loadManifest(): Promise<void> {
     try {
-      const baseUrl = this.dsn.replace(/\/ingest$/, "");
-      const res = await fetch(`${baseUrl}/patches/manifest`, {
+      const res = await fetch(patchesManifestUrl(this.dsn), {
         headers: {
           "x-overseer-key": this.overseerKey,
           "x-environment": this.environment,
