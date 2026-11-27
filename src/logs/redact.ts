@@ -114,9 +114,9 @@ export function redact(text: unknown, extra?: readonly RegExp[]): string {
   return s;
 }
 
-function pass(text: string, extra?: readonly RegExp[]): string {
+/** The secret patterns, in the order {@link redact} applies them; each match becomes a bracketed word. */
+function secretsPass(text: string): string {
   let s = text;
-  if (extra) for (const re of extra) s = s.replace(re, "[redacted]");
   if (s.includes("ookie")) s = s.replace(COOKIE, (_m, k: string) => `${k.toLowerCase()}=[cookie]`);
   if (s.includes("eyJ")) s = s.replace(JWT, "[jwt]");
   if (/bearer|basic/i.test(s)) s = s.replace(BEARER, (m, k: string, t: string) => (/^bearer$/i.test(k) || /[\d=+/]/.test(t) ? `${k} [token]` : m));
@@ -124,6 +124,28 @@ function pass(text: string, extra?: readonly RegExp[]): string {
   s = s.replace(PREFIXED, "[token]");
   // After the keyword patterns: a query such as `?,Bearer abc` would otherwise swallow the word that marks the token.
   if (s.includes("?")) s = s.replace(QUERY, "?[q]");
+  return s;
+}
+
+/**
+ * Only the secrets of a text, with the placeholders {@link redact} uses: cookies, JWTs, bearer tokens, `token=...` pairs,
+ * prefixed keys and query strings. Emails, IP addresses, numbers and ids stay, and the text is not cut: this is for an
+ * error's message, which a person reads. Stable, like {@link redact}.
+ */
+export function redactSecrets(text: string): string {
+  let s = text;
+  for (let i = 0; i < 4; i++) {
+    const next = secretsPass(s);
+    if (next === s) break;
+    s = next;
+  }
+  return s;
+}
+
+function pass(text: string, extra?: readonly RegExp[]): string {
+  let s = text;
+  if (extra) for (const re of extra) s = s.replace(re, "[redacted]");
+  s = secretsPass(s);
   if (s.includes("@")) s = s.replace(EMAIL, "[email]");
   if (s.includes(".")) s = s.replace(IPV4, "$1[ip]");
   if (s.includes(":")) {

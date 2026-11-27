@@ -1385,6 +1385,14 @@ that undoes them. Cloud mode is off unless you pass `cloud`.
   class instance (a database document, an entity) is replaced by what its `toJSON()` returns, or by its own properties
   when it has none, with the same rules applied to them (a `toJSON` that throws gives `"[Unserializable]"`). `Date`, `Map`,
   `Set` and typed arrays are kept as they are.
+- **Secrets in text are masked.** Before `beforeSend` runs, and before the group of an error is worked out, the
+  message, the exception value, every breadcrumb message, every string inside `extra` and a breadcrumb's `data` (under
+  any key), and every tag value lose what looks like a secret: `token=...`, `password=...` and `api_key=...` pairs,
+  `Bearer` tokens, JWTs, keys with a known prefix (`sk_live_...`, `ghp_...`), cookies and query strings. A tag whose key
+  names a secret (`session_token`) is not sent. A transaction's name and tags get the same. So
+  `Error("reset failed: token=abc123 Authorization: Bearer xyz789")` is sent as
+  `reset failed: token=[secret] Authorization: Bearer [token]`, and two errors that differ only by the secret are one
+  issue. Emails and IP addresses in text are not masked: a message such as `no account for ann@example.com` goes as it is.
 - **URLs keep origin and path only.** `fetch` and XHR breadcrumbs, navigation breadcrumbs, transactions and
   `request.url` drop the query string and fragment, so an `?access_token=` or an OAuth `#access_token=` in a URL does
   not ride along with your errors. Session replay's meta events carry the page's address as origin and path too, and
