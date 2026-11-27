@@ -1,9 +1,10 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as {
   exports: Record<string, unknown>;
   files: string[];
+  peerDependencies?: Record<string, string>;
   scripts: Record<string, string>;
 };
 
@@ -79,5 +80,24 @@ describe("@codmir/sdk package exports", () => {
     for (const file of files(new URL("../../scripts/", import.meta.url))) {
       expect(readFileSync(file, "utf8"), file.pathname).not.toMatch(PUBLISH);
     }
+  });
+
+  // npm 7 and later checks an optional peer's range whenever the app has that package, so a peer the code never loads
+  // only stops installs (React 17, Next.js 14). Skips without a build.
+  it.skipIf(!existsSync(new URL("../../dist/index.js", import.meta.url)))("loads every peer dependency from some file under dist", () => {
+    const dist = new URL("../../dist/", import.meta.url);
+    const walk = (dir: URL): URL[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+        entry.isDirectory() ? walk(new URL(`${entry.name}/`, dir)) : [new URL(entry.name, dir)],
+      );
+    const code = walk(dist)
+      .filter((file) => /\.(?:c?js|mjs|d\.c?ts)$/.test(file.pathname))
+      .map((file) => readFileSync(file, "utf8"))
+      .join("\n");
+    const unused = Object.keys(pkg.peerDependencies ?? {}).filter((peer) => {
+      const name = peer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return !new RegExp(`(?:\\bfrom\\s*|\\brequire\\(\\s*|\\bimport\\(\\s*)["']${name}(?:/[^"']*)?["']`).test(code);
+    });
+    expect(unused, "peer dependencies no file under dist loads").toEqual([]);
   });
 });

@@ -259,21 +259,9 @@
     "zod": "^3.23.8"
   },
   "peerDependencies": {
-    "next": ">=15.0.0",
-    "react": ">=18.0.0",
-    "react-native": ">=0.72.0",
     "hono": ">=4.0.0"
   },
   "peerDependenciesMeta": {
-    "next": {
-      "optional": true
-    },
-    "react": {
-      "optional": true
-    },
-    "react-native": {
-      "optional": true
-    },
     "hono": {
       "optional": true
     }
