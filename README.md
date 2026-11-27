@@ -313,7 +313,7 @@ flowchart LR
     subgraph deliver["Deliver"]
         direction TB
         C1["beforeSend()"]
-        C2["Queue<br/>up to 1,000 events"]
+        C2["Queue<br/>1,000 errors and messages,<br/>200 transactions, about 5 MB"]
         C3["Batch<br/>100 per request"]
         C4["fetch POST dsn/ingest<br/>retry 1 s to 60 s"]
     end
@@ -1916,7 +1916,7 @@ Each framework's `init()` takes the core options plus its own:
 | Send delay | At most 1 s after the first unsent capture, or at once when a batch is full | `enqueue()` |
 | Repeats | 10 per group and 100 in all per minute; the rest are not sent | `rateLimit` |
 | Events per request | 100 | `MAX_BATCH_EVENTS` |
-| Queue | 1,000 events; the oldest are dropped first | `MAX_QUEUE_SIZE` |
+| Queue | 1,000 errors and messages plus 200 transactions, about 5 MB in all; over a cap the oldest of that type are dropped, over the bytes the oldest transactions first | `MAX_QUEUE_SIZE`, `MAX_QUEUED_TRANSACTIONS`, `MAX_QUEUE_BYTES` |
 | Retry | Network error, 5xx, 408 and 429; 1 s doubling to 60 s, or `Retry-After` when longer | `retryDelayMs()`, `isRetryableStatus()` |
 | Not retried | Any other 4xx | `isRetryableStatus()` |
 | Page hide | `pagehide` or `visibilitychange` to hidden sends the queue with `keepalive`, within one 60,000-byte budget shared with the replay; a batch that does not fit stays queued | `flushOnHide()` |
