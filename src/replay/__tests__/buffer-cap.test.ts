@@ -515,7 +515,7 @@ describe("waiting segments and the retry queue", () => {
     await advance(0);
     online = true;
     window.dispatchEvent(new Event("online"));
-    await advance(120_000);
+    await advance(25_000); // past the queue's 5 s backoff, still inside the 30 s a request may take
     expect(sequence()).toEqual([0, 1]);
     expect(mostInFlight).toBe(2);
     // a slot opens: the retry queue takes it, and two requests are again the most
