@@ -56,8 +56,8 @@ describe("parseStackTrace: every common format", () => {
     );
     expect(f).toHaveLength(4);
     expect(f[0]).toMatchObject({ function: "eval", filename: "<anonymous>", lineno: 1, in_app: false });
-    expect(f[1]).toMatchObject({ function: "Array.map", filename: "<anonymous>", in_app: false });
-    expect(f[2]).toMatchObject({ function: "Object.fn", filename: "native", in_app: false });
+    expect(f[1]).toEqual({ function: "Array.map", in_app: false });
+    expect(f[2]).toEqual({ function: "Object.fn", in_app: false });
     expect(f[3]).toMatchObject({ filename: "node:internal/process/task_queues", lineno: 95, in_app: false });
   });
 
@@ -72,7 +72,7 @@ describe("parseStackTrace: every common format", () => {
       ["run", "https://app.example.com/main.js", 10, 20],
       [undefined, "https://app.example.com/main.js", 30, 2],
       ["load", "https://app.example.com/main.js", 5, 1],
-      ["map", "[native code]", undefined, undefined],
+      ["map", undefined, undefined, undefined],
     ]);
     expect(f[3]!.in_app).toBe(false);
   });

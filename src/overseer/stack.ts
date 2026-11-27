@@ -8,7 +8,7 @@ import type { StackFrame } from "./index";
  * - Firefox and Safari: `fn@file:l:c`, `@file:l:c`, `fn@[native code]`.
  * The header (`Error: message`, which may span lines) is never a frame: V8 lines are recognised by their `at `, the
  * other engines have no header, so every `@` line that ends in a location is a frame. A frame that cannot be read
- * is kept with what it has, never thrown on.
+ * is kept with what it has, never thrown on. A frame whose location is not `file:line` has a function and no filename.
  */
 
 const SDK_PATH = /[\\/]@codmir[\\/]sdk[\\/]/;
@@ -24,8 +24,8 @@ export function frameFilename(filename: string): string {
   return URL_SHAPED.test(filename) ? (filename.split(/[?#]/)[0] ?? "") : filename;
 }
 
-function isInApp(filename: string | undefined): boolean {
-  if (!filename) return false;
+function isInApp(filename: string | undefined, lineno: number | undefined): boolean {
+  if (!filename || lineno === undefined) return false;
   if (filename.startsWith("node:") || filename.startsWith("<") || filename === "native" || filename === "[native code]") return false;
   if (filename.includes("node_modules")) return false;
   return !SDK_PATH.test(filename);
@@ -39,10 +39,10 @@ function frameOf(fn: string | undefined, location: string): StackFrame {
     frame.filename = frameFilename(m[1]!);
     frame.lineno = parseInt(m[2]!, 10);
     if (m[3] !== undefined) frame.colno = parseInt(m[3], 10);
-  } else if (location) {
-    frame.filename = frameFilename(location); // `native`, `<anonymous>`, `[native code]`
   }
-  frame.in_app = isInApp(frame.filename);
+  // A location that is not `file:line[:col]` (`index 0`, `native`, `<anonymous>`, `[native code]`, a wasm position) names
+  // no file: the frame keeps its function and is never app code.
+  frame.in_app = isInApp(frame.filename, frame.lineno);
   return frame;
 }
 
