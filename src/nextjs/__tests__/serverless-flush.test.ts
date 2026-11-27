@@ -51,6 +51,7 @@ function settled(promise: Promise<unknown>): { done: boolean } {
 
 describe("captureRouterError", () => {
   it("(a) settles only after the event's request was made, and within about 2 s when fetch never answers", async () => {
+    vi.stubEnv("VERCEL", "1");
     vi.useFakeTimers();
     hold = true;
     const returned = captureRouterError(new Error("boom"), request, context);
@@ -61,6 +62,18 @@ describe("captureRouterError", () => {
     expect(state.done).toBe(false);
     await vi.advanceTimersByTimeAsync(2100);
     expect(state.done).toBe(true);
+  });
+
+  it("(a) on a long-running server returns at once, and the send timer still sends the event", async () => {
+    vi.useFakeTimers();
+    hold = true;
+    const state = settled(captureRouterError(new Error("boom"), request, context));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(state.done).toBe(true);
+    expect(calls).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0].init?.body)).toContain("boom");
   });
 
   it("(b) hands the send to Next's waitUntil once and returns at once", async () => {

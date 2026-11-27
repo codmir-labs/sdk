@@ -37,7 +37,7 @@ import { withHint, crash, eventFrame } from "../overseer/capture-hint";
 import { trackNavigation } from "../overseer/navigation";
 import { scrubUrl } from "../overseer/url-scrub";
 import { requestScopeFrom, withRequestScope } from "../overseer/request-scope";
-import { flushInBackground } from "../overseer/flush-in-background";
+import { flushInBackground, isServerlessRuntime } from "../overseer/flush-in-background";
 
 // =============================================================================
 // Types
@@ -164,8 +164,9 @@ export const flushRequestError = (): Promise<void> => flushInBackground(2000);
  * Handler for Next.js App Router errors
  * Use in instrumentation.ts: export const onRequestError = captureRouterError
  *
- * Next awaits it and a serverless function is frozen right after, so the event is sent before it returns (2 s at most),
- * or handed to Next's `waitUntil` when the request has one.
+ * Next awaits it and a serverless function is frozen right after, so there the event is sent before it returns (2 s at
+ * most), or handed to Next's `waitUntil` when the request has one. A long-running server keeps its send timer, so its
+ * error responses never wait for the network.
  */
 export async function captureRouterError(
   error: RequestError,
@@ -192,7 +193,7 @@ export async function captureRouterError(
       ),
     ),
   );
-  await flushInBackground(2000);
+  if (isServerlessRuntime()) await flushInBackground(2000);
 }
 
 /**
