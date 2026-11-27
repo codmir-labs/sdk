@@ -255,4 +255,28 @@ describe("two copies of the context module", () => {
     }
     expect(second.getActiveSpan()).toBeUndefined();
   });
+
+  it("share the default stack: a span made active through one copy is active in the other, and its errors carry the trace", async () => {
+    // Earlier tests in this file install AsyncLocalStorage, which would mask the default stack; run on the default.
+    const slots = globalThis as Record<symbol, unknown>;
+    const strategySlot = Symbol.for("codmir.tracing.strategy");
+    const installed = slots[strategySlot];
+    delete slots[strategySlot];
+    try {
+      vi.resetModules();
+      const copy = await import("../../tracing/context");
+      start(1);
+      const tx = startTransaction({ op: "task", name: "stack" });
+      expect(getActiveSpan()).toBeUndefined();
+      copy.withActiveSpan(tx, () => {
+        expect(getActiveSpan()).toBe(tx);
+        captureException(new Error("through the other copy"));
+      });
+      expect(getActiveSpan()).toBeUndefined();
+      const { errors } = await sent();
+      expect(errors[0].contexts.trace).toEqual({ trace_id: tx.traceId, span_id: tx.spanId });
+    } finally {
+      if (installed) slots[strategySlot] = installed;
+    }
+  });
 });
