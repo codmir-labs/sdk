@@ -625,8 +625,10 @@ app.listen(3000);
 a `traceparent` to same-origin URLs and to your `tracePropagationTargets`.
 
 > [!NOTE]
-> `errorHandler()` adds `clientIp` (`req.ip`) and the `extractUser` result to the event's `extra`. Leave
-> `extractUser` out, or strip them in `beforeSend`, if you must not send them.
+> `errorHandler()` also puts the request's user in `extra.user`, cut down by the same rule as `event.user` (see
+> [Privacy and safety](#privacy-and-safety)): by default only the `id` and `username` (the `email` when there is no `id`).
+> It adds `clientIp` (`req.ip`) only with `sendDefaultPii: true`. An `extractUser` that also answers
+> `ip_address: req.ip` or an `email` has them sent only with that option.
 
 **Each request has its own user, tags and breadcrumbs.** Inside a request, an event's user is the request's: what `extractUser` answered (`null`
 or `undefined` means nobody, not the process-wide user; an `extractUser` that throws leaves the request without a user and
@@ -1405,6 +1407,13 @@ that undoes them. Cloud mode is off unless you pass `cloud`.
   or not recorded at all ([selectors](#session-replay)).
 - **Browser input breadcrumbs** (`trackInputs`, off by default) record the element and its type, never the value.
 - **Source lines are Node-only.** A browser event never carries source code.
+- **The user is cut down to what Codmir reads.** By default an event carries only the user's `id` and `username`, and
+  the `email` when there is no `id` (so that user is still counted as one person). `ip_address` and every other key of the
+  object you gave `setUser`, `initialUser` or Express's `extractUser` are dropped, and a user with nothing left is no user.
+  Express adds no `clientIp`. With `sendDefaultPii: true` every key of the user is sent, `ip_address` and Express's
+  `clientIp` included, except a key that names a secret (`passwordHash`, `sessionToken`, `apiKey`, and the other words
+  in the first bullet). The same rule applies to `extra.user` that Express adds. Your own object is never changed, and
+  `beforeSend` sees the user as it will be sent.
 - **`beforeSend` has the last word** on every error and message:
 
 ```ts
@@ -1413,7 +1422,7 @@ import { init } from '@codmir/sdk';
 init({
   clientKey: process.env.CODMIR_CLIENT_KEY,
   beforeSend(event) {
-    if (event.user) event.user = { id: event.user.id }; // keep the id, drop email, username and IP
+    if (event.user) event.user = { id: event.user.id }; // keep only the id, even with sendDefaultPii on
     if (event.message?.includes('ResizeObserver loop')) return null; // drop noise
     return event;
   },
@@ -1423,9 +1432,8 @@ init({
 `beforeSend` gets copies of `user`, the breadcrumbs and `contexts`, so editing them never changes your own objects. If it throws, the event is dropped (never sent unscrubbed) and `onDropped` hears `before_send`. An async hook is awaited, and `flush()` and `close()` wait for it.
 
 > [!WARNING]
-> Some fields are yours to keep out. `setUser` sends what you give it, `ip_address` included. Express's
-> `errorHandler()` adds `clientIp` and the `extractUser` result to `extra`. Click breadcrumbs carry up to 50
-> characters of a button's or link's text. Strip what you must not send in `beforeSend`.
+> Some fields are yours to keep out. Click breadcrumbs carry up to 50 characters of a button's or link's text, and a
+> value under a harmless key in your `context` is sent as you wrote it. Strip what you must not send in `beforeSend`.
 
 > [!CAUTION]
 > The client key (`clientKey`) travels in every request from the browser as `x-overseer-key`; it identifies your
@@ -1469,6 +1477,7 @@ Leave it off unless you serve that manifest.
 | `beforeSend` | keeps every event | `(event) => event \| null`, for errors and messages; `null` drops the event |
 | `onDropped` | none | `({ events, status, reason, eventIds }) => void`, called when the server did not take events: a batch it refused, or ones it dropped behind a 200, or ones the client gave up on (`status` 0: the queue was full, the client was closed before the last try went through, or `rateLimit` held the event back). `status` 0 comes with a `reason`: `queue_full`, `closed`, `too_large`, `before_send`, `rate_limited` or `unserializable` (an event whose `toJSON` or getter throws); the server's own reasons (such as `payment_required`) come with its status. `eventIds` are the ids `captureEvent` returned for them |
 | `rateLimit` | `{ perGroupPerMinute: 10, perMinute: 100 }` | Caps `error` and `message` events per rolling minute: so many of one group (the event's own `fingerprint`, else the default one) and so many in all. The rest are not sent; `onDropped` hears them as `rate_limited` (`status` 0), in one call a second at most, and on `close()`. It runs after `beforeSend`, so an event the app dropped never counts. Transactions are never capped. `false` turns it off |
+| `sendDefaultPii` | `false` | Off: an event carries only the user's `id` and `username` (the `email` when there is no `id`), and Express adds no `clientIp`. On: every key of the user is sent, `email` and `ip_address` included, except a key that names a secret, and Express adds `clientIp`. Applied before `beforeSend` |
 | `initialUser` | none | The user from the first event on |
 | `initialTags` | `{}` | Tags from the first event on |
 | `includeSourceContext` | `true` | Node only: source lines around the first three in-app frames |
@@ -1514,7 +1523,7 @@ back to `CODMIR_API_KEY`. The AI-call monitoring options that used to be listed 
 | `init(config)` | Creates the client. Call it once; each call replaces the client |
 | `captureException(error, context?)` | Sends an error (anything thrown; a non-`Error` is wrapped). Returns the event id, or `''` before `init`, when disabled or sampled out. Your call is mechanism `generic`, handled, level `error`; a `handled` or `mechanism` key in `context` is plain data in `extra` and changes neither. The integrations send the errors they catch on their own (`window` errors, unhandled rejections, server and framework errors, React Native's global handler) as unhandled, with their own mechanism, and a React Native fatal at level `fatal` |
 | `captureMessage(message, level = 'info')` | Sends a message event at `fatal`, `error`, `warning`, `info` or `debug` |
-| `setUser(user \| null)` | `{ id, email, username, ip_address, ... }` on every later event. Inside a server request (see [Express](#express)) it is that request's user only |
+| `setUser(user \| null)` | `{ id, email, username, ip_address, ... }` on every later event; unless `sendDefaultPii` is on, only the `id` and `username` are sent (the `email` when there is no `id`). Inside a server request (see [Express](#express)) it is that request's user only |
 | `setTag(key, value)`, `setTags(tags)` | String tags on every later event and transaction |
 | `addBreadcrumb(breadcrumb)` | `{ category, message, data, level, type }`; the last 100 are kept |
 | `flush(timeout?)` | Sends everything queued; resolves `true` when all of it was sent or refused, `false` when a batch failed and was put back for a retry or when `timeout` (ms) ran out first; the sending goes on. Each caller has its own time, and the timer never keeps a process alive |
