@@ -36,7 +36,7 @@ import { listen, Stops } from "../overseer/lifecycle";
 import { withHint, crash, eventFrame } from "../overseer/capture-hint";
 import { trackNavigation } from "../overseer/navigation";
 import { scrubUrl } from "../overseer/url-scrub";
-import { requestScopeFrom, withRequestScope } from "../overseer/request-scope";
+import { getRequestScope, requestScopeFrom, withRequestScope } from "../overseer/request-scope";
 import { flushInBackground, isServerlessRuntime } from "../overseer/flush-in-background";
 
 // =============================================================================
@@ -74,6 +74,15 @@ export interface ErrorContext {
 // =============================================================================
 
 let isInitialized = false;
+/** Error objects already sent from the browser, by identity, so one error is one event and nothing is kept alive. */
+const sentErrors = new WeakSet<object>();
+/** True when `error` was sent before; otherwise marks it as sent. A value that is not an object is never remembered. */
+function alreadySent(error: unknown): boolean {
+  if (error === null || (typeof error !== "object" && typeof error !== "function")) return false;
+  if (sentErrors.has(error)) return true;
+  sentErrors.add(error);
+  return false;
+}
 /** What `init` started in a browser, ended by `close`. */
 const stops = new Stops();
 
@@ -98,6 +107,7 @@ export function init(config: NextjsConfig = {}): void {
     if (captureUnhandledErrors) {
       stops.add(
         listen(window, "error", (event: ErrorEvent) => {
+          if (alreadySent(event.error)) return;
           coreCaptureException(event.error || event.message, withHint({}, crash("onerror", undefined, eventFrame(event))));
         }),
       );
@@ -107,6 +117,7 @@ export function init(config: NextjsConfig = {}): void {
     if (captureUnhandledRejections) {
       stops.add(
         listen(window, "unhandledrejection", (event: PromiseRejectionEvent) => {
+          if (alreadySent(event.reason)) return;
           coreCaptureException(event.reason, withHint({}, crash("onunhandledrejection", undefined, "none")));
         }),
       );
@@ -205,6 +216,56 @@ export function captureRouterTransitionStart(route: string): void {
     message: `Navigating to ${route}`,
     data: { route },
   });
+}
+
+// =============================================================================
+// Error boundaries
+// =============================================================================
+
+/**
+ * Capture an error an error boundary caught: call it from `app/error.tsx` and `app/global-error.tsx`. In a production
+ * build Next hands such an error to `console.error` only, so neither the window handlers nor `onRequestError` see it.
+ *
+ * `handled` is false: the boundary shows an error page in place of the UI, and no code of the app dealt with the error
+ * (it did not retry, recover or choose a fallback), so it counts as a crash like one the window handler would send.
+ *
+ * Next's `error.digest` (a hash that also appears with the matching server error) is sent as the tag `digest`. One Error
+ * object is sent once: a second call with it, or the window handler seeing it first (or after), sends nothing.
+ */
+export function captureBoundaryError(error: Error & { digest?: string }, info?: { componentStack?: string | null }): string {
+  if (alreadySent(error)) return "";
+  const digest = typeof error?.digest === "string" && error.digest ? error.digest : undefined;
+  const base = getRequestScope() ?? (typeof location !== "undefined" ? requestScopeFrom({ url: location.href, method: "GET" }) : undefined);
+  const capture = (): string =>
+    coreCaptureException(
+      error,
+      withHint(info?.componentStack ? { componentStack: info.componentStack } : {}, crash("nextjs-error-boundary")),
+    );
+  if (!digest) return capture();
+  return withRequestScope({ url: base?.url ?? "", method: base?.method ?? "GET", ...base, tags: { ...base?.tags, digest } }, capture);
+}
+
+/** What Next hands `getInitialProps` of `pages/_error.js`. */
+export interface UnderscoreErrorContext {
+  err?: (Error & { digest?: string }) | null;
+  req?: { url?: string; method?: string } | null;
+  statusCode?: number;
+}
+
+/**
+ * Capture the error `pages/_error.js` is rendered for (Pages Router): `await` it in `getInitialProps(ctx)`. Next hands
+ * every client render error to `console.error`, and the server one to this page. A 404 with no `err` sends nothing.
+ * The event carries the request's method and path when `ctx.req` is there, never headers or a query. On a serverless
+ * runtime it resolves after the event is sent, like `captureRouterError`.
+ */
+export async function captureUnderscoreErrorException(ctx: UnderscoreErrorContext): Promise<void> {
+  const err = ctx?.err;
+  if (!err || alreadySent(err)) return;
+  const capture = (): string => coreCaptureException(err, withHint({}, crash("nextjs-error-page")));
+  const req = ctx.req;
+  if (req && typeof req.url === "string") withRequestScope(requestScopeFrom({ url: req.url, method: req.method ?? "GET" }), capture);
+  else capture();
+  if (isServerlessRuntime()) await flushInBackground(2000);
 }
 
 // =============================================================================
