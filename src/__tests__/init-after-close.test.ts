@@ -201,7 +201,7 @@ describe("/nextjs", () => {
       const errors = server.errors(`/p${n}`);
       expect(errors).toHaveLength(2);
       for (const event of errors) {
-        expect(event.breadcrumbs.map((b: { message: string }) => b.message)).toEqual([expect.stringMatching(/^\//), "pushState"]);
+        expect(event.breadcrumbs.map((b: { message: string }) => b.message)).toEqual([expect.stringMatching(/^\//), `pushState /${n === 1 ? "one" : "two"}`]);
         expect(event.environment).toBe(`env${n}`);
       }
     }
@@ -226,9 +226,9 @@ describe("/nextjs", () => {
     copies[closeFirst]!.captureException(new Error("y"));
     await Promise.all(copies.map((copy) => copy.flush()));
     await until(() => server.errors("/c0").length === 1 && server.errors("/c1").length === 1, "the errors");
-    const moves = (i: number) => server.errors(`/c${i}`)[0].breadcrumbs.map((b: { message: string }) => b.message).filter((m: string) => m.endsWith("State"));
-    expect(moves(other)).toEqual(["pushState", "pushState"]);
-    expect(moves(closeFirst)).toEqual(["pushState"]);
+    const moves = (i: number) => server.errors(`/c${i}`)[0].breadcrumbs.map((b: { message: string }) => b.message).filter((m: string) => m.startsWith("pushState "));
+    expect(moves(other)).toEqual(["pushState /both", "pushState /one-left"]);
+    expect(moves(closeFirst)).toEqual(["pushState /both"]);
     copies[other]!.close();
     expect(window.location.pathname).toBe("/one-left");
     if (closeFirst === 1) expect(history.pushState).toBe(original);
@@ -266,7 +266,7 @@ describe("/remix", () => {
       const errors = server.errors(`/p${n}`);
       expect(errors).toHaveLength(2);
       for (const event of errors) {
-        expect(event.breadcrumbs.map((b: { message: string }) => b.message)).toEqual([expect.stringMatching(/^\//), "pushState"]);
+        expect(event.breadcrumbs.map((b: { message: string }) => b.message)).toEqual([expect.stringMatching(/^\//), `pushState /${n === 1 ? "one" : "two"}`]);
         expect(event.environment).toBe(`env${n}`);
       }
     }
