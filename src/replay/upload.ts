@@ -3,15 +3,16 @@
  * `@codmir/types`, mirrored in `__tests__/helpers.ts`. Nothing here throws into the page.
  */
 
+import { utf8Bytes } from "../overseer/transport";
 import { scrubUrl } from "../overseer/url-scrub";
 import { SDK_INFO } from "../version";
 
 /** rrweb's Meta event: `data.href` is the page's address (`window.location.href`), then its width and height. */
 export const RRWEB_META = 4;
 
-/** The server rejects a body over 2 MB with 413. */
+/** The server rejects a body over 2 MB (UTF-8 bytes, not string length) with 413. */
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
-/** Headroom under {@link MAX_BODY_BYTES} for the envelope and for UTF-8 expanding past `string.length`. */
+/** Headroom under {@link MAX_BODY_BYTES} for the envelope and for the events being sized one by one. */
 export const TARGET_BODY_BYTES = 1_800_000;
 export const MAX_EVENTS_PER_SEGMENT = 10_000;
 /** `fetch(..., { keepalive: true })` bodies are limited to 64 KB by browsers. */
@@ -20,8 +21,11 @@ export const RETRY_DELAY_MS = 1000;
 /** The server accepts at most 500; the newest are kept. */
 export const MAX_ERROR_EVENT_IDS = 500;
 
-/** `stored`: accepted. `refused`: 202 `{stored:false}` (no card, or no credits): stop uploading this session. `failed`: dropped. */
-export type UploadOutcome = "stored" | "refused" | "failed";
+/**
+ * `stored`: accepted. `refused`: 202 `{stored:false}` (no card, or no credits): stop uploading this session.
+ * `too_large`: 413, the body is over what the server takes; the caller may send it in halves. `failed`: dropped.
+ */
+export type UploadOutcome = "stored" | "refused" | "too_large" | "failed";
 
 export interface RrwebEvent {
   type: number;
@@ -97,7 +101,7 @@ export function buildSegmentBody(
 
 /**
  * Cuts `events` into consecutive runs that each fit one request: at most {@link MAX_EVENTS_PER_SEGMENT} events
- * and about {@link TARGET_BODY_BYTES} once serialised. A single event larger than the budget cannot be split
+ * and about {@link TARGET_BODY_BYTES} UTF-8 bytes once serialised. A single event larger than the budget cannot be split
  * and is dropped (counted in `dropped`).
  */
 export function chunkEvents(
@@ -111,7 +115,7 @@ export function chunkEvents(
   let dropped = 0;
 
   for (const event of events) {
-    const bytes = JSON.stringify(event).length + 1;
+    const bytes = utf8Bytes(JSON.stringify(event)) + 1;
     if (bytes + overheadBytes > budget) {
       dropped++;
       continue;
@@ -135,29 +139,32 @@ const sleep = (ms: number) =>
   });
 
 const isRetryable = (status: number) => status >= 500 || status === 408 || status === 429;
+const TOO_LARGE = 413;
 
 /**
  * POSTs one segment. A network error or a retryable status is retried once; everything else, and the second
- * failure, drops the segment. Resolves the {@link UploadOutcome}. Never rejects.
+ * failure, drops the segment, except a 413, which is not retried and resolves `too_large` so the caller can split it.
+ * Resolves the {@link UploadOutcome}. Never rejects.
  *
- * `hiding` is the pagehide path: the request goes out with `keepalive` when the body fits 64 KB, no retry.
+ * `hiding` is the pagehide path: the request goes out with `keepalive` when the body fits 64 KB (UTF-8 bytes), no retry.
  * `sendBeacon` is deliberately not used: it cannot set `x-overseer-key`, so the server would see an unkeyed
  * request (the same reason the error transport does not use it).
  */
 export async function postSegment(target: UploadTarget, body: SegmentUploadBody, hiding = false): Promise<UploadOutcome> {
   if (typeof fetch !== "function") return "failed";
   const payload = JSON.stringify(body);
+  const keepalive = hiding && utf8Bytes(payload) <= KEEPALIVE_MAX_BYTES;
   const log = (...args: unknown[]) => {
     if (target.debug) console.log("[Overseer replay]", ...args);
   };
 
-  const attempt = async (): Promise<"ok" | "refused" | "retry" | "drop"> => {
+  const attempt = async (): Promise<"ok" | "refused" | "retry" | "drop" | "too_large"> => {
     try {
       const res = await fetch(target.url, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-overseer-key": target.key },
         body: payload,
-        ...(hiding && payload.length <= KEEPALIVE_MAX_BYTES ? { keepalive: true } : {}),
+        ...(keepalive ? { keepalive: true } : {}),
       });
       if (res.ok) {
         // 202 `{ stored: false, reason }` is the pay-as-you-go refusal: nothing was stored, do not keep sending.
@@ -165,6 +172,7 @@ export async function postSegment(target: UploadTarget, body: SegmentUploadBody,
         return answer?.stored === false ? "refused" : "ok";
       }
       log(`segment ${body.segment} answered ${res.status}`);
+      if (res.status === TOO_LARGE) return "too_large";
       return isRetryable(res.status) ? "retry" : "drop";
     } catch (err) {
       log("segment upload failed", err);
@@ -178,7 +186,7 @@ export async function postSegment(target: UploadTarget, body: SegmentUploadBody,
       await sleep(RETRY_DELAY_MS);
       outcome = await attempt();
     }
-    return outcome === "ok" ? "stored" : outcome === "refused" ? "refused" : "failed";
+    return outcome === "ok" ? "stored" : outcome === "refused" ? "refused" : outcome === "too_large" ? "too_large" : "failed";
   } catch {
     return "failed";
   }

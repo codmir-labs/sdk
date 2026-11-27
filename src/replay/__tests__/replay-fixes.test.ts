@@ -252,3 +252,113 @@ describe("an error history split into chunks", () => {
     for (const earlier of segs.slice(0, -1)) expect(earlier.ids).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe("upload budgets count UTF-8 bytes", () => {
+  const MAX = 2 * 1024 * 1024;
+
+  it("cuts CJK events into chunks that each fit the byte budget", async () => {
+    const { chunkEvents, TARGET_BODY_BYTES } = await import("../upload");
+    // 300 events of ~9 KB each: 3,000 characters (about 9,000 UTF-8 bytes) apiece.
+    const events = Array.from({ length: 300 }, (_, i) => ({ type: 3, timestamp: i, data: { text: "漢字かなカナ한국어".repeat(333) } }));
+    const { chunks, dropped } = chunkEvents(events);
+    expect(dropped).toBe(0);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.flat()).toHaveLength(300);
+    for (const chunk of chunks) expect(utf8(JSON.stringify(chunk))).toBeLessThanOrEqual(TARGET_BODY_BYTES);
+  });
+
+  it("sends no request over the server's cap from a CJK page", async () => {
+    useFakeClock();
+    respond = (call) =>
+      utf8(call.raw) > MAX
+        ? new Response(JSON.stringify({ error: "Request body too large" }), { status: 413 })
+        : new Response(JSON.stringify({ stored: true }), { status: 202 });
+    document.body.innerHTML = `<main>${Array.from({ length: 7_400 }, () => `<p>${"漢字かなカナ한국어".repeat(10)}</p>`).join("")}</main>`;
+    const { replay } = await load({ replaysSessionSampleRate: 1 });
+    replay.startReplay();
+    await settle();
+    click();
+    await vi.advanceTimersByTimeAsync(35_000);
+    expect(replayCalls().length).toBeGreaterThan(0); // the clicks after the snapshot still upload
+    for (const call of replayCalls()) expect(utf8(call.raw)).toBeLessThanOrEqual(MAX);
+  });
+
+  it("sends a hiding post over 60 KB of UTF-8 without keepalive, and a small one with it", async () => {
+    const { postSegment, buildSegmentBody } = await import("../upload");
+    const target = { url: REPLAY_URL, key: "osk_test" };
+    const segment = (text: string) =>
+      buildSegmentBody(target, {
+        replayId: "5d0a6d1c-7a33-4c2f-9b53-0f6a1d8b6d11",
+        sequenceNumber: 3,
+        events: [{ type: 3, timestamp: 1, data: { source: 0, texts: [{ id: 9, value: text }] } }],
+        errorIds: [],
+      });
+    await postSegment(target, segment("漢".repeat(55_000)), true);
+    expect(replayCalls()[0].raw.length).toBeLessThan(60_000);
+    expect(utf8(replayCalls()[0].raw)).toBeGreaterThan(65_536);
+    expect((replayCalls()[0].init as { keepalive?: boolean }).keepalive).toBeUndefined();
+
+    await postSegment(target, segment("漢".repeat(5_000)), true);
+    expect((replayCalls()[1].init as { keepalive?: boolean }).keepalive).toBe(true);
+  });
+});
+
+describe("a segment the server refuses as too large", () => {
+  /** A recorder with a session of `count` events due for upload, the server refusing any body of more than `limit` events. */
+  async function run(limit: number, count = 40) {
+    useFakeClock();
+    respond = (call) =>
+      call.body.events.length > limit
+        ? new Response(JSON.stringify({ error: "Request body too large" }), { status: 413 })
+        : new Response(JSON.stringify({ stored: true }), { status: 202 });
+    const { createReplayRecorder } = await import("../index");
+    const rec = createReplayRecorder({
+      sessionSampleRate: 1,
+      errorSampleRate: 0,
+      maxSegmentEvents: 100_000,
+      upload: { url: REPLAY_URL, key: "osk_test" },
+    });
+    rec.start();
+    await settle();
+    const { record } = await import("@rrweb/record");
+    for (let i = 0; i < count; i++) record.addCustomEvent("tick", { i });
+    rec.markError("err-1");
+    await vi.advanceTimersByTimeAsync(30_000); // the segment timer
+    return rec;
+  }
+
+  it("is split in two and each half is sent once", async () => {
+    const rec = await run(60, 80); // about 84 events in the segment: two halves of about 42 fit
+    const bodies = replayCalls().map((c) => c.body);
+    const refused = bodies.filter((b) => b.events.length > 60);
+    expect(refused).toHaveLength(1); // the whole segment went out once, and was not retried
+    const accepted = bodies.filter((b) => b.events.length <= 60);
+    expect(accepted.length).toBeGreaterThanOrEqual(2);
+    // Nothing lost or sent twice, and every half has its own number.
+    const sent = accepted.flatMap((b) => b.events.map((e: any) => e.timestamp + ":" + JSON.stringify(e.data)));
+    expect(sent).toHaveLength(refused[0].events.length);
+    expect(new Set(sent).size).toBe(sent.length);
+    expect(new Set(accepted.map((b) => b.segment)).size).toBe(accepted.length);
+    expect(accepted.every((b) => b.replay_id === refused[0].replay_id)).toBe(true);
+    // The error id rides on one half only, the later one.
+    expect(accepted.flatMap((b) => b.error_event_ids)).toEqual(["err-1"]);
+    expect(accepted[accepted.length - 1].error_event_ids).toEqual(["err-1"]);
+    rec.stop();
+  });
+
+  it("drops one event that is too big alone, once, and keeps recording", async () => {
+    const rec = await run(0, 1);
+    const sizes = replayCalls().map((c) => c.body.events.length);
+    // Every body is refused; halving ends at single events, each sent once and never again.
+    expect(sizes.every((n) => n >= 1)).toBe(true);
+    const perEvent = replayCalls().filter((c) => c.body.events.length === 1);
+    expect(perEvent.length).toBeGreaterThan(0);
+    const before = replayCalls().length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(replayCalls().length).toBe(before); // nothing is retried
+    const keys = replayCalls().filter((c) => c.body.events.length === 1).map((c) => `${c.body.replay_id}:${c.body.segment}`);
+    expect(new Set(keys).size).toBe(keys.length); // and no number is sent twice
+    rec.stop();
+  });
+});

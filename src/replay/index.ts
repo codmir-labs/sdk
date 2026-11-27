@@ -248,7 +248,8 @@ export class ReplayRecorder {
   private session: ReplaySession | null = null;
   private mode: Mode = "idle";
   private replayId = "";
-  private nextSegment = 0;
+  /** Segment numbers of the replay now recording; a segment cut in two after a 413 keeps drawing from the counter of its own replay. */
+  private segments = { next: 0 };
   private sessionStartTime = 0;
   /** Events of the segment being built (session and post-error modes). */
   private events: RrwebEvent[] = [];
@@ -401,7 +402,7 @@ export class ReplayRecorder {
 
   private beginReplay(): void {
     this.replayId = uuidv4();
-    this.nextSegment = 0;
+    this.segments = { next: 0 };
     this.events = [];
     this.prevBuffer = [];
     this.curBuffer = [];
@@ -500,11 +501,12 @@ export class ReplayRecorder {
     const { chunks, dropped } = chunkEvents(events);
     if (dropped > 0 && this.config.upload?.debug) console.log(`[Overseer replay] dropped ${dropped} oversized event(s)`);
 
+    const counter = this.segments;
     chunks.forEach((chunk, index) => {
       const segment: ReplaySegment = {
         id: generateId(),
         sessionId: this.replayId,
-        sequenceNumber: this.nextSegment++,
+        sequenceNumber: counter.next++,
         startTime: chunk[0].timestamp,
         endTime: chunk[chunk.length - 1].timestamp,
         events: chunk,
@@ -517,24 +519,35 @@ export class ReplayRecorder {
       } catch {
         // a consumer's handler must not break recording
       }
-      const upload = this.config.upload;
-      if (upload && !this.uploadsRefused) {
-        void postSegment(
-          upload,
-          buildSegmentBody(upload, {
-            replayId: segment.sessionId,
-            sequenceNumber: segment.sequenceNumber,
-            events: segment.events,
-            errorIds: segment.errorIds ?? [],
-          }),
-          hiding,
-        ).then((outcome) => {
-          if (outcome === "refused") {
-            this.uploadsRefused = true;
-            // Nothing more can be stored this session: stop recording too (deferred, we may be inside stop()).
-            setTimeout(() => this.stop(), 0);
-          }
-        });
+      this.upload(counter, segment.sessionId, segment.sequenceNumber, segment.events, segment.errorIds ?? [], hiding);
+    });
+  }
+
+  private upload(
+    counter: { next: number },
+    replayId: string,
+    sequenceNumber: number,
+    events: RrwebEvent[],
+    errorIds: string[],
+    hiding: boolean,
+  ): void {
+    const upload = this.config.upload;
+    if (!upload || this.uploadsRefused) return;
+    void postSegment(upload, buildSegmentBody(upload, { replayId, sequenceNumber, events, errorIds }), hiding).then((outcome) => {
+      if (outcome === "refused") {
+        this.uploadsRefused = true;
+        // Nothing more can be stored this session: stop recording too (deferred, we may be inside stop()).
+        setTimeout(() => this.stop(), 0);
+      } else if (outcome === "too_large") {
+        // The server took it for over its cap: send it in two halves, the first under its own number, the second under
+        // the next one of that replay; the error ids go with the later half. One event too big alone is dropped.
+        if (events.length < 2) {
+          if (upload.debug) console.log("[Overseer replay] the server refused a single event as too large; dropping it");
+          return;
+        }
+        const middle = Math.ceil(events.length / 2);
+        this.upload(counter, replayId, sequenceNumber, events.slice(0, middle), [], hiding);
+        this.upload(counter, replayId, counter.next++, events.slice(middle), errorIds, hiding);
       }
     });
   }
