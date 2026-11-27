@@ -166,7 +166,10 @@ describe("repeat cap", () => {
     const capture = () => c.captureException(new Error("same"));
     const ids: string[] = [];
     // One call line, so both captures are one group.
-    for (const wait of [0, 5000]) (await vi.advanceTimersByTimeAsync(wait), ids.push(capture()));
+    for (const wait of [0, 5000]) {
+      await vi.advanceTimersByTimeAsync(wait);
+      ids.push(capture());
+    }
     const [first, second] = ids as [string, string];
 
     expect(second).not.toBe(first);
