@@ -22,6 +22,7 @@
  */
 
 import { generateId } from "../id";
+import { ingestUrl } from "../endpoints";
 import type { TransactionEvent } from "../tracing/types";
 import { SDK_INFO } from "../version";
 import { PatchRuntime, type SelfHealingConfig } from "./patch-runtime";
@@ -1083,7 +1084,7 @@ class OverseerClient {
   }
 
   private endpoint(): string {
-    return this.config.dsn.endsWith("/ingest") ? this.config.dsn : `${this.config.dsn}/ingest`;
+    return ingestUrl(this.config.dsn);
   }
 
   private requestHeaders(): Record<string, string> {

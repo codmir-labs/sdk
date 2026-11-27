@@ -125,6 +125,23 @@ describe("the last failed request", () => {
     expect((await sent()).failed).toMatchObject({ path: "/api/save" });
   });
 
+  it("is the app's request under a root DSN, and never the SDK's own endpoints", async () => {
+    h = await setup({ dsn: PAGE }, { page: `${PAGE}/cart`, door: createDoor("") });
+    crumb({ method: "POST", url: `${PAGE}/ingest`, status: 500 });
+    crumb({ method: "POST", url: `${PAGE}/replay`, status: 503 });
+    crumb({ method: "POST", url: `${PAGE}/feedback`, status: 429 });
+    crumb({ method: "GET", url: `${PAGE}/feedback/fb_1`, status: 404 });
+    expect(await sent()).not.toHaveProperty("failed");
+    crumb({ method: "GET", url: `${PAGE}/api/cart`, status: 500 });
+    expect((await sent("again")).failed).toMatchObject({ method: "GET", path: "/api/cart", status: 500 });
+  });
+
+  it("is the app's request under the DSN's own path", async () => {
+    h = await setup({}, { page: `${PAGE}/cart` });
+    crumb({ method: "GET", url: `${PAGE}/api/overseer/issues?project=x`, status: 500 });
+    expect((await sent()).failed).toMatchObject({ path: "/api/overseer/issues" });
+  });
+
   it("is not a request that failed without an answer", async () => {
     h = await setup({}, { page: `${PAGE}/cart` });
     crumb({ method: "GET", url: `${PAGE}/api/x`, error: "Failed to fetch" });
