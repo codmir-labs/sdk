@@ -133,6 +133,17 @@ describe("dist", () => {
     expect(wire.events[0].event.dist).toBe("build-42");
   });
 
+  it("is on a message event beside release, and on the wire", () => {
+    let seen: OverseerEvent | undefined;
+    const c = new OverseerClient({ clientKey: "k", enabled: true, release: "1.2.3", dist: "build-42", beforeSend: (e) => ((seen = e), null) });
+    c.init();
+    c.captureMessage("hello");
+    c.close();
+    expect(seen).toMatchObject({ type: "message", release: "1.2.3", dist: "build-42" });
+    const wire = JSON.parse(buildBody([seen!], { release: "1.2.3" }));
+    expect(wire.events[0].dist).toBe("build-42");
+  });
+
   it("is cut to 64 characters", () => {
     expect(capture({ dist: "d".repeat(100) }).dist).toBe("d".repeat(64));
   });
