@@ -285,7 +285,7 @@ Each import is its own bundle, so a page that only reports errors never loads th
 > AI-call monitoring (`/ai`), MCP client (`/mcp`) and the framework task helpers were removed from the published
 > package. They live in the private, unpublished workspace [`packages/agent-kit`](packages/agent-kit)
 > (`@codmir/agent-kit`) in this repo. Importing `@codmir/sdk/agent`, `/council`, `/serverless`, `/runtime`, `/ai` or
-> `/mcp` no longer works.
+> `/mcp` no longer works, and none of them has a published replacement; see [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md#2x-to-30).
 
 ## How it works
 
@@ -2437,7 +2437,7 @@ No. Each entry point is a separate bundle, and rrweb loads only when a replay st
 <summary><b>Where did the agent SDK go?</b></summary>
 
 To [`packages/agent-kit`](packages/agent-kit), a private workspace in this repo that is not published.
-[MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) covers the older agent API.
+[MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) lists the removed `@codmir/sdk/agent`, `/council`, `/serverless`, `/runtime`, `/runtime/protocol`, `/mcp` and `/ai` entries (2.x to 3.0) and covers the older agent API.
 
 </details>
 
@@ -2464,7 +2464,7 @@ To [`packages/agent-kit`](packages/agent-kit), a private workspace in this repo 
 | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Typecheck, lint, tests, build and dist checks on Node 18, 20 and 22, and the example smoke and the Next.js build smoke on Node 20, on every push and pull request to `main`; the release job, with semantic-release, runs only when a maintainer dispatches the workflow by hand ([Releasing](#releasing)) |
 | [`.github/release/`](.github/release) | `no-downgrade.cjs`, the semantic-release plugin that refuses a version not above npm `latest`, and the tests of it and of the release job |
 | [CHANGELOG.md](CHANGELOG.md) | Released and unreleased changes |
-| [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) | Migrating from the older agent SDK API |
+| [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) | The entries removed in 3.0, and migrating from the older agent SDK API |
 | [AI_REFERENCE.md](AI_REFERENCE.md) | An API client reference written for AI assistants |
 | [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | How to contribute |
 

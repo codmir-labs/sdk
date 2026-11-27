@@ -2,6 +2,30 @@
 
 This guide helps you migrate from the previous Agent SDK to the enhanced version with autonomous capabilities, improved error handling, and production-ready features.
 
+## 2.x to 3.0
+
+Release 2.1.0 removed seven entries from the `exports` of `@codmir/sdk`, and 3.0.0 is the release that says so. An import
+of any of them fails at load time with `ERR_PACKAGE_PATH_NOT_EXPORTED` (or, in TypeScript, "Cannot find module"). The
+package is now the error, tracing and replay SDK; the code behind these entries is no longer published.
+
+| Removed entry | What an app uses instead |
+| --- | --- |
+| `@codmir/sdk/serverless` | Nothing: there is no published replacement. |
+| `@codmir/sdk/council` | Nothing: there is no published replacement. |
+| `@codmir/sdk/runtime` | Nothing: there is no published replacement. |
+| `@codmir/sdk/runtime/protocol` | Nothing: there is no published replacement. The task-runner protocol types and clients went with the runtime. |
+| `@codmir/sdk/agent` | Nothing: there is no published replacement. |
+| `@codmir/sdk/mcp` | Nothing: there is no published replacement. |
+| `@codmir/sdk/ai` | Nothing: there is no published replacement. For error capture around an AI call, use `captureException` from `@codmir/sdk/overseer` in your own `catch`; token, cost and prompt monitoring has no counterpart. |
+
+The code moved to `packages/agent-kit`, a private workspace in this repository that is never published. An app that
+needs one of these entries has two options: stay on `@codmir/sdk@2.0.1` (pin it with `"@codmir/sdk": "2.0.1"`, because
+`^2.0.1` also matches 2.1.0), or remove the import. The root entry no longer exports `FrameworkTaskBuilder`,
+`FrameworkHelpers` or the `SDK_*` instruction strings either, and `@codmir/sdk/overseer` no longer exports
+`OverseerSystem`.
+
+The sections below describe the agent API of the 2.0 line and its older versions; they do not apply to 3.0.
+
 ## Breaking Changes
 
 ### 1. Package Structure Changes

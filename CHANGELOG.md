@@ -1,5 +1,9 @@
 ## Unreleased
 
+### ⚠ BREAKING CHANGES
+
+* **exports:** the package no longer exports `./serverless`, `./council`, `./runtime`, `./runtime/protocol`, `./agent`, `./mcp` and `./ai`. They were removed in 2.1.0 without a major release, so an app on `^2.0.1` that imports one of them fails with `ERR_PACKAGE_PATH_NOT_EXPORTED` after `npm update`. None of them has a published replacement: the code is no longer published. Remove the import, or stay on 2.0.1. `@codmir/sdk/overseer`, `/tracing` and `/replay` are unchanged. See [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md#2x-to-30).
+
 ### Features
 
 * **browser, nextjs, remix:** every browser entry records the same breadcrumbs. `@codmir/sdk/browser` recorded no route changes, and `/nextjs` and `/remix` recorded no clicks, `fetch` or XHR, so the README's promise held for none of them. One installer now serves all three: clicks (`trackClicks`, on), inputs (`trackInputs`, off), `fetch` and XHR (`trackRequests`, on), route changes (`trackNavigation`, on; `trackRouteChanges` and `captureRouteChanges` keep working as its older names) and, new, console output (`trackConsole`, default `['error', 'warn']`; `true` is that default, `false` is off, or list `'info'`, `'log'`, `'debug'`). A console breadcrumb has the category `console`, a level that matches the method, the arguments joined, scrubbed of secrets and cut to 200 characters; a message identical to the newest breadcrumb raises its `data.count` instead of adding one, so a loop of warnings cannot push the rest out of the 20 an error keeps. It works with `captureConsoleErrors` whichever patches `console` first, and `close()` puts `console` back. `addRepeatedBreadcrumb(crumb)` is public beside `addBreadcrumb()`: a crumb identical to the newest (same category, level and message) raises that one's `data.count` instead of adding another. A page's first `/browser` `init` now starts its trail with a `navigation` breadcrumb for the page.

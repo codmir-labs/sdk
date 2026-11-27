@@ -167,9 +167,13 @@ describe("package.json", () => {
     const { release } = JSON.parse(readFileSync(packageJson, "utf8"));
     const names = release.plugins.map((entry) => (Array.isArray(entry) ? entry[0] : entry));
     const local = names.filter((name) => name.startsWith("."));
-    expect(local).toEqual(["./.github/release/no-downgrade.cjs", "./.github/release/public-notes.cjs"]);
+    expect(local).toEqual([
+      "./.github/release/export-guard.cjs",
+      "./.github/release/no-downgrade.cjs",
+      "./.github/release/public-notes.cjs",
+    ]);
     // semantic-release resolves a plugin path from the directory it runs in, the repo root.
-    const resolved = createRequire(packageJson).resolve(local[0]);
+    const resolved = createRequire(packageJson).resolve("./.github/release/no-downgrade.cjs");
     expect(resolved).toBe(fileURLToPath(new URL("./no-downgrade.cjs", import.meta.url)));
   });
 });
