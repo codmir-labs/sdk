@@ -647,8 +647,11 @@ Next's `waitUntil` when the request has one, and otherwise you await it, so the 
 
 Errors an error boundary catches need one more call. In a production build Next.js hands them to `console.error`
 only, so neither the browser handlers nor `onRequestError` see them. `app/error.tsx` and `app/global-error.tsx` call
-`captureBoundaryError`, which sends the error once (the same Error object is never sent twice, here or by the window
-handler) with Next's `error.digest` as the tag `digest`, so a server error and its client report can be matched:
+`captureBoundaryError`, which sends the error with Next's `error.digest` as the tag `digest`. `captureRouterError` and
+`captureRequestError` send the same `digest` on the server error, so a server error and its client report can be
+matched. Each error is sent once: the same Error object is never sent twice across `onRequestError`, `_error`, the
+error boundaries and the window handlers, even when Next.js loads two copies of the SDK in one process (a Pages Router
+render error reaches `onRequestError` first, with its `routerKind`, `routePath` and `routeType`, and then `_error`):
 
 ```tsx
 // app/error.tsx

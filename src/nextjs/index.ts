@@ -36,7 +36,7 @@ import { listen, Stops } from "../overseer/lifecycle";
 import { withHint, crash, eventFrame } from "../overseer/capture-hint";
 import { trackNavigation } from "../overseer/navigation";
 import { scrubUrl } from "../overseer/url-scrub";
-import { getRequestScope, requestScopeFrom, withRequestScope } from "../overseer/request-scope";
+import { getRequestScope, requestScopeFrom, withRequestScope, type RequestScope } from "../overseer/request-scope";
 import { flushInBackground, isServerlessRuntime } from "../overseer/flush-in-background";
 
 // =============================================================================
@@ -74,14 +74,30 @@ export interface ErrorContext {
 // =============================================================================
 
 let isInitialized = false;
-/** Error objects already sent from the browser, by identity, so one error is one event and nothing is kept alive. */
-const sentErrors = new WeakSet<object>();
+/**
+ * Error objects already sent, by identity, so one error is one event and nothing is kept alive. One set per process, in a
+ * `Symbol.for` slot, because Next.js bundles `instrumentation.ts` and each page separately and may load this module more
+ * than once: the copy that sent an error and the copy that sees it again must share the set.
+ */
+const SENT_SLOT = Symbol.for("codmir.nextjs.sent-errors");
+const slots = globalThis as Record<symbol, WeakSet<object> | undefined>;
 /** True when `error` was sent before; otherwise marks it as sent. A value that is not an object is never remembered. */
 function alreadySent(error: unknown): boolean {
   if (error === null || (typeof error !== "object" && typeof error !== "function")) return false;
-  if (sentErrors.has(error)) return true;
-  sentErrors.add(error);
+  const sent = (slots[SENT_SLOT] ??= new WeakSet<object>());
+  if (sent.has(error)) return true;
+  sent.add(error);
   return false;
+}
+/** Next's `error.digest` when it is a non-empty string: the hash that a server error and its client report share. */
+function digestOf(error: unknown): string | undefined {
+  const digest = (error as { digest?: unknown } | null | undefined)?.digest;
+  return typeof digest === "string" && digest ? digest : undefined;
+}
+/** `scope` with the tag `digest` added when the error has one. */
+function withDigest(scope: RequestScope, error: unknown): RequestScope {
+  const digest = digestOf(error);
+  return digest ? { ...scope, tags: { ...scope.tags, digest } } : scope;
 }
 /** What `init` started in a browser, ended by `close`. */
 const stops = new Stops();
@@ -147,7 +163,8 @@ export function close(): void {
 // =============================================================================
 
 /**
- * Capture a server-side request error (App Router). The event is only queued: `await flushRequestError()` before the
+ * Capture a server-side request error (App Router). One Error object is sent once across this, `captureRouterError` and
+ * `captureUnderscoreErrorException`, and Next's `error.digest` goes as the tag `digest`. The event is only queued: `await flushRequestError()` before the
  * response on a serverless platform, or the function may be frozen first.
  */
 export function captureRequestError(
@@ -157,6 +174,7 @@ export function captureRequestError(
 ): string {
   // No request object, headers or cookies in the context. The event's `request` (origin, path, method) comes from
   // the scope below; the route pattern is `errorContext.routePath`.
+  if (alreadySent(error)) return "";
   const capture = (): string =>
     coreCaptureException(
       error,
@@ -165,7 +183,11 @@ export function captureRequestError(
         crash("server"),
       ),
     );
-  return request ? withRequestScope(requestScopeFrom({ url: request.url, method: request.method }), capture) : capture();
+  if (request) return withRequestScope(withDigest(requestScopeFrom({ url: request.url, method: request.method }), error), capture);
+  const digest = digestOf(error);
+  if (!digest) return capture();
+  const base = getRequestScope();
+  return withRequestScope({ url: base?.url ?? "", method: base?.method ?? "GET", ...base, tags: { ...base?.tags, digest } }, capture);
 }
 
 /** Sends what `captureRequestError` queued: awaited, or handed to Next's `waitUntil` when the request has one. */
@@ -184,12 +206,18 @@ export async function captureRouterError(
   request: { path: string; method: string; headers: Record<string, string> },
   context: ErrorContext
 ): Promise<void> {
+  // For a Pages Router render error Next calls this first and then renders `_error` with the same object: this event,
+  // which has the router kind, route and type, is the one that stays.
+  if (alreadySent(error)) return;
   const header = (name: string): string | undefined => {
     const key = Object.keys(request.headers ?? {}).find((k) => k.toLowerCase() === name);
     return key ? request.headers[key] : undefined;
   };
   // Origin from Host and X-Forwarded-Proto, path without its query; no header is sent in the event's `request`.
-  const scope = requestScopeFrom({ url: request.path, method: request.method, host: header("host"), protocol: header("x-forwarded-proto") });
+  const scope = withDigest(
+    requestScopeFrom({ url: request.path, method: request.method, host: header("host"), protocol: header("x-forwarded-proto") }),
+    error,
+  );
   withRequestScope(scope, () =>
     coreCaptureException(
       error,
@@ -234,7 +262,7 @@ export function captureRouterTransitionStart(route: string): void {
  */
 export function captureBoundaryError(error: Error & { digest?: string }, info?: { componentStack?: string | null }): string {
   if (alreadySent(error)) return "";
-  const digest = typeof error?.digest === "string" && error.digest ? error.digest : undefined;
+  const digest = digestOf(error);
   const base = getRequestScope() ?? (typeof location !== "undefined" ? requestScopeFrom({ url: location.href, method: "GET" }) : undefined);
   const capture = (): string =>
     coreCaptureException(
