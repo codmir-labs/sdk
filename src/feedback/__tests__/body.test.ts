@@ -5,20 +5,6 @@ import { FeedbackBodySchema } from "./door";
 import { PAGE, REPLAY_ID, setup, teardown, type Harness } from "./harness";
 
 const NOW = new Date("2026-11-24T10:00:00.000Z");
-// What the release and environment defaults read.
-const HOST_VARS = [
-  "CODMIR_ENVIRONMENT",
-  "VERCEL_ENV",
-  "NODE_ENV",
-  "CODMIR_RELEASE",
-  "VERCEL_GIT_COMMIT_SHA",
-  "RAILWAY_GIT_COMMIT_SHA",
-  "RENDER_GIT_COMMIT",
-  "SOURCE_VERSION",
-  "CF_PAGES_COMMIT_SHA",
-  "COMMIT_REF",
-  "GITHUB_SHA",
-];
 let h: Harness;
 afterEach(() => {
   teardown(h);
@@ -88,8 +74,8 @@ describe("the body", () => {
   it("a bare context: the text, the environment, the time and the SDK, nothing else", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(NOW);
-    // The environment default reads the host; the runner's own must not decide it.
-    for (const name of HOST_VARS) vi.stubEnv(name, "");
+    // vitest.setup.ts clears the host's release and environment variables, but leaves NODE_ENV as vitest sets it.
+    vi.stubEnv("NODE_ENV", "");
     h = await setup({});
     expect(typeof window).toBe("undefined");
     await h.fb.sendFeedback("hello");
