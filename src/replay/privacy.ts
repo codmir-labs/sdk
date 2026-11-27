@@ -8,12 +8,30 @@ export interface ReplayPrivacyConfig {
   maskAllInputs: boolean;
   /** Input types masked even when `maskAllInputs` is false. `password` is always masked. */
   maskInputTypes: string[];
-  /** Text of matching elements (and their descendants) is replaced by `*`. Default `[data-private]`, `.private`. */
+  /**
+   * Text of matching elements (and their descendants) is replaced by `*`, and so are their `title`, `alt`, `aria-label`,
+   * `aria-description` and `placeholder`; a `mailto:` or `tel:` link is cut to its scheme and a `data:` URL is replaced.
+   * Added to the defaults `[data-private]` and `.private`, not put in their place.
+   */
   maskSelectors: string[];
-  /** Matching subtrees are not recorded at all, only a same-size placeholder. Default `[data-codmir-block]`. */
+  /**
+   * Matching subtrees are not recorded at all, only a same-size placeholder. Added to the defaults `[data-codmir-block]`
+   * and `[data-block-replay]`, not put in their place.
+   */
   blockSelectors: string[];
-  /** Input events on matching elements are not recorded. */
+  /** Input events on matching elements are not recorded. Added to the defaults (none today). */
   ignoreSelectors: string[];
+  /**
+   * Default selectors to leave out, each named by its exact string, for a team whose own CSS uses a default class (`.private`).
+   * The only way to drop a default; an entry that names no default is ignored and reported once.
+   */
+  dropDefaultSelectors: string[];
+  /**
+   * Mask the text of every element, and the attributes a mask covers, as a mask selector does. The text of `<style>` and
+   * `<script>` is not text and stays. Default false. While `maskAllInputs` is on, the text of a contenteditable area is
+   * masked whatever this says.
+   */
+  maskAllText: boolean;
 }
 
 export const DEFAULT_PRIVACY: ReplayPrivacyConfig = {
@@ -23,7 +41,15 @@ export const DEFAULT_PRIVACY: ReplayPrivacyConfig = {
   // `[data-block-replay]` is the pre-rrweb attribute; still honoured so existing markup stays private.
   blockSelectors: ["[data-codmir-block]", "[data-block-replay]"],
   ignoreSelectors: [],
+  dropDefaultSelectors: [],
+  maskAllText: false,
 };
+
+/** What `maskAllInputs` adds to the mask selectors: a rich-text area is not an input, but what is typed in it is as private. */
+export const CONTENTEDITABLE_SELECTOR = '[contenteditable]:not([contenteditable="false"])';
+
+/** Matches every element: with `maskAllText`, the whole page is under a mask. */
+const EVERYTHING = "*";
 
 /** The subset of rrweb's `recordOptions` this module sets. */
 export interface RrwebPrivacyOptions {
@@ -71,9 +97,48 @@ function usable(probe: Element, selector: string): boolean {
   return parses(selector) && !parses(`${selector})`) && !parses(`${selector}]`);
 }
 
-/** Merges a partial privacy config over the defaults. Lists replace, they are not concatenated. */
+const SELECTOR_LISTS: SelectorList[] = ["maskSelectors", "blockSelectors", "ignoreSelectors"];
+
+/** The default selectors, over the three lists, as they are written. */
+function defaultSelectors(): Set<string> {
+  return new Set(SELECTOR_LISTS.flatMap((list) => DEFAULT_PRIVACY[list]));
+}
+
+/** The entries of `dropDefaultSelectors` that name no default selector, each once. They drop nothing. */
+export function unknownDefaultDrops(privacy?: Partial<ReplayPrivacyConfig>): string[] {
+  const known = defaultSelectors();
+  return [...new Set(asList(privacy?.dropDefaultSelectors))].filter((entry) => !known.has(entry));
+}
+
+function asList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+/**
+ * Merges a partial privacy config over the defaults. A selector list is added to its defaults, defaults first and no
+ * duplicates; the only way to lose a default is to name its exact string in `dropDefaultSelectors`.
+ */
 export function resolvePrivacy(privacy?: Partial<ReplayPrivacyConfig>): ReplayPrivacyConfig {
-  return { ...DEFAULT_PRIVACY, ...privacy };
+  const resolved: ReplayPrivacyConfig = { ...DEFAULT_PRIVACY, ...privacy };
+  const dropped = new Set(asList(privacy?.dropDefaultSelectors));
+  for (const list of SELECTOR_LISTS) {
+    const own = privacy && list in privacy ? asList(privacy[list]) : [];
+    resolved[list] = [...new Set([...DEFAULT_PRIVACY[list].filter((s) => !dropped.has(s)), ...own])];
+  }
+  resolved.dropDefaultSelectors = asList(privacy?.dropDefaultSelectors);
+  resolved.maskAllText = privacy?.maskAllText === true;
+  return resolved;
+}
+
+/**
+ * The mask selectors rrweb and the composed filter both get: the list, then the contenteditable selector while
+ * `maskAllInputs` is on, then `*` with `maskAllText`. One list, so a snapshot and a later change agree.
+ */
+export function effectiveMaskSelectors(privacy: ReplayPrivacyConfig): string[] {
+  const list = [...privacy.maskSelectors];
+  if (privacy.maskAllInputs) list.push(CONTENTEDITABLE_SELECTOR);
+  if (privacy.maskAllText) list.push(EVERYTHING);
+  return [...new Set(list)];
 }
 
 /**
@@ -96,7 +161,8 @@ export function toRrwebPrivacy(
   const probe = typeof document === "undefined" ? undefined : document.createElement("div");
   const join = (list: SelectorList): string | undefined => {
     const kept: string[] = [];
-    for (const selector of privacy[list].map((s) => s.trim()).filter(Boolean)) {
+    const source = list === "maskSelectors" ? effectiveMaskSelectors(privacy) : privacy[list];
+    for (const selector of source.map((s) => s.trim()).filter(Boolean)) {
       if (!probe || usable(probe, selector)) kept.push(selector);
       else onInvalidSelector(selector, list);
     }

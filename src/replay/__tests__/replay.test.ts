@@ -297,6 +297,9 @@ describe("hidden and file inputs", () => {
   });
 });
 
+// What `maskAllInputs` (on in the default config) adds to the mask selectors.
+const CONTENTEDITABLE = '[contenteditable]:not([contenteditable="false"])';
+
 describe("an invalid privacy selector", () => {
   // `p:has-text(x)` is a test-runner pseudo-class, not CSS: no DOM parses it. `[data-x` parses alone (the DOM closes the
   // bracket at the end of the string) but breaks the list it is joined into. rrweb gets each list as one selector and
@@ -377,7 +380,7 @@ describe("an invalid privacy selector", () => {
       },
       (selector, list) => dropped.push([list, selector]),
     );
-    expect(out.maskTextSelector).toBe("[data-private], .private, .customer-name");
+    expect(out.maskTextSelector).toBe(`[data-private], .private, .customer-name, ${CONTENTEDITABLE}`);
     expect(out.blockSelector).toBe("[data-codmir-block], [data-block-replay], #card-form");
     expect(out.ignoreSelector).toBeUndefined();
     expect(dropped).toEqual([
@@ -394,15 +397,17 @@ describe("an invalid privacy selector", () => {
     const report = (selector: string) => dropped.push(selector);
     const defaults = toRrwebPrivacy(DEFAULT_PRIVACY, report);
     expect([defaults.maskTextSelector, defaults.blockSelector, defaults.ignoreSelector]).toEqual([
-      "[data-private], .private",
+      `[data-private], .private, ${CONTENTEDITABLE}`,
       "[data-codmir-block], [data-block-replay]",
       undefined,
     ]);
     // Brackets, quotes, parentheses and escapes, each closed again before the selector ends.
     const closed = ['input[type="password"]', '[data-x="a)b"]', '[data-x="]"]', ".a\\)", ":is(.a, .b)", "div:not([data-x])", "li:nth-child(2n+1)", "p, .q"];
-    expect(toRrwebPrivacy({ ...DEFAULT_PRIVACY, maskSelectors: closed }, report).maskTextSelector).toBe(closed.join(", "));
+    expect(toRrwebPrivacy({ ...DEFAULT_PRIVACY, maskSelectors: closed }, report).maskTextSelector).toBe([...closed, CONTENTEDITABLE].join(", "));
     const empty = toRrwebPrivacy({ ...DEFAULT_PRIVACY, maskSelectors: [], blockSelectors: ["", "  "], ignoreSelectors: [] }, report);
-    expect([empty.maskTextSelector, empty.blockSelector, empty.ignoreSelector]).toEqual([undefined, undefined, undefined]);
+    expect([empty.maskTextSelector, empty.blockSelector, empty.ignoreSelector]).toEqual([CONTENTEDITABLE, undefined, undefined]);
+    const emptyInputsOff = toRrwebPrivacy({ ...DEFAULT_PRIVACY, maskAllInputs: false, maskSelectors: [] }, report);
+    expect(emptyInputsOff.maskTextSelector).toBeUndefined();
     expect(dropped).toEqual([]);
   });
 
@@ -424,7 +429,7 @@ describe("an invalid privacy selector", () => {
 
     const dropped: string[] = [];
     const out = toRrwebPrivacy({ ...DEFAULT_PRIVACY, maskSelectors: ["[data-private]", ...open, ".private"] }, (s) => dropped.push(s));
-    expect(out.maskTextSelector).toBe("[data-private], .private");
+    expect(out.maskTextSelector).toBe(`[data-private], .private, ${CONTENTEDITABLE}`);
     expect(dropped).toEqual(open);
     expect(el.matches(out.maskTextSelector as string)).toBe(true);
   });
@@ -435,7 +440,7 @@ describe("an invalid privacy selector", () => {
     const dropped: string[] = [];
     const out = toRrwebPrivacy({ ...DEFAULT_PRIVACY, maskSelectors: ["[data-private]", "p:has-text(x)"] }, (s) => dropped.push(s));
     vi.unstubAllGlobals();
-    expect(out.maskTextSelector).toBe("[data-private], p:has-text(x)");
+    expect(out.maskTextSelector).toBe(`[data-private], p:has-text(x), ${CONTENTEDITABLE}`);
     expect(dropped).toEqual([]);
   });
 

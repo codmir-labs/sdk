@@ -1214,15 +1214,17 @@ Privacy is on by default: every input is masked, a picked radio button or checkb
 and `.private` text is masked, `[data-codmir-block]` subtrees are not recorded, and password fields are masked
 whatever the config says (the exact rules are [below](#what-a-recording-holds)). Meta tags carrying a token (CSRF, XSRF,
 nonce, secret or key) are never recorded. Pass
-`startReplay({ privacy: { maskSelectors: [...], blockSelectors: [...] } })` to change the selectors:
+`startReplay({ privacy: { maskSelectors: [...], blockSelectors: [...] } })` to add selectors to the defaults:
 
 ```ts
 import { startReplay, stopReplay } from '@codmir/sdk/replay';
 
 const replayId = startReplay({
   privacy: {
-    maskSelectors: ['[data-private]', '.private', '.customer-name'], // lists replace the defaults
-    blockSelectors: ['[data-codmir-block]', '#card-form'],
+    maskSelectors: ['.customer-name'],   // added to [data-private] and .private, which still mask
+    blockSelectors: ['#card-form'],      // added to [data-codmir-block] and [data-block-replay]
+    dropDefaultSelectors: ['.private'],  // optional: leave one default out, by its exact string
+    maskAllText: false,                  // optional: mask the text of the whole page
   },
 });
 console.log(replayId ? `recording ${replayId}` : 'not recording');
@@ -1252,12 +1254,32 @@ With `maskAllInputs: false`, a radio button or checkbox is recorded, state inclu
 `maskInputTypes` (`['radio']`, `['checkbox']`); `select` in that list hides the selected option the same way, and the
 other types are recorded as typed unless named.
 
-`[data-private]` (and the rest of `maskSelectors`) and `[data-codmir-block]` (and the rest of `blockSelectors`) hold
-inside open shadow roots and same-origin iframes as well, for what is added or changed later as for the first snapshot:
-text under a mask is `*`, and what is under a block is not recorded: not its nodes, not its attribute changes, not the
-input, click, scroll or media events on it (a blocked `<iframe>`'s document is never attached). An input, click,
-scroll or media event on a node the recorder does not know is not recorded either. Under a mask, attributes
-and input values stay as the recorder sends them, so input values follow `maskAllInputs` and `maskInputTypes`. A selector on a shadow host or on an iframe, or on one of their ancestors, reaches the content inside. Closed
+A list in `maskSelectors`, `blockSelectors` or `ignoreSelectors` is added to the defaults, defaults first and without
+duplicates: a team that adds `.card` still masks `[data-private]` and `.private`. The one way to leave a default out is
+`dropDefaultSelectors`, which names it by its exact string (`['.private']` suits a team whose own CSS uses that class).
+An entry that names no default is ignored, and `upload.debug` prints one line for it.
+
+A mask covers more than text. Under `[data-private]` (and the rest of `maskSelectors`), under a contenteditable area
+while `maskAllInputs` is on, and everywhere with `maskAllText`:
+
+- **Text** is replaced by `*` for every character but a space. A contenteditable area (`[contenteditable]` that is not
+  `contenteditable="false"`) is masked like an input, so what is typed in a rich-text editor is not recorded; with
+  `maskAllInputs: false` it is recorded as typed. `maskAllText: true` masks the text of every element, and the text of
+  `<style>` and `<script>` stays as it is.
+- **Masked attributes:** `title`, `alt`, `aria-label`, `aria-description`, `placeholder`, and the `value` of a
+  `<button>` or an `<input>` of type `button`, `submit` or `reset`, are replaced by `*` for every character but a space,
+  so their length shows, as the length of masked text does.
+- **Cut attributes:** an `href` that starts with `mailto:` or `tel:` (any case, after leading spaces) is cut to its scheme.
+- **Replaced attributes:** a `data:` URL in `src`, `srcset`, `poster`, `href` or `xlink:href` (a picked file's preview,
+  say) is replaced by one fixed 1×1 transparent GIF, none of the original.
+- Every other attribute, and every element outside a mask, is recorded as before. This holds for the first snapshot, for
+  what is added and for an attribute that changes later.
+
+`[data-codmir-block]` (and the rest of `blockSelectors`) and the masks above hold inside open shadow roots and
+same-origin iframes as well, for what is added or changed later as for the first snapshot: what is under a block is not
+recorded: not its nodes, not its attribute changes, not the input, click, scroll or media events on it (a blocked
+`<iframe>`'s document is never attached). An input, click, scroll or media event on a node the recorder does not know is
+not recorded either. Under a mask, input values follow `maskAllInputs` and `maskInputTypes`. A selector on a shadow host or on an iframe, or on one of their ancestors, reaches the content inside. Closed
 shadow roots and cross-origin iframes are not recorded at all.
 
 What it does not cover:
@@ -1265,7 +1287,7 @@ What it does not cover:
 - **A custom control is page markup.** `<div role="radio" aria-checked="true">`, `data-state="on"` and a class that
   says "selected" are recorded like any other attribute. Put `data-codmir-block` on it (or `data-private` for its text)
   to leave it out.
-- **`contenteditable`** text is the page's text, recorded as it is typed. Mark it `data-private` or `data-codmir-block`.
+- **`contenteditable`** text is masked only while `maskAllInputs` is on. With it off, mark the area `data-private` or `data-codmir-block`.
 - **Where the pointer is.** A click, a scroll and the pointer's path are recorded. A click on a radio button or a
   checkbox, or a focus on it, is dropped, but a click on its label is a click on the label, and the pointer's path
   passes over what it passes over.

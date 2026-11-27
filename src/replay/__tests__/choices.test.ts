@@ -245,12 +245,13 @@ describe("the other controls, with the default privacy", () => {
     expect(text()).not.toMatch(/#ff0000|#00ff00|2020-01-02|2021-03-04|"(70|90)"/);
   });
 
-  it("contenteditable text is recorded as the page's text (the README says so)", async () => {
+  it("contenteditable text is masked like an input while maskAllInputs is on", async () => {
     await record(`<div id="ce" contenteditable="true">hello</div>`, undefined, async () => {
       (document.getElementById("ce") as HTMLElement).firstChild!.nodeValue = "typed here";
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(text()).toContain("typed here");
+    expect(text()).not.toContain("typed here");
+    expect(text()).toContain("***** ****");
   });
 
   it("a custom control is page markup and is recorded; data-codmir-block leaves it out", async () => {
