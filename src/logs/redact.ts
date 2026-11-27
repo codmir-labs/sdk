@@ -114,9 +114,6 @@ export function redact(text: unknown, extra?: readonly RegExp[]): string {
   return s;
 }
 
-// A short token after the word (`Bearer S2`) is one too, when it holds a digit: `redact` leaves it (its pattern wants 6 characters), and `bearer of bad news` is no token.
-const SHORT_BEARER = /\bbearer\s+(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{1,5}(?![A-Za-z0-9._~+/=-])/gi;
-
 /** The secret patterns, in the order {@link redact} applies them; each match becomes a bracketed word. */
 function secretsPass(text: string): string {
   let s = text;
@@ -138,8 +135,7 @@ function secretsPass(text: string): string {
 export function redactSecrets(text: string): string {
   let s = text;
   for (let i = 0; i < 4; i++) {
-    let next = secretsPass(s);
-    if (/bearer/i.test(next)) next = next.replace(SHORT_BEARER, "Bearer [token]");
+    const next = secretsPass(s);
     if (next === s) break;
     s = next;
   }

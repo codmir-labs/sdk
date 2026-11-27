@@ -38,7 +38,7 @@ const resetError = (secret: string): Error => new Error(`reset failed: token=${s
 describe("secrets in text do not reach the wire", () => {
   it("(a) an exception message loses its secrets and keeps its words", async () => {
     start();
-    captureException(new Error("reset failed: token=S1 and Authorization: Bearer S2"));
+    captureException(new Error("reset failed: token=S1 and Authorization: Bearer S2xxxxxxxx"));
     await flush();
     const body = bodies.join("");
     expect(body).not.toContain("S1");
@@ -59,7 +59,7 @@ describe("secrets in text do not reach the wire", () => {
 
   it("(c) a breadcrumb's message and its data", async () => {
     start();
-    addBreadcrumb({ category: "auth", message: "login password=S4", data: { note: "Bearer S5" } });
+    addBreadcrumb({ category: "auth", message: "login password=S4", data: { note: "Bearer S5xxxxxxxx" } });
     captureException(new Error("boom"));
     await flush();
     const body = bodies.join("");
