@@ -28,7 +28,7 @@ words what a comment means; a link to a pull request of this repository (`#123`)
 
 `npm run check:words` finds them and CI runs it after lint. It prints `file:line: rule` (the rule's name, never the
 word) and fails when there is a hit. A one-line exception goes on the line before it, with a reason:
-`// public-words: allow <rule> <reason>`. The private names are kept as hashes in `scripts/check-public-words.mjs`;
+`// public-words: allow <rule> <reason>`. The private names are kept as hashes in `scripts/public-words-rules.mjs`;
 `node scripts/check-public-words.mjs --hash <word>` prints the hash to add.
 
 ## Reporting Issues
@@ -51,6 +51,10 @@ Use [GitHub Issues](https://github.com/codmir-labs/sdk/issues) to report bugs. I
 
 Releases go through the release job of the CI workflow, run by a maintainer on `main`, and nothing else. Do not
 publish to npm from a machine; no script in this repository does (see "Releasing" in the README).
+
+The `## Unreleased` section of CHANGELOG.md is the release notes: the next release publishes it as its own entry and
+the GitHub release, and removes the heading. Write it in public words, as the rest of this repository (see above); the
+release stops, and says which lines, when the check finds a ticket key or a private word in it.
 
 ## License
 

@@ -310,7 +310,7 @@
     "plugins": [
       "@semantic-release/commit-analyzer",
       "./.github/release/no-downgrade.cjs",
-      "@semantic-release/release-notes-generator",
+      "./.github/release/public-notes.cjs",
       [
         "@semantic-release/changelog",
         {
