@@ -30,6 +30,7 @@
 import { generateId } from "../id";
 import { getClient } from "../overseer/index";
 import { ChoiceFilter, hiddenChoices } from "./choices";
+import { ComposedPrivacyFilter } from "./composed-privacy";
 import { dropPageQuery } from "./page-query";
 import {
   resolvePrivacy,
@@ -421,13 +422,20 @@ export class ReplayRecorder {
         console.log(`[Overseer replay] privacy.${list}: skipped invalid selector ${JSON.stringify(selector)}`);
       });
       const choices = new ChoiceFilter(hiddenChoices(this.config.privacy));
+      const composed = new ComposedPrivacyFilter({
+        maskSelector: rrwebPrivacy.maskTextSelector,
+        blockSelector: rrwebPrivacy.blockSelector,
+        getNode: (id) => record.mirror.getNode(id),
+      });
       this.stopRrweb = record({
         // rrweb resolved this event's links against the page's address of this moment, and a pushState changes that
         // address without a Meta event, so the page's query is cut out of them here, the one place that still knows it.
-        // The state of a radio button or a checkbox, which no input mask hides, is taken out here too.
+        // The state of a radio button or a checkbox, which no input mask hides, is taken out here too, and the mask and
+        // block of what is added or changed later in a shadow root or a same-origin iframe, which rrweb checks only in a snapshot.
         emit: (event, isCheckout) => {
           const kept = choices.apply(dropPageQuery(event as unknown as RrwebEvent, window.location.href));
-          if (kept) this.onEvent(kept, isCheckout === true);
+          const safe = kept && composed.apply(kept);
+          if (safe) this.onEvent(safe, isCheckout === true);
         },
         ...rrwebPrivacy,
         // On-error mode needs a full snapshot at the start of whatever window is uploaded.

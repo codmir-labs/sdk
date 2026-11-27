@@ -1029,6 +1029,12 @@ With `maskAllInputs: false`, a radio button or checkbox is recorded, state inclu
 `maskInputTypes` (`['radio']`, `['checkbox']`); `select` in that list hides the selected option the same way, and the
 other types are recorded as typed unless named.
 
+`[data-private]` (and the rest of `maskSelectors`) and `[data-codmir-block]` (and the rest of `blockSelectors`) hold
+inside open shadow roots and same-origin iframes as well, for what is added or changed later as for the first snapshot:
+text under a mask is `*`, and what is under a block is not recorded (a blocked `<iframe>`'s document is never
+attached). A selector on a shadow host or on an iframe, or on one of their ancestors, reaches the content inside. Closed
+shadow roots and cross-origin iframes are not recorded at all.
+
 What it does not cover:
 
 - **A custom control is page markup.** `<div role="radio" aria-checked="true">`, `data-state="on"` and a class that
