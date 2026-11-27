@@ -273,7 +273,7 @@ export function createErrorBoundary(React: any) {
     componentDidCatch(error: Error, errorInfo: { componentStack: string }) {
       coreCaptureException(
         error,
-        withHint({ componentStack: errorInfo.componentStack }, crash("react-error-boundary")),
+        withHint({ contexts: { react: { componentStack: errorInfo.componentStack } } }, crash("react-error-boundary")),
       );
 
       this.props.onError?.(error, errorInfo.componentStack);

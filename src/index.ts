@@ -66,6 +66,7 @@ export type {
   Breadcrumb,
   RequestData,
   SeverityLevel,
+  CaptureContext,
   SelfHealingConfig,
   PatchManifest,
   PatchEntry,

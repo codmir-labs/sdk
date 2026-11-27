@@ -11,7 +11,7 @@ import * as nextjs from "../../nextjs/index";
 import * as reactNative from "../../react-native/index";
 import { captureException, close, flush, init } from "../index";
 
-type Wire = { level: string; exception: { mechanism: { type: string; handled: boolean } }; extra: Record<string, unknown> };
+type Wire = { level: string; tags: Record<string, string>; exception: { mechanism: { type: string; handled: boolean } }; extra: Record<string, unknown> };
 
 let bodies: string[];
 
@@ -109,7 +109,8 @@ describe("server integrations", () => {
     );
     const [event] = await sent();
     expect(event!.exception.mechanism).toEqual({ type: "nextjs-router", handled: false });
-    expect(event!.extra).toMatchObject({ routerKind: "App Router", route: "/dash" });
+    expect(event!.extra).toMatchObject({ routerKind: "App Router" });
+    expect(event!.tags).toMatchObject({ route: "/dash" });
     expect(event!.extra).not.toHaveProperty("mechanism");
     nextjs.close();
   });
@@ -119,7 +120,7 @@ describe("server integrations", () => {
     nextjs.captureRequestError(new Error("api") as never, { routerKind: "App Router", routePath: "/api/x", routeType: "route" } as never);
     const [event] = await sent();
     expect(event!.exception.mechanism).toEqual({ type: "server", handled: false });
-    expect(event!.extra).toMatchObject({ route: "/api/x" });
+    expect(event!.tags).toMatchObject({ route: "/api/x" });
     expect(event!.extra).not.toHaveProperty("mechanism");
     nextjs.close();
   });
@@ -130,7 +131,7 @@ describe("server integrations", () => {
     const [event] = await sent();
     expect(event!.exception.mechanism).toEqual({ type: "express-error-handler", handled: false });
     expect(event!.level).toBe("error");
-    expect(event!.extra).toMatchObject({ route: "/a" });
+    expect(event!.tags).toMatchObject({ route: "/a" });
     expect(event!.extra).not.toHaveProperty("mechanism");
     express.close();
   });

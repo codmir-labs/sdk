@@ -181,6 +181,7 @@ export type {
   UserContext,
   Breadcrumb,
   SeverityLevel,
+  CaptureContext,
 } from "../overseer/index";
 
 /**
