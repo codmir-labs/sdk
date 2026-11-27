@@ -956,6 +956,11 @@ classified by its status in a `remix/server` transaction; a redirect (3xx) or a 
 A status of 500 or more is captured as `Response Error: <status> <statusText>` when `captureResponseErrors` is on, once
 even when a wrapper and `handleError` both see the same object.
 
+An error a wrapper sent is not sent again by `handleError`: Remix hands the object `wrapLoader` or `wrapAction` rethrew to
+`handleError`, which skips it, so an app that uses both gets one event per error, with the wrapper's mechanism. The check
+is by object identity; a thrown string or other non-object cannot be marked and is sent by each that sees it. A `Response`
+with a status of 500 or more carries `formDataKeys` from `wrapAction` like any other error.
+
 </details>
 
 ### React Native

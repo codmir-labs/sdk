@@ -114,8 +114,9 @@ describe("a thrown Response in wrapLoader and wrapAction", () => {
   it("an Error thrown in a loader or an action is still captured once each", async () => {
     const events = setup();
     const boom = new Error("boom");
+    const bang = new Error("boom");
     await expect(Codmir.wrapLoader(async () => { throw boom; })(args("/a"))).rejects.toBe(boom);
-    await expect(Codmir.wrapAction(async () => { throw boom; })(args("/a", "POST"))).rejects.toBe(boom);
+    await expect(Codmir.wrapAction(async () => { throw bang; })(args("/a", "POST"))).rejects.toBe(bang);
     const list = await events();
     expect(list.map((e) => [e.message, e.exception.mechanism?.type])).toEqual([
       ["boom", "remix-loader"],
@@ -142,5 +143,78 @@ describe("handleError with a Response", () => {
     const events = setup({ captureResponseErrors: false });
     Codmir.handleError(unavailable(), { request: new Request("https://shop.example/a") });
     expect(await events()).toHaveLength(0);
+  });
+});
+
+describe("one event for one thrown object", () => {
+  const request = () => new Request("https://shop.example/a");
+
+  it("an Error thrown in a loader and then passed to handleError is one event, with the loader's mechanism", async () => {
+    const events = setup();
+    const boom = new Error("loader boom");
+    const caught = await Codmir.wrapLoader(async () => { throw boom; })(args("/a")).catch((e: unknown) => e);
+    expect(caught).toBe(boom);
+    Codmir.handleError(caught, { request: request() });
+    const list = await events();
+    expect(list).toHaveLength(1);
+    expect(list[0].exception.mechanism?.type).toBe("remix-loader");
+  });
+
+  it("an Error thrown in an action and then passed to handleError is one event, with the action's mechanism", async () => {
+    const events = setup();
+    const boom = new Error("action boom");
+    const caught = await Codmir.wrapAction(async () => { throw boom; })(args("/a", "POST")).catch((e: unknown) => e);
+    expect(caught).toBe(boom);
+    Codmir.handleError(caught, { request: request() });
+    const list = await events();
+    expect(list).toHaveLength(1);
+    expect(list[0].exception.mechanism?.type).toBe("remix-action");
+  });
+
+  it("an Error passed only to handleError is one event", async () => {
+    const events = setup();
+    Codmir.handleError(new Error("render boom"), { request: request() });
+    const list = await events();
+    expect(list).toHaveLength(1);
+    expect(list[0].exception.mechanism?.type).toBe("remix-handleError");
+  });
+
+  it("a wrapper with capture off leaves the error for handleError to send", async () => {
+    const events = setup({ captureLoaderErrors: false });
+    const boom = new Error("loader boom");
+    const caught = await Codmir.wrapLoader(async () => { throw boom; })(args("/a")).catch((e: unknown) => e);
+    Codmir.handleError(caught, { request: request() });
+    const list = await events();
+    expect(list.map((e) => e.exception.mechanism?.type)).toEqual(["remix-handleError"]);
+  });
+});
+
+describe("formDataKeys on an action", () => {
+  const post = (body: FormData) => ({ request: new Request("https://shop.example/a", { method: "POST", body }), params: {} }) as any;
+
+  it("a 5xx from an action carries the form's field names, never the values", async () => {
+    const events = setup();
+    const form = new FormData();
+    form.set("email", "a@b.example");
+    form.set("plan", "pro");
+    const thrown = unavailable();
+    await expect(Codmir.wrapAction(async () => { throw thrown; })(post(form))).rejects.toBe(thrown);
+    const list = await events();
+    expect(list).toHaveLength(1);
+    expect(list[0].extra.formDataKeys).toEqual(["email", "plan"]);
+    expect(JSON.stringify(list[0].extra)).not.toContain("a@b.example");
+  });
+
+  it("a 5xx from an action whose body was already read is still sent, without keys", async () => {
+    const events = setup();
+    const form = new FormData();
+    form.set("email", "a@b.example");
+    const a = post(form);
+    await a.request.formData();
+    const thrown = unavailable();
+    await expect(Codmir.wrapAction(async () => { throw thrown; })(a)).rejects.toBe(thrown);
+    const list = await events();
+    expect(list).toHaveLength(1);
+    expect(list[0].extra.formDataKeys).toBeUndefined();
   });
 });
