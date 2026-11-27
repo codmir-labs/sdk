@@ -209,13 +209,22 @@ export function sdkFingerprint(event: WireSourceEvent): string[] {
 
 /**
  * An `error` event becomes `{ type, event, group }`; any other type is returned untouched.
- * The event's own `fingerprint[]` (set in `beforeSend`) wins over the computed one.
+ *
+ * `group.fingerprint` (and `event.fingerprint`) is the v2 key, {@link sdkFingerprint}. `group.legacyFingerprint` is the
+ * key of every earlier SDK ({@link legacyFingerprint}, the type, the first in-app frame's `file:line` and the masked
+ * message), so the platform can attach a new event to an issue that was created before v2: it falls back to
+ * `legacyFingerprint` when no issue has the new key. The platform's own copy of the fingerprint, which it computes for
+ * an event that carries none (an older SDK's flat event), stays the legacy rule.
+ *
+ * The event's own `fingerprint[]` (set in `beforeSend`) wins over the computed one, as it always did, and then no
+ * `legacyFingerprint` is sent: the app's key is the app's, and the issue it names has no earlier key to carry over.
  */
 export function toWireEvent<T extends { type: string }>(input: T): unknown {
   if (input.type !== "error") return input;
   const source = input as unknown as WireSourceEvent;
 
-  const fingerprint = source.fingerprint?.length ? source.fingerprint : sdkFingerprint(source);
+  const own = source.fingerprint?.length ? source.fingerprint : undefined;
+  const fingerprint = own ?? sdkFingerprint(source);
   const message = source.message ?? source.exception?.value;
   const topFrame = culpritFrame(source.exception);
   const { type: _type, ...rest } = source;
@@ -225,6 +234,7 @@ export function toWireEvent<T extends { type: string }>(input: T): unknown {
     event: { ...rest, message, fingerprint },
     group: {
       fingerprint,
+      ...(own ? {} : { legacyFingerprint: legacyFingerprint(source) }),
       message,
       culprit: topFrame ? (topFrame.lineno != null ? `${topFrame.filename}:${topFrame.lineno}` : topFrame.filename) : undefined,
       level: source.level,

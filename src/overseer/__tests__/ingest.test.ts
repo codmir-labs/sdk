@@ -119,6 +119,8 @@ describe("wire shape (criterion 1)", () => {
     expect(wire.event.breadcrumbs).toHaveLength(1);
     expect(wire.group).toEqual({
       fingerprint: wire.event.fingerprint,
+      // The key before v2, so the platform can find an issue that was created before it.
+      legacyFingerprint: ["TypeError", "/srv/app/src/checkout.ts:42", ERROR_MESSAGE.replace(/\d+/g, "<N>")],
       message: ERROR_MESSAGE,
       culprit: "/srv/app/src/checkout.ts:42",
       level: "error",

@@ -2,12 +2,12 @@
  * Grouping v2: the fingerprint keys on the type, the first 3 in-app frames (a normalized file and function) and the
  * root cause's type; the message only when there is no frame. The old key travels beside it as `legacyFingerprint`.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeFrameFile, setAppRoot } from "../frame-file";
 import { OverseerClient, type OverseerEvent } from "../index";
-import { normalizeFunctionName, sdkFingerprint, toWireEvent } from "../transport";
+import { buildBody, legacyFingerprint, normalizeFunctionName, sdkFingerprint, toWireEvent, type WireSourceEvent } from "../transport";
 
-type Group = { fingerprint: string[]; message?: string; culprit?: string };
+type Group = { fingerprint: string[]; legacyFingerprint?: string[]; message?: string; culprit?: string };
 
 /** One capture through the real client; the wire form is what the transport sends. */
 function captured(error: Error, config: Record<string, unknown> = {}): { group: Group; event: { fingerprint: string[] } } {
@@ -258,5 +258,144 @@ describe("frameless: the folded message is the key", () => {
     };
     expect(wrapped("TypeError")).toEqual(["Error", "could not load the cart", "TypeError"]);
     expect(wrapped("RangeError")).toEqual(["Error", "could not load the cart", "RangeError"]);
+  });
+});
+
+/**
+ * The key as the SDK computed it before v2 (`sdkFingerprint` at the base of this change), copied as it was: the oracle
+ * the legacy key is compared with, element for element.
+ */
+function baseSdkFingerprint(event: WireSourceEvent): string[] {
+  type Frame = { filename?: string; lineno?: number; in_app?: boolean };
+  const inAppOf = (frames?: Frame[]): Frame | undefined => frames?.find((f) => f.in_app === true && f.filename);
+  const exception = event.exception;
+  const causes = exception?.causes?.length ? exception.causes : undefined;
+  const parts: string[] = [exception?.type || "Error"];
+
+  let inAppFrame = inAppOf(exception?.stacktrace);
+  let message = exception?.value ?? event.message ?? "";
+  if (!inAppFrame && causes) {
+    const primary = causes.find((c) => inAppOf(c.stacktrace));
+    if (primary) {
+      inAppFrame = inAppOf(primary.stacktrace);
+      message = primary.value ?? "";
+    }
+  }
+  if (inAppFrame) parts.push(`${inAppFrame.filename}:${inAppFrame.lineno}`);
+
+  parts.push(
+    message
+      .replace(/\b[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b/gi, "<UUID>")
+      .replace(/(?=[0-9a-f]*[a-f])[0-9a-f]{8,}/gi, "<ID>")
+      .replace(/\d+/g, "<N>")
+      .slice(0, 100),
+  );
+
+  if (causes) {
+    let at = -1;
+    for (let i = 0; i < causes.length; i++) {
+      if (causes[i]!.parent === at && causes[i]!.source === "cause") at = i;
+    }
+    parts.push(causes[Math.max(at, 0)]!.type);
+  }
+  return parts;
+}
+
+describe("the legacy key", () => {
+  // Node 22 stacks (paths shortened to /srv/app), as the review captured them.
+  const NODE_TAIL =
+    "    at Module._compile (node:internal/modules/cjs/loader:1705:14)\n    at Module._extensions..js (node:internal/modules/cjs/loader:1838:10)\n    at Module.load (node:internal/modules/cjs/loader:1441:32)\n    at Module._load (node:internal/modules/cjs/loader:1263:12)\n    at node:internal/main/run_main_module:36:49";
+  const REAL: Record<string, [string, string, string]> = {
+    release1: ["TypeError", "Card declined for order 1001", `TypeError: x\n    at Object.chargeCard (/srv/app/v1/checkout.js:2:9)\n    at Object.<anonymous> (/srv/app/src/gen-lines.cjs:3:40)\n${NODE_TAIL}`],
+    release2: ["TypeError", "Card declined for order 1001", `TypeError: x\n    at Object.chargeCard (/srv/app/v2/checkout.js:3:9)\n    at Object.<anonymous> (/srv/app/src/gen-lines.cjs:3:40)\n${NODE_TAIL}`],
+    json_parse: ["SyntaxError", `Unexpected token 'h', "hello world" is not valid JSON`, `SyntaxError: x\n    at JSON.parse (<anonymous>)\n    at parseBody (/srv/app/src/gen.cjs:17:36)\n${NODE_TAIL}`],
+    invalid_url: ["TypeError", "Invalid URL", `TypeError: x\n    at new URL (node:internal/url:818:25)\n    at parseUrl (/srv/app/src/gen.cjs:16:30)\n${NODE_TAIL}`],
+    promise_all: ["Error", "connection refused by 10.0.0.5:5432", `Error: x\n    at Object.query (/srv/app/node_modules/fakedb/index.js:4:9)\n    at async Promise.all (index 0)\n    at async ordersRoute (/srv/app/src/gen-all.cjs:3:47)`],
+    browser: ["TypeError", "Cannot read properties of undefined (reading 'map')", "TypeError: x\n    at List (https://acme.shop.example.com/static/js/main.3f2a9c1e.js?v=1:1:2345)"],
+    frameless: ["Error", "Order 3f2a9c1e-8b7d-4e6f-a5b4-c3d2e1f0a9b8 for alice@example.com failed 3 times", "Error: x"],
+  };
+
+  it.each(Object.entries(REAL))("%s: legacyFingerprint is the base's key, element for element", (_name, [type, message, stack]) => {
+    const wire = captured(fail(type, message, stack));
+    expect(wire.group.legacyFingerprint).toEqual(baseSdkFingerprint(wire.event as unknown as WireSourceEvent));
+    expect(wire.group.legacyFingerprint).toEqual(legacyFingerprint(wire.event as unknown as WireSourceEvent));
+  });
+
+  it("is the base's key for a real error thrown here, with source context on", () => {
+    const wire = captured(new TypeError("Cannot read properties of undefined (reading 'id')"), { includeSourceContext: true });
+    expect(wire.group.legacyFingerprint).toEqual(baseSdkFingerprint(wire.event as unknown as WireSourceEvent));
+    expect(wire.group.legacyFingerprint![1]).toMatch(/grouping-v2\.test\.ts:\d+$/);
+    expect(wire.group.fingerprint[1]).toMatch(/^src\/overseer\/__tests__\/grouping-v2\.test\.ts:/);
+  });
+
+  it("is the base's key for an error with a cause chain, and for a cause that holds the frame", () => {
+    const causes = (frames?: Array<Record<string, unknown>>) => [
+      { type: "RangeError", value: "inner 42", source: "cause", parent: -1, stacktrace: frames },
+      { type: "TypeError", value: "root 7", source: "cause", parent: 0, stacktrace: frames },
+    ];
+    const frame = { filename: "/srv/app/src/db.ts", function: "query", lineno: 12, in_app: true };
+    for (const [frames, own] of [[[frame], undefined], [undefined, [{ filename: "/srv/app/src/api.ts", function: "handler", lineno: 5, in_app: true }]]] as const) {
+      const event = {
+        id: "e", type: "error", timestamp: "t", level: "error",
+        exception: { type: "Error", value: "could not load order 1001", stacktrace: own, causes: causes(frames as never) },
+      } as WireSourceEvent;
+      const wire = toWireEvent(event) as { group: Group & { legacyFingerprint: string[] } };
+      expect(wire.group.legacyFingerprint).toEqual(baseSdkFingerprint(event));
+      expect(wire.group.legacyFingerprint.at(-1)).toBe("TypeError");
+      expect(wire.group.fingerprint.at(-1)).toBe("TypeError");
+      expect(wire.group.fingerprint).not.toEqual(wire.group.legacyFingerprint);
+    }
+  });
+
+  it("differs from the new key, and the new key is in group.fingerprint and event.fingerprint", () => {
+    const wire = captured(fail("TypeError", "Card declined", "TypeError: x\n    at chargeCard (/srv/app/src/checkout.js:2:9)"));
+    expect(wire.group.fingerprint).toEqual(["TypeError", "/srv/app/src/checkout.js:chargeCard"]);
+    expect(wire.event.fingerprint).toEqual(wire.group.fingerprint);
+    expect(wire.group.legacyFingerprint).toEqual(["TypeError", "/srv/app/src/checkout.js:2", "Card declined"]);
+  });
+
+  it("is on the body that is sent", () => {
+    const event = { id: "e", type: "error", timestamp: "t", level: "error", exception: { type: "Error", value: "x 1", stacktrace: [{ filename: "/srv/app/a.js", function: "run", lineno: 4, in_app: true }] } };
+    const body = JSON.parse(buildBody([event as never], {})) as { events: Array<{ group: Group & { legacyFingerprint: string[] } }> };
+    expect(body.events[0]!.group.legacyFingerprint).toEqual(["Error", "/srv/app/a.js:4", "x <N>"]);
+    expect(body.events[0]!.group.fingerprint).toEqual(["Error", "/srv/app/a.js:run"]);
+  });
+});
+
+describe("the app's own key", () => {
+  /** The first event of the body the real client posts, with `beforeSend` as the app wrote it. */
+  async function sent(beforeSend: (e: OverseerEvent) => OverseerEvent): Promise<{ group: Record<string, unknown>; event: { fingerprint: string[] } }> {
+    const bodies: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => (bodies.push(String(init.body)), new Response("{}", { status: 200 }))));
+    try {
+      const c = new OverseerClient({ clientKey: "k", includeSourceContext: false, rateLimit: false, beforeSend });
+      c.init();
+      c.captureException(fail("Error", "x", "Error: x\n    at run (/srv/app/a.js:4:1)"));
+      await c.flush();
+      c.close();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    return JSON.parse(bodies[0]!).events[0];
+  }
+
+  it("an app-set fingerprint wins, and no legacy key is sent", async () => {
+    const wire = await sent((e) => ({ ...e, fingerprint: ["checkout", "declined"] }));
+    expect(wire.group.fingerprint).toEqual(["checkout", "declined"]);
+    expect(wire.event.fingerprint).toEqual(["checkout", "declined"]);
+    expect("legacyFingerprint" in wire.group).toBe(false);
+    expect(JSON.stringify(wire)).not.toContain("legacyFingerprint");
+  });
+
+  it("with no fingerprint of its own, the body carries both keys", async () => {
+    const wire = await sent((e) => e);
+    expect(wire.group.fingerprint).toEqual(["Error", "/srv/app/a.js:run"]);
+    expect(wire.group.legacyFingerprint).toEqual(["Error", "/srv/app/a.js:4", "x"]);
+  });
+
+  it("an empty fingerprint falls back to the computed one, with its legacy key", () => {
+    const wire = toWireEvent({ id: "e", type: "error", timestamp: "t", level: "error", fingerprint: [], exception: { type: "Error", value: "x" } }) as { group: Group };
+    expect(wire.group.fingerprint).toEqual(["Error", "x"]);
+    expect(wire.group.legacyFingerprint).toEqual(["Error", "x"]);
   });
 });
