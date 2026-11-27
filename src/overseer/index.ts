@@ -27,6 +27,8 @@ import { SDK_INFO } from "../version";
 import { PatchRuntime, type SelfHealingConfig } from "./patch-runtime";
 import { getRequestScope } from "./request-scope";
 import { sanitizeExtra } from "./sanitize-extra";
+import { redactSecrets } from "../logs/redact";
+import { scrubEvent, scrubTags } from "./scrub-text";
 import { readHint } from "./capture-hint";
 import { normalizeThrown, syntheticStack, type Caller } from "./thrown-value";
 import { browserRequest, envContexts } from "./runtime-context";
@@ -609,11 +611,15 @@ class OverseerClient {
 
   /**
    * Queues a finished transaction on the same transport as errors (batching, retry, pagehide flush).
-   * `beforeSend` is an error-event hook and does not see transactions.
+   * `beforeSend` is an error-event hook and does not see transactions. Their name and tags are scrubbed like an error's.
    */
   captureTransaction(transaction: TransactionEvent): void {
     if (!this.config.enabled) return;
-    this.enqueue(transaction);
+    this.enqueue({
+      ...transaction,
+      name: redactSecrets(transaction.name),
+      ...(transaction.tags ? { tags: scrubTags(transaction.tags) } : {}),
+    });
   }
 
   getEnvironment(): string {
@@ -700,7 +706,9 @@ class OverseerClient {
     return this.config.includeSourceContext ? addSourceContext(frames) : frames;
   }
 
-  private sendEvent(event: OverseerEvent): void {
+  private sendEvent(raw: OverseerEvent): void {
+    // Before the hook and before any fingerprint: the hook and the group see the scrubbed text.
+    const event = scrubEvent(raw);
     let result: ReturnType<NonNullable<OverseerConfig["beforeSend"]>>;
     try {
       result = this.config.beforeSend(copyForHook(event));
