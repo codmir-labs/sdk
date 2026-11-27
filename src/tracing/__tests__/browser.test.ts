@@ -145,6 +145,18 @@ describe("navigation transactions", () => {
     expect(JSON.stringify(calls.map((c) => c.init?.body))).not.toContain("hashsecret");
   });
 
+  it("a rewritten OAuth redirect in the hash carries its secret into no transaction", async () => {
+    start(1);
+    window.history.pushState(null, "", "/start#/access_token=abcsecretvalue&token_type=bearer");
+    window.location.hash = "#/access_token=abcsecretvalue&token_type=bearer2";
+    await vi.advanceTimersByTimeAsync(2000);
+    await flush();
+    await sent();
+    const body = JSON.stringify(calls.map((c) => c.init?.body));
+    expect(body).not.toContain("abcsecretvalue");
+    expect(body).not.toContain("token_type");
+  });
+
   it("starts a navigation on popstate", async () => {
     start(1);
     window.history.pushState(null, "", "/a");

@@ -54,6 +54,8 @@ describe("scrubUrl", () => {
     ["https://app.test/#!/users/42?tab=keys", undefined, "https://app.test/#!/users/42"],
     ["https://app.test/#/cb?access_token=abc", undefined, "https://app.test/#/cb"],
     ["https://app.test/#/a#access_token=abc", undefined, "https://app.test/#/a"],
+    ["https://app.test/#/access_token=abc&token_type=bearer", undefined, "https://app.test/#/access_token"],
+    ["https://app.test/#/search/q=shoes", undefined, "https://app.test/#/search/q"],
     ["https://app.test/#access_token=abc&token_type=bearer", undefined, "https://app.test/"],
     ["https://app.test/#id_token=abc", undefined, "https://app.test/"],
     ["https://app.test/#section-2", undefined, "https://app.test/"],

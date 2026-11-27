@@ -605,7 +605,7 @@ export const onRouterTransitionStart = Codmir.captureRouterTransitionStart;
 
 `onRouterTransitionStart` receives the full href, query and hash included. The route is scrubbed like every URL: the
 breadcrumb `Navigating to /reset` never carries a `?token=` or an OAuth `#access_token=`; a path stays a path and an absolute
-URL stays absolute. A fragment stays only when it is a route (`#/settings`, `#!/users/42`), without its own `?query`.
+URL stays absolute. A fragment stays only when it is a route (`#/settings`, `#!/users/42`), cut at its first `?`, `=` or `&`.
 
 Server side, in `instrumentation.ts`. Next.js hands server errors to `onRequestError`, and `captureRouterError` has
 the shape it expects:
@@ -1648,7 +1648,7 @@ that undoes them. Cloud mode is off unless you pass `cloud`.
   issue. Emails and IP addresses in text are not masked: a message such as `no account for ann@example.com` goes as it is.
 - **URLs keep origin and path only, and a route fragment.** `fetch` and XHR breadcrumbs, navigation breadcrumbs, transactions and
   `request.url` drop the query string and every fragment but a route one: a fragment that starts with `#/` or `#!/` (a hash
-  router such as `createHashHistory` or Vue's hash mode) is kept without its own `?query`, and any other fragment
+  router such as `createHashHistory` or Vue's hash mode) is kept up to its first `?`, `=` or `&` (`#/access_token=abc` becomes `#/access_token`, so a router that rewrites an OAuth redirect leaks nothing), and any other fragment
   (`#access_token=…`, `#id_token=…`, `#section-2`) is dropped. Path segments are kept as they are, in the path and in a route
   fragment. So an `?access_token=` or an OAuth `#access_token=` in a URL does
   not ride along with your errors, and neither does a `user:password@` (a protocol-relative or padded URL included). A `data:` URL

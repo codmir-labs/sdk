@@ -2,7 +2,8 @@
  * A URL as an event field keeps its origin and path and nothing after them. A query string or fragment can hold
  * `access_token=`, a reset code or an OAuth `#access_token=`, and a breadcrumb or transaction would carry it with every error.
  * The one exception is a route fragment (`#/settings`, `#!/users/42`): a hash router keeps its page there, so it stays, cut
- * at its own `?`. Every other fragment goes. Browser-safe: no Node import. Same rule as the request scope's `requestScopeFrom`.
+ * at its own `?`, at its first `=` or `&` (a router can rewrite `#access_token=…` into `#/access_token=…`) and at a second `#`.
+ * Every other fragment goes. Browser-safe: no Node import. Same rule as the request scope's `requestScopeFrom`.
  */
 
 /** The longest string `scrubUrl` returns; a longer result is cut here. */
@@ -15,12 +16,13 @@ const TRAILING = ".,;:!)]}";
 const clip = (s: string): string => (s.length > MAX_URL_LENGTH ? s.slice(0, MAX_URL_LENGTH) : s);
 
 /**
- * The route a fragment holds: `#/a/b` or `#!/a/b` without its own query (or a second `#`), else "". Anything else
+ * The route a fragment holds: `#/a/b` or `#!/a/b` cut at its first `?`, `=`, `&` or second `#`, else "". A key=value pair is no page: `#/access_token=abc&x=1` is
+ * `#/access_token`, `#/search/q=shoes` is `#/search/q`, `#!/users/42?tab=keys` is `#!/users/42`. Anything else
  * (`#access_token=…`, `#id_token=…`, `#section-2`) is not a route and is dropped. Path segments are kept as they are, as in a path.
  */
 export function routeFragment(hash: string): string {
   if (!/^#!?\//.test(hash)) return "";
-  const end = hash.slice(1).search(/[?#]/);
+  const end = hash.slice(1).search(/[?#=&]/);
   return end < 0 ? hash : hash.slice(0, end + 1);
 }
 

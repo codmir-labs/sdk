@@ -84,3 +84,16 @@ describe("captureRouterTransitionStart", () => {
     expect(list.map((b) => b.data!.route)).toEqual(["/#/settings", "/app#!/users/42"]);
   });
 });
+
+// Last: its `#/access_token` breadcrumb stays in the list the tests above read.
+describe("a rewritten OAuth redirect", () => {
+  it("a hash router's rewritten OAuth redirect reaches no breadcrumb, request.url or transaction", async () => {
+    window.history.pushState(null, "", "/app#/access_token=abcsecretvalue&token_type=bearer");
+    window.location.hash = "#/access_token=abcsecretvalue&token_type=bearer";
+    await tick();
+    const json = body();
+    expect(json).not.toContain("abcsecretvalue");
+    expect(json).not.toContain("token_type");
+    expect((events.at(-1) as any).request.url).toBe(`${window.location.origin}/app#/access_token`);
+  });
+});
