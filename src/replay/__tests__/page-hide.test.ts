@@ -257,6 +257,8 @@ describe("the retry queue goes at pagehide, oldest first, then the new segment",
       await advance(10_000);
     }
     expect(segments()).toEqual([0]); // the first got the 429; the others wait behind it
+    // The server's wait is over by the clock (a hide holds until then); the queue's timer has not fired yet.
+    vi.setSystemTime(Date.now() + 61_000);
     calls.length = 0;
     respond = ok;
     bulk(recorder, kb);
@@ -374,6 +376,133 @@ describe("nothing is lost for being sent at pagehide", () => {
     respond = ok;
     await advance(300_000);
     expect(segments().filter((s) => s === 0)).toHaveLength(1); // never sent again
+    recorder.stop();
+  });
+});
+
+describe("the queue's waits hold at pagehide", () => {
+  let online = true;
+  const setOnline = (value: boolean) => {
+    online = value;
+    Object.defineProperty(navigator, "onLine", { configurable: true, get: () => online });
+  };
+  const tabSwitch = async () => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await advance(0);
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await advance(0);
+  };
+  const inOrder = (list: number[]) => list.every((n, i) => i === 0 || n > list[i - 1]);
+  afterEach(() => {
+    online = true;
+    delete (navigator as unknown as Record<string, unknown>).onLine;
+  });
+
+  it("offline: eight tab switches send nothing, and after `online` every segment is stored, segment 0 first", async () => {
+    setOnline(false);
+    const stored: number[] = [];
+    respond = (call) => {
+      if (!online) throw new TypeError("Failed to fetch");
+      if (call.url === REPLAY_URL) stored.push(call.body.segment);
+      return ok();
+    };
+    const { recorder } = await startRecorder();
+    let recorded = 0;
+    recorder.onSegment(() => recorded++);
+    click();
+    await advance(5_000);
+    for (let i = 0; i < 8; i++) {
+      click();
+      bulk(recorder, 2, `b${i}`);
+      await tabSwitch();
+      await advance(30_000);
+    }
+    const sentWhileOffline = replayCalls().length;
+    // Only the 5 s segment, which found the queue empty, and its own 1 s retry: no hide sent anything.
+    expect(replayCalls().every((c) => c.body.segment === 0 && c.at <= 6_100)).toBe(true);
+    expect(sentWhileOffline).toBeLessThanOrEqual(2);
+    expect(recorded).toBeGreaterThanOrEqual(8);
+
+    setOnline(true);
+    window.dispatchEvent(new Event("online"));
+    await advance(20 * 60_000);
+    expect(stored).toEqual(Array.from({ length: recorded }, (_, i) => i));
+    expect(inOrder(stored)).toBe(true);
+    recorder.stop();
+  });
+
+  it("a server wait: segment 0 is sent at 5 s and not again before 600 s, then it and every later segment are stored in order", async () => {
+    const stored: number[] = [];
+    respond = (call) => {
+      if (call.at < 600_000) return new Response("{}", { status: 429, headers: { "retry-after": "600" } });
+      if (call.url === REPLAY_URL) stored.push(call.body.segment);
+      return ok();
+    };
+    const { recorder } = await startRecorder();
+    let recorded = 0;
+    recorder.onSegment(() => recorded++);
+    click();
+    await advance(5_000);
+    for (let i = 0; i < 8; i++) {
+      click();
+      bulk(recorder, 2, `w${i}`);
+      await advance(60_000);
+      await tabSwitch();
+    }
+    const before = replayCalls().filter((c) => c.at < 600_000);
+    expect(before.map((c) => [c.body.segment, Math.round(c.at / 1000)])).toEqual([[0, 5]]);
+    await advance(30 * 60_000);
+    expect(stored).toEqual(Array.from({ length: recorded }, (_, i) => i));
+    expect(recorded).toBeGreaterThanOrEqual(8);
+    recorder.stop();
+  });
+
+  it("a hide during a server wait makes no request for the new segment, which is sent after the wait", async () => {
+    respond = (call) => (call.at < 100_000 ? new Response("{}", { status: 429, headers: { "retry-after": "100" } }) : ok());
+    const { recorder } = await startRecorder();
+    click();
+    await advance(5_000); // segment 0: 429, the queue waits until 105 s
+    expect(segments()).toEqual([0]);
+    click();
+    bulk(recorder, 2, "late");
+    await advance(20_000);
+    await tabSwitch();
+    expect(segments()).toEqual([0]); // the hide sent nothing
+    await advance(60_000);
+    expect(segments()).toEqual([0]);
+    await advance(30_000); // past 105 s
+    const after = replayCalls().filter((c) => c.at >= 105_000).map((c) => c.body.segment);
+    expect(after.length).toBeGreaterThanOrEqual(2);
+    expect(after[0]).toBe(0);
+    expect(inOrder(after)).toBe(true);
+    expect(after).toContain(1);
+    recorder.stop();
+  });
+
+  it("three queued entries that fail at one hide advance the backoff once: the next queue request is 5 s later", async () => {
+    respond = (call) => (call.at < 100_000 ? new Response("{}", { status: 429, headers: { "retry-after": "100" } }) : status(503)());
+    const { recorder } = await startRecorder();
+    click();
+    await advance(5_000); // segment 0: 429, waits until 105 s
+    click();
+    await advance(30_000); // segments 1 joins the queue
+    click();
+    await advance(30_000); // and 2
+    expect(segments()).toEqual([0]);
+    // The wait is over by the clock; the timer that would drain the queue has not fired yet.
+    vi.setSystemTime(Date.now() + 80_000);
+    const hideAt = Date.now() - t0;
+    await tabSwitch();
+    const hideCalls = replayCalls().filter((c) => c.at >= hideAt);
+    expect(hideCalls.map((c) => c.body.segment).slice(0, 3)).toEqual([0, 1, 2]);
+    const sentAtHide = replayCalls().length;
+    await advance(4_900);
+    expect(replayCalls()).toHaveLength(sentAtHide);
+    await advance(200);
+    expect(replayCalls().length).toBe(sentAtHide + 1);
+    expect(Math.round((replayCalls()[sentAtHide].at - hideAt) / 1000)).toBe(5);
     recorder.stop();
   });
 });

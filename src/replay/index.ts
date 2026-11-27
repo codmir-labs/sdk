@@ -332,6 +332,8 @@ export class ReplayRecorder {
   private queueBytes = 0;
   /** Epoch ms before which the head of the queue is not sent again (a backoff, but not a server wait, ends on `online`). */
   private queueDueAt = 0;
+  /** Set once a hide has advanced the backoff, so one hide takes one step. */
+  private hideStepped = false;
   /** What the head is waiting out: our own backoff, or a delay the server asked for. */
   private queueDueKind: "backoff" | "server" = "backoff";
   /** The last backoff used with no server delay, 0 after a stored segment. */
@@ -591,6 +593,7 @@ export class ReplayRecorder {
     runHideFlushes();
     const run: HideRun = { cut: false };
     this.hideRun = run;
+    this.hideStepped = false;
     try {
       this.sendQueueOnHide(run);
       this.flushSegment(true);
@@ -602,6 +605,7 @@ export class ReplayRecorder {
   private sendQueueOnHide(run: HideRun): void {
     const upload = this.config.upload;
     if (!upload || this.uploadsRefused || this.queue.length === 0) return;
+    if (this.queueMustWait()) return; // the wait holds at hide: no request, so no attempt is counted
     // A request of the queue still in flight went without keepalive: nothing after it may take one.
     if (this.draining) run.cut = true;
     const generation = this.queueGeneration;
@@ -615,7 +619,9 @@ export class ReplayRecorder {
         if (typeof outcome === "object") {
           entry.attempts++;
           if (outcome.delayMs !== null) this.waitForServer(outcome.delayMs);
-          else {
+          else if (!this.hideStepped) {
+            // One hide is one backoff step, however many of its sends fail.
+            this.hideStepped = true;
             this.queueDueAt = Date.now() + this.nextBackoff();
             this.queueDueKind = "backoff";
           }
@@ -635,6 +641,11 @@ export class ReplayRecorder {
         this.drain();
       });
     }
+  }
+
+  /** Offline, or a wait the server asked for that has not passed: the queue sends nothing, a hide included. */
+  private queueMustWait(): boolean {
+    return isOffline() || (this.queueDueKind === "server" && Date.now() < this.queueDueAt);
   }
 
   private flushSegment(hiding = false): void {
@@ -713,8 +724,9 @@ export class ReplayRecorder {
     if (!upload || this.uploadsRefused) return;
     const segment: QueuedSegment = { counter, replayId, sequenceNumber, events, errorIds, epoch, bytes: 0, attempts: 0 };
     // Behind a queued segment (of any replay) a new one waits its turn, so segments reach the server in order. A segment
-    // flushed as the page hides is sent once, now, and never queued: the page may be gone before a queue could send it.
-    if (!hiding && this.queue.length > 0) {
+    // flushed as the page hides is sent once, now, and not queued: the page may be gone before a queue could send it.
+    // Unless the queue must wait (offline, or a server wait): then it joins the queue's end without a request.
+    if (hiding ? this.queueMustWait() : this.queue.length > 0) {
       this.enqueue(segment, null);
       return;
     }
