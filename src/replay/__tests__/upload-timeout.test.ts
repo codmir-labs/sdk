@@ -166,6 +166,24 @@ describe("the segments waiting for a slot", () => {
     for (const dropped of ["a2", "a3", "a4"]) expect(sent).not.toContain(dropped);
   });
 
+  it("drop the replay of the oldest, not the newest: a large segment of another replay is kept and sent", async () => {
+    hangs = (n) => n < 2;
+    const { give, inner } = await start();
+    const lose = vi.spyOn(inner as unknown as { lose(replayId: string, epoch: number): void }, "lose");
+    give("c", 100);
+    give("c", 101); // both slots are taken
+    give("a", 0, 2_000_000);
+    give("a", 1, 2_000_000);
+    expect(mine(inner.waiting).map((w) => `${w.replayId}${w.sequenceNumber}`)).toEqual(["a0", "a1"]);
+    give("b", 0, 2_000_000); // 6 MB are waiting: over the 5 MiB bound, and the newest is of another replay than the oldest
+    expect(lose.mock.calls.map((c) => c[0])).toEqual(["a"]);
+    expect(mine(inner.waiting).map((w) => `${w.replayId}${w.sequenceNumber}`)).toEqual(["b0"]);
+    await tick(60_000);
+    const sent = calls.map((c) => `${c.replayId}${c.segment}`);
+    expect(sent).toContain("b0");
+    for (const dropped of ["a0", "a1"]) expect(sent).not.toContain(dropped);
+  });
+
   it("keep what fits", async () => {
     hangs = (n) => n < 2;
     const { give, inner } = await start();
