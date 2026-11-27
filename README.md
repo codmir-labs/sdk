@@ -1622,7 +1622,10 @@ that undoes them. Cloud mode is off unless you pass `cloud`.
   issue. Emails and IP addresses in text are not masked: a message such as `no account for ann@example.com` goes as it is.
 - **URLs keep origin and path only.** `fetch` and XHR breadcrumbs, navigation breadcrumbs, transactions and
   `request.url` drop the query string and fragment, so an `?access_token=` or an OAuth `#access_token=` in a URL does
-  not ride along with your errors. Session replay's meta events carry the page's address as origin and path too, and
+  not ride along with your errors, and neither does a `user:password@` (a protocol-relative or padded URL included). A `data:` URL
+  is its media type and payload size (`data:image/png;base64,[80000 bytes]`), `blob:` keeps the scrubbed URL inside it, `about:`
+  its path, any other scheme without `//` (`javascript:`, `mailto:`) only the scheme, and no URL is longer than 1,024
+  characters; a URL in a failed `fetch`'s error text is cut the same way, and so is the request's own URL as your app wrote it, even a relative one (`/x?t=1` becomes `/x`). Session replay's meta events carry the page's address as origin and path too, and
   so does a recorded link or source that points at the page itself, such as `href="#top"`, which keeps its own
   fragment, and a `url(...)` in CSS that rrweb resolved against it. The rest of the recorded page is content (its
   text, other links, CSS with its own addresses), so still keep tokens out of the URLs of pages you record.

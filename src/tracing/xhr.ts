@@ -1,7 +1,7 @@
 import { addBreadcrumb, getClient } from "../overseer/index";
 import { isLive, type Installed } from "../overseer/lifecycle";
-import { scrubUrl } from "../overseer/url-scrub";
 import { getActiveSpan } from "./context";
+import { requestPath, scrubRequestUrl, spanUrl } from "./url-match";
 import { isOwnRequest, resolveUrl, shouldPropagate } from "./fetch";
 import type { Span } from "./span";
 
@@ -46,7 +46,7 @@ export function instrumentXhr(options: InstrumentXhrOptions = {}): () => void {
   const open: PatchedOpen = function (this: XMLHttpRequest, method: string, url: string | URL) {
     const fullUrl = String(url);
     // The breadcrumb names origin and path only: a query or fragment can hold a token.
-    if (installed.active) states.set(this, { rawMethod: String(method), method: String(method).toUpperCase(), rawUrl: scrubUrl(fullUrl), url: resolveUrl(fullUrl), startTime: 0, hasTraceparent: false });
+    if (installed.active) states.set(this, { rawMethod: String(method), method: String(method).toUpperCase(), rawUrl: scrubRequestUrl(fullUrl), url: resolveUrl(fullUrl), startTime: 0, hasTraceparent: false });
     // eslint-disable-next-line prefer-rest-params -- forwards every XHR open() argument unchanged
     return (originalOpen as (...args: unknown[]) => void).apply(this, arguments as unknown as unknown[]);
   } as PatchedOpen;
@@ -67,8 +67,8 @@ export function instrumentXhr(options: InstrumentXhrOptions = {}): () => void {
     const own = !!state.url && isOwnRequest(state.url);
     let span: Span | null = null;
     if (state.url && !own) {
-      span = getActiveSpan()?.startChild({ op: "http.client", name: `${state.method} ${state.url.pathname}` }) ?? null;
-      span?.setData("url", `${state.url.origin}${state.url.pathname}`);
+      span = getActiveSpan()?.startChild({ op: "http.client", name: `${state.method} ${requestPath(state.url, state.rawUrl)}` }) ?? null;
+      span?.setData("url", spanUrl(state.url, state.rawUrl));
       span?.setData("http.request.method", state.method);
       if (span && !state.hasTraceparent && shouldPropagate(state.url, getClient()?.getTracePropagationTargets() ?? [])) {
         originalSetRequestHeader.call(this, "traceparent", span.toTraceparent());
@@ -87,7 +87,7 @@ export function instrumentXhr(options: InstrumentXhrOptions = {}): () => void {
         if (breadcrumbs && !own) {
           addBreadcrumb({
             category: "xhr",
-            message: `${state.rawMethod} ${state.url?.pathname ?? state.rawUrl} ${this.status > 0 ? this.status : "failed"}`,
+            message: `${state.rawMethod} ${state.url ? requestPath(state.url, state.rawUrl) : state.rawUrl} ${this.status > 0 ? this.status : "failed"}`,
             data: { method: state.rawMethod, url: state.rawUrl, status: this.status, duration: Date.now() - state.startTime },
             level: this.status >= 400 ? "error" : "info",
           });
