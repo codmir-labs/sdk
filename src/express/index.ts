@@ -390,8 +390,9 @@ export function errorHandler(options: ErrorHandlerOptions = {}): ErrorMiddleware
     }
     // Never the request's headers, cookies, query, params or body. The event's `request` (origin, path, method)
     // comes from the scope below; the route pattern is the one safe thing to add.
-    const requestContext: Record<string, unknown> = withHint({}, crash("express-error-handler"));
-    if (typeof req.route?.path === "string") requestContext.route = `${req.baseUrl ?? ""}${req.route.path}`;
+    const requestExtra: Record<string, unknown> = {};
+    const requestTags: Record<string, string> = {};
+    if (typeof req.route?.path === "string") requestTags.route = `${req.baseUrl ?? ""}${req.route.path}`;
 
     // The request's scope is the one `requestHandler` made, with the user `setUser` or `extractUser` gave it.
     const scope = req._codmir?.scope ?? scopeOf(req);
@@ -400,12 +401,14 @@ export function errorHandler(options: ErrorHandlerOptions = {}): ErrorMiddleware
       if (req._codmir?.scope) refreshUser(req, scope);
       else extractInto(req, scope);
     }
-    if (expressConfig.extractUser && scope.user) requestContext.user = scope.user;
+    if (expressConfig.extractUser && scope.user) requestExtra.user = scope.user;
 
     // The client IP is personal data: only with `sendDefaultPii: true`.
     if (req.ip && sendsDefaultPii()) {
-      requestContext.clientIp = req.ip;
+      requestExtra.clientIp = req.ip;
     }
+
+    const requestContext = withHint({ tags: requestTags, extra: requestExtra }, crash("express-error-handler"));
 
     // Capture the exception
     const eventId = withRequestScope(scope, () => coreCaptureException(err, requestContext));
@@ -504,6 +507,7 @@ export {
   type UserContext,
   type Breadcrumb,
   type SeverityLevel,
+  type CaptureContext,
 } from "../overseer/index";
 
 // Alias core functions for direct use

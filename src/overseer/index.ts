@@ -31,6 +31,7 @@ import { sanitizeExtra } from "./sanitize-extra";
 import { redactSecrets } from "../logs/redact";
 import { scrubEvent, scrubTags } from "./scrub-text";
 import { readHint } from "./capture-hint";
+import { readCaptureContext, type CaptureContext } from "./capture-context";
 import { normalizeThrown, syntheticStack, type Caller } from "./thrown-value";
 import { browserRequest, envContexts } from "./runtime-context";
 import { addSourceContext } from "./source-context";
@@ -246,6 +247,31 @@ export interface RequestData {
 export type QueuedEvent = OverseerEvent | TransactionEvent;
 
 export type SeverityLevel = "fatal" | "error" | "warning" | "info" | "debug";
+
+export type { CaptureContext };
+
+/** A capture context's tags, every value a string. */
+function stringTags(tags: CaptureContext["tags"]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(tags ?? {})) out[key] = String(value);
+  return out;
+}
+
+/** The event's `fingerprint` field for a capture context's one, or nothing when it is empty. */
+function fingerprintOf(fingerprint: string | string[]): { fingerprint?: string[] } {
+  const list = typeof fingerprint === "string" ? [fingerprint] : fingerprint;
+  return list.length ? { fingerprint: [...list] } : {};
+}
+
+/** A capture context's contexts, each cleaned like `extra`; the SDK's own `conversation` and `session` are not settable. */
+function contextsOf(contexts: CaptureContext["contexts"]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(contexts ?? {})) {
+    if (name === "conversation" || name === "session") continue;
+    out[name] = sanitizeExtra(value);
+  }
+  return out;
+}
 
 // =============================================================================
 // Core Client
@@ -480,7 +506,7 @@ class OverseerClient {
     }
   }
 
-  captureException(error: Error | unknown, context?: Record<string, unknown>): string {
+  captureException(error: Error | unknown, context?: CaptureContext | Record<string, unknown>): string {
     return this.captureFrom(error, context, this.captureException);
   }
 
@@ -489,13 +515,15 @@ class OverseerClient {
    * `captureException`): a stack made up for a thrown value that is not an error starts at that function's caller.
    * Not part of the stable API.
    */
-  captureFrom(error: Error | unknown, context: Record<string, unknown> | undefined, caller: Caller): string {
+  captureFrom(error: Error | unknown, context: CaptureContext | Record<string, unknown> | undefined, caller: Caller): string {
     if (!this.config.enabled) return "";
     if (!this.shouldSample(this.config.sampleRate)) return "";
 
     const eventId = generateId();
     // Set by an integration only (a symbol key): a caller's own `handled` or `mechanism` is plain data in `extra`.
     const hint = readHint(context);
+    // A capture context sets fields of the event; any other object is `extra` as a whole.
+    const fields = readCaptureContext(context);
     const err = normalizeThrown(error);
     // Kept in this function (not in a helper): the stack of an error made up for the value starts at the app's call.
     const stack = err.stack ?? syntheticStack(err.name, err.message, caller, hint?.frames);
@@ -508,7 +536,7 @@ class OverseerClient {
       id: eventId,
       type: "error",
       timestamp: new Date().toISOString(),
-      level: hint?.level ?? "error",
+      level: fields?.level ?? hint?.level ?? "error",
       message: err.message,
       exception: {
         type: err.name,
@@ -517,12 +545,12 @@ class OverseerClient {
         mechanism: hint?.mechanism ?? { type: "generic", handled: true },
         ...(causes ? { causes } : {}),
       },
-      user: this.userOf() || undefined,
-      tags: this.tagsOf(),
+      user: fields?.user ? { ...this.userOf(), ...fields.user } : this.userOf() || undefined,
+      tags: { ...this.tagsOf(), ...stringTags(fields?.tags) },
       extra: {
         // No request, headers, cookies, query, params or body, whatever the caller passed.
         ...(err.thrown === undefined ? {} : sanitizeExtra({ thrown: err.thrown })),
-        ...sanitizeExtra(context),
+        ...sanitizeExtra(fields ? fields.extra : context),
         conversationId,
         sessionId,
       },
@@ -531,8 +559,10 @@ class OverseerClient {
       release: this.config.release,
       sdk: { ...SDK_INFO },
       ...this.requestOf(),
+      ...(fields?.fingerprint ? fingerprintOf(fields.fingerprint) : {}),
       contexts: {
         ...envContexts(),
+        ...contextsOf(fields?.contexts),
         conversation: conversationId ? { id: conversationId } : undefined,
         session: sessionId ? { id: sessionId } : undefined,
       },
@@ -1543,7 +1573,7 @@ export function getClient(): OverseerClient | null {
   return client ?? slotClient();
 }
 
-export function captureException(error: Error | unknown, context?: Record<string, unknown>): string {
+export function captureException(error: Error | unknown, context?: CaptureContext | Record<string, unknown>): string {
   return getClient()?.captureFrom(error, context, captureException) || "";
 }
 

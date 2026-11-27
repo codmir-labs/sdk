@@ -45,7 +45,7 @@ describe("express", () => {
     express.errorHandler()(new Error("boom"), expressReq(), {} as any, () => undefined);
     expectClean();
     expect(events[0]!.request).toEqual({ url: "https://shop.example.com/orders/u-4242", method: "POST" });
-    expect(events[0]!.extra).toMatchObject({ route: "/api/orders/:id" });
+    expect(events[0]!.tags).toMatchObject({ route: "/api/orders/:id" });
     expect(events[0]!.exception!.mechanism).toEqual({ type: "express-error-handler", handled: false });
   });
 
@@ -65,14 +65,14 @@ describe("next.js", () => {
     nextjs.captureRequestError(new Error("a") as any, { routerKind: "App Router", routePath: "/api/users/[id]", routeType: "route" }, req());
     expectClean();
     expect(events[0]!.request).toEqual({ url: "https://next.example.com/api/users/u-4242", method: "POST" });
-    expect(events[0]!.extra).toMatchObject({ route: "/api/users/[id]" });
+    expect(events[0]!.tags).toMatchObject({ route: "/api/users/[id]" });
     expect(events[0]!.exception!.mechanism).toEqual({ type: "server", handled: false });
   });
 
   it("captureRouterError sends no request object or headers", async () => {
     await nextjs.captureRouterError(new Error("b") as any, { path: "/p?token=SECRET", method: "GET", headers: { cookie: "sid=SECRET", Authorization: "Bearer SECRET" } }, { routerKind: "Pages Router", routePath: "/p", routeType: "render" } as any);
     expectClean();
-    expect(events[0]!.extra).toMatchObject({ route: "/p" });
+    expect(events[0]!.tags).toMatchObject({ route: "/p" });
   });
 });
 

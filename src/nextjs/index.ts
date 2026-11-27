@@ -31,6 +31,7 @@ import {
   type UserContext,
   type Breadcrumb,
   type SeverityLevel,
+  type CaptureContext,
 } from "../overseer/index";
 import { detectNextClientHost } from "../overseer/detect";
 import { listen, Stops } from "../overseer/lifecycle";
@@ -187,6 +188,12 @@ export function close(): void {
 // Server-Side Helpers
 // =============================================================================
 
+/** The route pattern goes where the platform reads it, the tag `route`; the rest of Next's context stays in `extra`. */
+function routeContext(errorContext: Partial<ErrorContext>): CaptureContext {
+  const { routePath, ...rest } = errorContext;
+  return { ...(routePath && typeof routePath === "string" ? { tags: { route: routePath } } : {}), extra: rest };
+}
+
 /**
  * Capture a server-side request error (App Router). One Error object is sent once across this, `captureRouterError` and
  * `captureUnderscoreErrorException`, and Next's `error.digest` goes as the tag `digest`. The event is only queued: `await flushRequestError()` before the
@@ -203,10 +210,7 @@ export function captureRequestError(
   const capture = (): string =>
     coreCaptureException(
       error,
-      withHint(
-        { ...errorContext, ...(errorContext.routePath ? { route: errorContext.routePath } : {}) },
-        crash("server"),
-      ),
+      withHint(routeContext(errorContext), crash("server")),
     );
   if (request) return withRequestScope(withDigest(requestScopeFrom({ url: request.url, method: request.method }), error), capture);
   const digest = digestOf(error);
@@ -247,12 +251,7 @@ export async function captureRouterError(
     coreCaptureException(
       error,
       withHint(
-        {
-          routerKind: context.routerKind,
-          routePath: context.routePath,
-          routeType: context.routeType,
-          route: context.routePath,
-        },
+        routeContext({ routerKind: context.routerKind, routeType: context.routeType, routePath: context.routePath }),
         crash("nextjs-router"),
       ),
     ),
@@ -347,6 +346,7 @@ export {
   type UserContext,
   type Breadcrumb,
   type SeverityLevel,
+  type CaptureContext,
 } from "../overseer/index";
 
 // The same functions under the plain names an error-tracking SDK usually exports
