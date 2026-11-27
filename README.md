@@ -761,7 +761,14 @@ export default function App() {
 
 `init()` installs a global JS error handler through `ErrorUtils` and still calls the handler that was there before.
 The error boundary captures render errors with the component stack, then shows `fallback` (a node, or a function of
-the error). Screens, app state and device details are recorded through calls:
+the error).
+
+A fatal JS crash is sent before the app ends: the handler captures it, flushes for up to 2 seconds, and only then calls
+the handler that was there before (which ends the app in a release build), so a hung network delays the end by 2
+seconds at most. A second fatal error during that flush calls the previous handler at once, and so does any error that
+is not fatal. Unhandled promise rejections are captured on Hermes, with mechanism `onunhandledrejection`; in a
+development build the warning React Native prints for them is still printed. On JavaScriptCore there is no hook for
+them, so rejections are not captured there. Screens, app state and device details are recorded through calls:
 
 ```ts
 import { AppState, Platform } from 'react-native';
@@ -774,7 +781,7 @@ Codmir.setDeviceInfo({
 
 AppState.addEventListener('change', (state) => {
   if (state === 'active' || state === 'background' || state === 'inactive') {
-    Codmir.trackAppStateChange(state); // app.lifecycle breadcrumb
+    Codmir.trackAppStateChange(state); // app.lifecycle breadcrumb; 'background' also sends what is queued
   }
 });
 

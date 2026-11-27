@@ -68,6 +68,18 @@ export interface DeviceInfo {
 // React Native Specific Initialization
 // =============================================================================
 
+/** How long a fatal error waits for the queue to leave before React Native's handler ends the app. */
+const FATAL_FLUSH_MS = 2000;
+
+interface HermesInternalLike {
+  hasPromise?: () => boolean;
+  enablePromiseRejectionTracker?: (options: {
+    allRejections: boolean;
+    onUnhandled: (id: number, rejection: unknown) => void;
+    onHandled: (id: number) => void;
+  }) => void;
+}
+
 let isInitialized = false;
 let deviceInfo: DeviceInfo | null = null;
 /** What `init` started, ended by `close`. */
@@ -92,12 +104,26 @@ export function init(config: ReactNativeConfig = {}): void {
   if (typeof ErrorUtils !== "undefined") {
     const originalHandler = ErrorUtils.getGlobalHandler();
     let working = true;
+    // True while a fatal error's flush is pending; the next fatal error does not wait for it.
+    let flushingFatal = false;
     const handler = (error: Error, isFatal?: boolean): void => {
       if (working) {
         coreCaptureException(
           error,
           withHint({ device: deviceInfo }, crash("global-error-handler", isFatal ? "fatal" : undefined)),
         );
+      }
+
+      // In a release build the original handler ends the app on a fatal error, and the queue with it: send first.
+      if (working && isFatal && !flushingFatal) {
+        flushingFatal = true;
+        coreFlush(FATAL_FLUSH_MS)
+          .catch(() => undefined)
+          .finally(() => {
+            flushingFatal = false;
+            originalHandler?.(error, isFatal);
+          });
+        return;
       }
 
       // Call original handler
@@ -110,6 +136,26 @@ export function init(config: ReactNativeConfig = {}): void {
     stops.add(() => {
       working = false;
       if (ErrorUtils.getGlobalHandler() === handler && originalHandler) ErrorUtils.setGlobalHandler(originalHandler);
+    });
+  }
+
+  // Unhandled promise rejections. React Native turns Hermes' tracker on only under __DEV__, to print warnings.
+  const hermes = (globalThis as { HermesInternal?: HermesInternalLike }).HermesInternal;
+  if (hermes?.hasPromise?.() && typeof hermes.enablePromiseRejectionTracker === "function") {
+    // Hermes has no way to turn the tracker off: after `close` it stays installed and captures nothing.
+    let tracking = true;
+    stops.add(() => {
+      tracking = false;
+    });
+    hermes.enablePromiseRejectionTracker({
+      allRejections: true,
+      onUnhandled: (id: number, rejection: unknown) => {
+        if ((globalThis as { __DEV__?: unknown }).__DEV__ === true) {
+          console.warn(`Possible unhandled promise rejection (id: ${id}):`, rejection);
+        }
+        if (tracking) coreCaptureException(rejection, withHint({}, crash("onunhandledrejection", undefined, "none")));
+      },
+      onHandled: () => {},
     });
   }
 }
@@ -181,7 +227,7 @@ function getCurrentRouteName(state: any): string | null {
 // =============================================================================
 
 /**
- * Track app state change (foreground/background)
+ * Track app state change (foreground/background); going to the background also sends what is queued
  */
 export function trackAppStateChange(state: "active" | "background" | "inactive"): void {
   coreAddBreadcrumb({
@@ -189,6 +235,8 @@ export function trackAppStateChange(state: "active" | "background" | "inactive")
     message: `App state: ${state}`,
     data: { state },
   });
+  // A backgrounded app can be ended by the system at any time: send what is queued now.
+  if (state === "background") coreFlush().catch(() => undefined);
 }
 
 // =============================================================================
