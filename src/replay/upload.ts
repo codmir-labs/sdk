@@ -19,6 +19,12 @@ export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 /** Headroom under {@link MAX_BODY_BYTES} for the envelope and for the events being sized one by one. */
 export const TARGET_BODY_BYTES = 1_800_000;
 export const MAX_EVENTS_PER_SEGMENT = 10_000;
+/**
+ * The most the on-error buffer holds, and the most one session or post-error segment gathers before it is cut, in
+ * {@link eventBytes}. 4 MiB is a little over two requests of {@link TARGET_BODY_BYTES}, so an error sends at most three
+ * chunks, and it stays under the 5 MiB the retry queue takes.
+ */
+export const MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 export { KEEPALIVE_MAX_BYTES };
 export const RETRY_DELAY_MS = 1000;
 /** A 429 without a readable `Retry-After`: the server's rate window is 60 s. */
@@ -117,6 +123,11 @@ export function buildSegmentBody(
   return body;
 }
 
+/** What one event adds to a request body: the UTF-8 bytes of its JSON plus the comma. {@link chunkEvents} sizes events the same way. */
+export function eventBytes(event: RrwebEvent): number {
+  return utf8Bytes(JSON.stringify(event)) + 1;
+}
+
 /**
  * Cuts `events` into consecutive runs that each fit one request: at most {@link MAX_EVENTS_PER_SEGMENT} events
  * and about {@link TARGET_BODY_BYTES} UTF-8 bytes once serialised. A single event larger than the budget cannot be split
@@ -134,7 +145,7 @@ export function chunkEvents(
   let snapshotDropped = false;
 
   for (const event of events) {
-    const bytes = utf8Bytes(JSON.stringify(event)) + 1;
+    const bytes = eventBytes(event);
     if (bytes + overheadBytes > budget) {
       dropped++;
       if (event.type === RRWEB_FULL_SNAPSHOT) snapshotDropped = true;

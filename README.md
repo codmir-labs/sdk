@@ -1356,6 +1356,16 @@ when `upload.debug` is on), and the rest of its list still applies.
   while it fits the budget below; one that does not fit, and every later one, goes without it.
 - An error history over that size is sent as several segments in order; the error's id rides on the last one, which
   ends at the error, so the player lands on the error and not on the end of an earlier chunk.
+- The on-error buffer holds at most 4 MiB of event JSON, each event measured once when it is recorded. Over that the
+  older of its two checkout generations goes, and a generation that fills 4 MiB alone is closed by an early full
+  snapshot, so the history an error sends always opens with a Meta event and a FullSnapshot. A session or post-error
+  segment is also cut when it reaches 4 MiB, besides 30 s and `maxSegmentEvents`. A page that changes a lot therefore
+  keeps less than 30 to 60 s of history; one that changes little is unaffected.
+- A replay has at most two uploads in flight at a time: the chunks of an error's history, and segments emitted while
+  others are out, go in sequence order and the next starts when one answers, so an error sends no more than about
+  4 MiB, two requests at a time, not everything at once. At page hide what still waits goes out like the retry queue.
+- `ReplaySession` (what `stop()` returns) keeps the ids of the newest 500 errors and the metadata of the newest 500
+  segments; a page that lives for days does not grow it.
 - Sizes are counted in UTF-8 bytes, the unit the server limits, so a page in Chinese, Japanese, Korean or Cyrillic is cut
   as small as one in English. Browsers refuse `keepalive` requests past 64 KiB of bodies in flight per page, so the SDK keeps one budget of 60,000
   UTF-8 bytes for the error transport and the replay together: a request takes `keepalive` while its body, plus those of
