@@ -120,9 +120,10 @@ export function installProcessErrors(hooks: ProcessErrorsHooks): () => void {
           : Object.assign(new Error(`This error originated either by throwing inside of an async function without a catch block, or by rejecting a promise which was not handled with .catch(). The promise rejected with the reason "${String(reason)}".`), { code: "ERR_UNHANDLED_REJECTION" });
       rethrown = error;
       flushedFor = error;
-      setImmediate(() => {
+      // A timer, not a Node-only API: browser bundles of the core must not name Node globals.
+      setTimeout(() => {
         throw error;
-      });
+      }, 0);
     });
   };
 
