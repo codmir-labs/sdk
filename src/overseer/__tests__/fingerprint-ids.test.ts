@@ -39,4 +39,16 @@ describe("fingerprint masks ids before digits", () => {
     expect(out.startsWith("id <UUID> zzz")).toBe(true);
     expect(out).toHaveLength(100);
   });
+
+  it("groups a digit-only number the same whatever its length", () => {
+    const a = fp("Order 1234567 failed");
+    const b = fp("Order 12345678 failed");
+    expect(a).toEqual(b);
+    expect(a[1]).toBe("Order <N> failed");
+    expect(fp("file too large: 1048576 bytes")).toEqual(fp("file too large: 10485760 bytes"));
+  });
+
+  it("masks a 10-digit timestamp to <N>", () => {
+    expect(fp("expired at 1764115200")[1]).toBe("expired at <N>");
+  });
 });
