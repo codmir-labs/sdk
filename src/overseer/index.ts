@@ -113,7 +113,7 @@ export interface OverseerConfig {
   /**
    * Called when the server did not take events: a batch it refused (`status` 401 for a wrong key, say), or events it
    * dropped out of a batch it answered 200 to (`reason`, such as `payment_required`), or that the client gave up on
-   * (`status` 0: the queue was full, the client was closed before the last try went through, `beforeSend` threw, or `rateLimit` held the event back, reason `rate_limited`, or an event could not be written as JSON, reason `unserializable`, or an event was still unsent after 24 hours, reason `expired`), or an event the server kept answering with a 5xx while it took other requests, alone in its batch (its `status`, reason `retry_exhausted`; an outage drops nothing). They are not sent again.
+   * (`status` 0: the queue was full, the client was closed before the last try went through, `beforeSend` threw, or `rateLimit` held the event back, reason `rate_limited`, or an event could not be written as JSON, reason `unserializable`, or an event was still unsent after 24 hours, reason `expired`, or the client has no `clientKey` and no `dsn`, so no event can be sent, reason `not_configured`), or an event the server kept answering with a 5xx while it took other requests, alone in its batch (its `status`, reason `retry_exhausted`; an outage drops nothing). They are not sent again.
    * `eventIds` are the ids `captureEvent` returned for those events, when they are known.
    */
   onDropped?: (dropped: { events: number; status: number; reason?: string; eventIds?: string[] }) => void;
@@ -321,6 +321,7 @@ interface PendingBatch {
 type SendOutcome =
   | { kind: "ok" }
   | { kind: "drop" }
+  | { kind: "not_configured" }
   | { kind: "too_large" }
   | { kind: "retry"; retryAfterMs?: number; serverStatus?: number };
 
@@ -410,6 +411,13 @@ class OverseerClient {
             perGroup: count(limit?.perGroupPerMinute, DEFAULT_PER_GROUP_PER_MINUTE),
             perMinute: count(limit?.perMinute, DEFAULT_PER_MINUTE),
           };
+
+    // The usual first mistake: `clientKey: process.env.CODMIR_CLIENT_KEY` with the variable unset or not exposed to the bundle.
+    if (this.config.enabled && !this.config.dsn) {
+      console.warn(
+        "[Overseer] No `clientKey` (and no `dsn`) is set, so no event will be sent. Pass `clientKey`, and check that the environment variable it reads is set, and exposed to the browser bundle if this runs there. Events are reported to `onDropped` as `not_configured`.",
+      );
+    }
 
     if (this.config.initialUser) {
       this.user = this.config.initialUser;
@@ -1041,6 +1049,8 @@ class OverseerClient {
     // Lowered when the server answers 413 to a batch: the halves go out first and the rest of this drain stays small.
     let maxEvents = MAX_BATCH_EVENTS;
     const retriedSmaller = new WeakSet<object>();
+    // Events that could not be sent because the client has no endpoint: neither sent nor refused, so the flush is not a success.
+    let unconfigured = false;
     while (this.pendingBatches.length > 0 || this.eventQueue.length > 0) {
       this.dropExpired();
       // A batch that failed goes first, as it was; only then is a new one cut from the queue. A deferred batch waits for both.
@@ -1084,6 +1094,10 @@ class OverseerClient {
         continue;
       }
       if (outcome.kind === "drop") continue;
+      if (outcome.kind === "not_configured") {
+        unconfigured = true;
+        continue;
+      }
 
       if (this.closed) {
         // close() makes one last attempt; a failure then is final.
@@ -1100,7 +1114,7 @@ class OverseerClient {
       return false;
     }
     this.flushOpen = false;
-    return true;
+    return !unconfigured;
   }
 
   /** The two halves of a batch, each a batch of its own with a fresh count. */
@@ -1266,8 +1280,9 @@ class OverseerClient {
     events: QueuedEvent[],
   ): Promise<SendOutcome> {
     if (!this.config.dsn) {
-      this.log("No DSN configured, events:", events);
-      return { kind: "ok" };
+      this.log("No `clientKey` (and no `dsn`) is set; not sending, events:", events);
+      this.tellDropped(events.length, 0, "not_configured", events);
+      return { kind: "not_configured" };
     }
 
     // A request that never answers is given up on and retried, so it cannot hold back every later flush. The race frees
@@ -1344,7 +1359,10 @@ class OverseerClient {
    * telemetry key only from that header or `Authorization`, so a beacon would arrive unkeyed and have its errors dropped.
    */
   private flushOnHide(): void {
-    if (!this.config.dsn || (this.eventQueue.length === 0 && this.pendingBatches.length === 0) || typeof fetch !== "function") return;
+    if (this.eventQueue.length === 0 && this.pendingBatches.length === 0) return;
+    // Nothing can be sent, but the page is going away: report what is queued now, not on a timer that may never fire.
+    if (!this.config.dsn) return this.flushQuietly();
+    if (typeof fetch !== "function") return;
     this.queuedBytes = 0;
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
