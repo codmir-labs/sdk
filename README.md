@@ -495,7 +495,10 @@ x-overseer-key: osk_example
    `_`), so a function name there would start a new group on each deploy. A frame whose function looks mangled keys as
    its normalized file alone: a name of 1 or 2 characters (letters, digits, `_`, `$`), or of 3 on line 1 or 2 at a
    column above 1000, deep inside a one-line bundle. So does an anonymous frame with no source line on line 1 or 2 at a
-   column above 1000, whose line number says nothing there. When any of the key's frames is one of these, the folded
+   column above 1000, whose line number says nothing there. In a method name such as `e.charge`, a mangled class name
+   before the method is dropped by the same rule and the method name is kept (`charge`), because a minifier renames
+   classes and not properties; a class name that does not look mangled (`OrderService.charge`) stays. Only a mangled
+   function name, not a dropped class name, adds the message below. When any of the key's frames is one of these, the folded
    message (as above) is added after the frame parts, so two different errors in one bundle stay apart and each stays
    stable across deploys, with no source map. To get frame-based grouping back, keep the names in the bundler: esbuild
    `keepNames`, terser `keep_fnames` and `keep_classnames`. Source maps are not used for grouping yet.

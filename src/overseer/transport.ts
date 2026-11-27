@@ -147,13 +147,20 @@ const MID_NAME = /^[A-Za-z0-9_$]{3}$/;
 /** Whether a frame sits deep inside a one-line bundle: line 1 or 2, column above 1000. */
 const deepInBundle = (frame: FrameLike): boolean => (frame.lineno === 1 || frame.lineno === 2) && (frame.colno ?? 0) > 1000;
 
-/** One frame of the key and whether it is minified: `<normalized file>:<normalized function>`; an anonymous function by its trimmed source line, else its line number; a minified frame by its file alone. */
+/** One frame of the key and whether it is minified: `<normalized file>:<normalized function>`; an anonymous function by its trimmed source line, else its line number; a minified frame by its file alone. A mangled class name before the method is dropped. */
 function frameKey(frame: FrameLike): { key: string; minified: boolean } {
-  const fn = normalizeFunctionName(frame.function);
+  const normalized = normalizeFunctionName(frame.function);
   const file = normalizeFrameFile(frame.filename ?? "");
-  const anonymous = ANONYMOUS.test(fn);
+  const anonymous = ANONYMOUS.test(normalized);
   const context = anonymous ? frame.context_line?.trim().slice(0, 100) : undefined;
-  if (anonymous ? !context && deepInBundle(frame) : SHORT_NAME.test(fn) || (MID_NAME.test(fn) && deepInBundle(frame))) {
+  const mangled = (name: string): boolean => SHORT_NAME.test(name) || (MID_NAME.test(name) && deepInBundle(frame));
+  let fn = normalized;
+  if (!anonymous) {
+    const segments = normalized.split(".");
+    while (segments.length > 1 && mangled(segments[0]!)) segments.shift();
+    fn = segments.join(".");
+  }
+  if (anonymous ? !context && deepInBundle(frame) : mangled(fn.slice(fn.lastIndexOf(".") + 1))) {
     return { key: file, minified: true };
   }
   return { key: `${file}:${anonymous ? context || String(frame.lineno ?? "?") : fn}`, minified: false };
@@ -187,7 +194,11 @@ function foldMessage(message: string): string {
  *   when source context gives one, else its line number. Fewer than 3 in-app frames means fewer parts.
  * - A frame whose function looks mangled by a minifier keys as its normalized file alone, with no function: the
  *   normalized name is 1 or 2 characters (letters, digits, `_`, `$`), or 3 such characters on a frame at line 1 or 2
- *   and column above 1000 (deep inside a one-line bundle). An anonymous frame with no `context_line`, at line 1 or 2
+ *   and column above 1000 (deep inside a one-line bundle). In a method name (`a.b.run`) each leading segment that
+ *   looks mangled the same way is dropped, since a minifier renames class names and keeps method names: `e.charge`
+ *   keys as `charge`, `OrderService.charge` keeps its class. When nothing is left, or the last segment itself looks
+ *   mangled, the frame is a minified frame. Only a minified function name adds the message; a dropped class name
+ *   does not. An anonymous frame with no `context_line`, at line 1 or 2
  *   and column above 1000, keys as its file alone too: its line number says nothing there. When any of the key's
  *   frames is one of these, the folded message (as below) is added after the frame parts and before the root type, so
  *   a minified app with no source maps keeps two errors of one bundle apart and the key survives a redeploy.

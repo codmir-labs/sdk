@@ -299,6 +299,52 @@ describe("minified bundles", () => {
   });
 });
 
+describe("minified bundles: mangled class names as receivers", () => {
+  const frame = (fn: string, file: string, line: number, col: number) => `    at ${fn} (https://app.example.com/assets/${file}:${line}:${col})`;
+  const stack = (lines: string[]) => `TypeError: Card declined for order 42\n${lines.join("\n")}`;
+  const fp = (lines: string[]) => fpOf("TypeError", "Card declined for order 42", stack(lines));
+  const one = (fn: string, line = 40, col = 12, message = "x") =>
+    fpOf("Error", message, `Error: ${message}\n${frame(fn, "a.js", line, col)}`);
+  const build1 = [
+    frame("e.charge", "main.3f2a9c1e.js", 1, 500),
+    frame("s.run", "main.3f2a9c1e.js", 1, 628),
+    frame("Object.f", "main.3f2a9c1e.js", 1, 669),
+  ];
+  const build2 = [
+    frame("i.charge", "main.8b7d4e6f.js", 1, 608),
+    frame("h.run", "main.8b7d4e6f.js", 1, 794),
+    frame("Object._", "main.8b7d4e6f.js", 1, 836),
+  ];
+
+  it("two builds that rename the classes are one fingerprint; the methods stay in the key", () => {
+    const a = fp(build1);
+    expect(fp(build2)).toEqual(a);
+    // The third frame, `Object.f`, is a minified function, so the message is in the key.
+    expect(a).toEqual(["TypeError", "/assets/main.js:charge", "/assets/main.js:run", "/assets/main.js", "Card declined for order #"]);
+  });
+
+  it("a dropped class name alone does not add the message", () => {
+    expect(fp([frame("e.charge", "main.3f2a9c1e.js", 1, 500), frame("s.run", "main.3f2a9c1e.js", 1, 628)])).toEqual([
+      "TypeError", "/assets/main.js:charge", "/assets/main.js:run",
+    ]);
+  });
+
+  it("a class name that does not look mangled stays", () => {
+    expect(one("OrderService.charge")).toEqual(["Error", "/assets/a.js:OrderService.charge"]);
+    expect(one("Cart.run")).not.toEqual(one("Order.run"));
+  });
+
+  it("two mangled segments are a minified frame", () => {
+    expect(one("ab.cd")).toEqual(["Error", "/assets/a.js", "x"]);
+  });
+
+  it("every leading mangled segment goes; a 3 character one only deep in a one-line bundle", () => {
+    expect(one("x.y.handle", 1, 5000)).toEqual(["Error", "/assets/a.js:handle"]);
+    expect(one("abc.handle", 1, 5000)).toEqual(["Error", "/assets/a.js:handle"]);
+    expect(one("abc.handle", 40, 12)).toEqual(["Error", "/assets/a.js:abc.handle"]);
+  });
+});
+
 describe("frameless: the folded message is the key", () => {
   const frameless = (message: string, type = "Error") => captured(fail(type, message, `${type}: x`)).group.fingerprint;
   const messageEvent = (message: string) => sdkFingerprint({ id: "m", type: "message", timestamp: "t", level: "error", message });
