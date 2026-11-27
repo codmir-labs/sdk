@@ -275,9 +275,10 @@ describe("maxBreadcrumbs", () => {
 describe("beforeBreadcrumb", () => {
   it("sees an automatic and a manual breadcrumb", async () => {
     const seen: string[] = [];
+    // Before `browser.init`, which patches `console`: the page's own warning is silenced, and still seen as a breadcrumb.
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
     start({ beforeBreadcrumb: (b) => (seen.push(`${b.category ?? "-"}:${b.message}`), b) });
     browser.init({ ...base, beforeBreadcrumb: (b) => (seen.push(`${b.category ?? "-"}:${b.message}`), b), trackNavigation: false, trackClicks: false, trackRequests: false, trackConsole: ["warn"] });
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
     console.warn("from the page");
     addBreadcrumb({ message: "manual" });
     expect(seen.some((s) => s.startsWith("console:") && s.includes("from the page"))).toBe(true);
