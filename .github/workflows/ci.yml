@@ -46,6 +46,8 @@ jobs:
       - run: npx vitest run src/__tests__/browser-bundle.test.ts
       # The codmir-logs command as a child process; skips without a build too.
       - run: npx vitest run src/logs/__tests__/cli.test.ts
+      # The peer case in package-exports.test.ts skips without a build too.
+      - run: npx vitest run src/__tests__/package-exports.test.ts
       # The sample app against a local capture server: an error, a 3-span trace and a masked replay.
       # Headed Chrome under Xvfb, never headless. The runner image has google-chrome and xvfb-run; Node 20 only.
       - name: Example smoke (examples/fullstack-basic)
