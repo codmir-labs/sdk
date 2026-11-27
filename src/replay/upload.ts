@@ -27,6 +27,8 @@ export const MAX_EVENTS_PER_SEGMENT = 10_000;
 export const MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 export { KEEPALIVE_MAX_BYTES };
 export const RETRY_DELAY_MS = 1000;
+/** A request that has not answered in this long is given up on, as a network error is. A keepalive request at page hide has no limit. */
+export const UPLOAD_TIMEOUT_MS = 30_000;
 /** A 429 without a readable `Retry-After`: the server's rate window is 60 s. */
 export const DEFAULT_RETRY_AFTER_MS = 60_000;
 /** A `Retry-After` is trusted between these bounds. */
@@ -193,7 +195,7 @@ export function parseRetryAfter(value: string | null | undefined, now = Date.now
 }
 
 type Attempt =
-  | { kind: "ok" | "refused" | "retry" | "drop" | "too_large" }
+  | { kind: "ok" | "refused" | "retry" | "timeout" | "drop" | "too_large" }
   | { kind: "rate_limited"; delayMs: number };
 
 /** The sends of one page hide, in order: once one goes without `keepalive`, every later one does too. */
@@ -203,7 +205,9 @@ export interface HideRun {
 
 /**
  * POSTs one segment. A network error or a 5xx/408 is retried once, about 1 s later; a second failure resolves
- * {@link RetryLater} with no delay. A 429 is not retried at once: it resolves {@link RetryLater} with the server's
+ * {@link RetryLater} with no delay. A request that does not answer in {@link UPLOAD_TIMEOUT_MS} is aborted and resolves
+ * {@link RetryLater} at once, with no immediate retry (a server that hangs would hold the caller's slot another 30 s); a
+ * `keepalive` request is never aborted. A 429 is not retried at once: it resolves {@link RetryLater} with the server's
  * `Retry-After` (60 s without one). A 413 is not retried and resolves `too_large` so the caller can split it; any other
  * status drops the segment (`failed`). Never rejects.
  *
@@ -236,13 +240,14 @@ export async function postSegment(
     if (target.debug) console.log("[Overseer replay]", ...args);
   };
 
-  const attempt = async (): Promise<Attempt> => {
+  const attemptOnce = async (signal?: AbortSignal): Promise<Attempt> => {
     try {
       const res = await fetch(target.url, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-overseer-key": target.key },
         body: payload,
         ...(keepalive ? { keepalive: true } : {}),
+        ...(signal ? { signal } : {}),
       });
       if (res.ok) {
         // 202 `{ stored: false, reason }` is the pay-as-you-go refusal: nothing was stored, do not keep sending.
@@ -262,6 +267,27 @@ export async function postSegment(
     }
   };
 
+  // The race frees the caller in every runtime, even one whose fetch ignores the signal; the signal, where fetch takes
+  // it, also frees the socket. The timer is cleared when the request settles and never keeps Node alive.
+  const attempt = async (): Promise<Attempt> => {
+    if (keepalive) return attemptOnce();
+    const abort = typeof AbortController === "function" ? new AbortController() : null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<Attempt>((resolve) => {
+      timer = setTimeout(() => {
+        log(`segment ${body.segment} had no answer in ${UPLOAD_TIMEOUT_MS} ms`);
+        resolve({ kind: "timeout" });
+        abort?.abort();
+      }, UPLOAD_TIMEOUT_MS);
+      (timer as { unref?: () => void }).unref?.();
+    });
+    try {
+      return await Promise.race([attemptOnce(abort?.signal), timedOut]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   try {
     let result = await attempt();
     if (result.kind === "retry" && immediateRetry && !hiding) {
@@ -278,6 +304,7 @@ export async function postSegment(
       case "rate_limited":
         return { outcome: "retry_later", delayMs: result.delayMs };
       case "retry":
+      case "timeout":
         return { outcome: "retry_later", delayMs: null };
       default:
         return "failed";
