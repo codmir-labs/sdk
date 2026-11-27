@@ -52,7 +52,7 @@ function capture(): OverseerEvent {
   let seen: OverseerEvent | undefined;
   const c = new OverseerClient({ clientKey: "k", beforeSend: (e) => ((seen = e), null) });
   c.init();
-  c.captureException(Object.assign(new Error("x"), { stack: "Error: x\n    at fn (https://app.example.com/main.js:1:1)" }));
+  c.captureException(Object.assign(new Error("x"), { stack: `Error: x\n    at fn (${window.location.origin}/main.js:1:1)` }));
   c.close();
   return seen!;
 }
@@ -87,7 +87,7 @@ describe("captureException in a browser", () => {
   it("sends no source lines in a browser, and parses a Firefox stack", () => {
     vi.stubGlobal("navigator", { userAgent: UA.firefoxLinux });
     const e = capture();
-    expect(e.exception!.stacktrace![0]).toMatchObject({ function: "fn", filename: "https://app.example.com/main.js", in_app: true });
+    expect(e.exception!.stacktrace![0]).toMatchObject({ function: "fn", filename: `${window.location.origin}/main.js`, in_app: true });
     expect(e.exception!.stacktrace![0]).not.toHaveProperty("context_line");
   });
 });

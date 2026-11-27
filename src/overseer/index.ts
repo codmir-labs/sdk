@@ -33,7 +33,7 @@ import { readHint } from "./capture-hint";
 import { normalizeThrown, syntheticStack, type Caller } from "./thrown-value";
 import { browserRequest, envContexts } from "./runtime-context";
 import { addSourceContext } from "./source-context";
-import { parseStackTrace } from "./stack";
+import { callerOrigin, normalizeOrigins, parseStackTrace } from "./stack";
 import { collectCauses } from "./causes";
 import { installProcessErrors } from "./process-errors";
 import { userForWire } from "./user-pii";
@@ -127,6 +127,14 @@ export interface OverseerConfig {
    * @default false
    */
   sendDefaultPii?: boolean;
+  /**
+   * Origins (`"https://static.example.com"`) whose scripts are your app's code, for a page whose bundle is served from
+   * somewhere other than the page's own origin. In a browser a frame counts as app code (`in_app`, the fingerprint and
+   * the culprit) only on the page's origin, the origin of the code that called `init()` or one of these; a tag
+   * manager's or an extension's frames never do. It does nothing in Node or React Native.
+   * @default []
+   */
+  inAppOrigins?: string[];
   /** Initial user context */
   initialUser?: UserContext;
   /** Initial tags */
@@ -236,12 +244,13 @@ export type SeverityLevel = "fatal" | "error" | "warning" | "info" | "debug";
 // Core Client
 // =============================================================================
 
-type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'sendDefaultPii' | 'selfHealing' | 'apiKey' | 'includeSourceContext' | 'captureProcessErrors' | 'onDropped' | 'rateLimit'> & {
+type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'sendDefaultPii' | 'selfHealing' | 'apiKey' | 'includeSourceContext' | 'inAppOrigins' | 'captureProcessErrors' | 'onDropped' | 'rateLimit'> & {
   initialUser?: UserContext;
   sendDefaultPii: boolean;
   onDropped?: OverseerConfig["onDropped"];
   selfHealing?: SelfHealingConfig;
   includeSourceContext: boolean;
+  inAppOrigins: string[];
   tracePropagationTargets: Array<string | RegExp>;
   clientKey: string;
   secretKey: string;
@@ -356,6 +365,7 @@ class OverseerClient {
       initialTags: config.initialTags || {},
       selfHealing: config.selfHealing,
       includeSourceContext: config.includeSourceContext ?? true,
+      inAppOrigins: normalizeOrigins(config.inAppOrigins),
     };
 
     const limit = config.rateLimit;
@@ -379,6 +389,10 @@ class OverseerClient {
   init(): void {
     if (this.isInitialized) return;
     this.isInitialized = true;
+
+    // The page origin of the code that called `init()`: its frames are the app's even when the bundle sits on a CDN.
+    const caller = callerOrigin(new Error().stack);
+    if (caller && !this.config.inAppOrigins.includes(caller)) this.config.inAppOrigins.push(caller);
 
     if (this.config.debug) {
       console.log("[Overseer] Initialized", {
@@ -425,7 +439,7 @@ class OverseerClient {
     // Kept in this function (not in a helper): the stack of an error made up for the value starts at the app's call.
     const stack = err.stack ?? syntheticStack(err.name, err.message, caller, hint?.frames);
 
-    const causes = collectCauses(error);
+    const causes = collectCauses(error, this.config.inAppOrigins);
 
     const event: OverseerEvent = {
       id: eventId,
@@ -741,7 +755,7 @@ class OverseerClient {
   }
 
   private stackFor(stack?: string): StackFrame[] {
-    const frames = parseStackTrace(stack);
+    const frames = parseStackTrace(stack, this.config.inAppOrigins);
     return this.config.includeSourceContext ? addSourceContext(frames) : frames;
   }
 

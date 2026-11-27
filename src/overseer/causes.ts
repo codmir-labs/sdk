@@ -41,9 +41,9 @@ function unwrap(value: unknown): unknown {
  * The errors behind `thrown`, breadth first over `cause` and, on an `AggregateError` only, `errors`, in walk order.
  * Cycle-safe by object identity; at most {@link MAX_CAUSE_DEPTH} deep along a path, {@link MAX_AGGREGATE_ERRORS}
  * inner errors per aggregate and {@link MAX_CAUSES} entries. A cause that is not an error goes through
- * `normalizeThrown`. Returns `undefined` when there is nothing to walk.
+ * `normalizeThrown`. Frames use `appOrigins` like the top exception's. Returns `undefined` when there is nothing to walk.
  */
-export function collectCauses(thrown: unknown): ExceptionCause[] | undefined {
+export function collectCauses(thrown: unknown, appOrigins?: string[]): ExceptionCause[] | undefined {
   const top = unwrap(thrown);
   if (!isErrorObject(top)) return undefined;
 
@@ -70,7 +70,7 @@ export function collectCauses(thrown: unknown): ExceptionCause[] | undefined {
         seen.add(child.value);
       }
       const err = normalizeThrown(child.value);
-      const frames = parseStackTrace(err.stack).slice(0, MAX_CAUSE_FRAMES);
+      const frames = parseStackTrace(err.stack, appOrigins).slice(0, MAX_CAUSE_FRAMES);
       out.push({
         type: err.name,
         value: err.message,

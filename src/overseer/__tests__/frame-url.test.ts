@@ -92,7 +92,7 @@ describe("a URL frame filename loses its query and fragment", () => {
     expect(raw.join("")).not.toContain("frag");
   });
 
-  it("(e) plain paths and <anonymous> are unchanged", () => {
+  it("(e) plain paths are unchanged, and <anonymous> names no file", () => {
     const frames = parseStackTrace(
       [
         "Error: x",
@@ -103,6 +103,6 @@ describe("a URL frame filename loses its query and fragment", () => {
         "    at e (/app/#build/x.js:7:8)",
       ].join("\n"),
     );
-    expect(frames.map((f) => f.filename)).toEqual(["/app/src/x.js?y#z", "C:\\app\\x.js", "node:internal/modules/cjs/loader", "<anonymous>", "/app/#build/x.js"]);
+    expect(frames.map((f) => f.filename)).toEqual(["/app/src/x.js?y#z", "C:\\app\\x.js", "node:internal/modules/cjs/loader", undefined, "/app/#build/x.js"]);
   });
 });

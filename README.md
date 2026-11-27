@@ -370,8 +370,11 @@ captureException(err, { orderId: 'ord_123', password: 'hunter2', req: { headers:
 
 1. **Sampling and id.** `enabled` and `sampleRate` decide whether the error is kept; if it is, it gets a 21-character id,
    which `captureException` returns at once.
-2. **Stack.** `parseStackTrace` reads every frame and marks `in_app` false for `node_modules`, Node internals and the
-   SDK's own files. A script URL in a frame (`https://`, `blob:`, `webpack-internal:`) keeps its origin and path only,
+2. **Stack.** `parseStackTrace` reads every frame and marks `in_app` false for `node_modules`, Node internals, the
+   SDK's own files, a frame with no `file:line` (`Promise.all (index 0)`, `<anonymous>`, `native`), a browser extension
+   (`chrome-extension:`, `moz-extension:`, `safari-extension:`, `safari-web-extension:`) or Deno's `ext:` file, and, in a
+   browser, an http(s) script on any origin but the page's own, the one `init()` was called from or one in
+   `inAppOrigins` (a tag manager's script, say). The fingerprint and the culprit use the first in-app frame, and the culprit is the frame the fingerprint uses (the top error's, else the first cause's), or the top frame when none is in-app; `causes` frames follow the same origin rules. A script URL in a frame (`https://`, `blob:`, `webpack-internal:`) keeps its origin and path only,
    never the query or fragment, so a token or a `?v=` cache-buster never reaches the culprit or the fingerprint. In
    Node, the first three in-app frames whose file can be read also get `pre_context`, `context_line` and
    `post_context` (5 lines each side). The errors behind it go in `exception.causes`: each entry is
@@ -379,7 +382,7 @@ captureException(err, { orderId: 'ord_123', password: 'hunter2', req: { headers:
    errors, so a `Promise.any` failure sends why each promise failed; `errors` is read from an `AggregateError` only, never from another error that keeps a list there) and `parent` is the index of the entry it hangs from
    (`-1` for the top error). The walk is breadth first, cycle-safe, at most 5 deep, 10 inner errors per `AggregateError` and
    10 entries in all; each entry has at most 30 frames and no source lines, and its message is scrubbed like the top one's.
-   An error with nothing to walk has no `causes`. An error with no frame of its own takes its culprit from the first entry of `causes` that has one.
+   An error with nothing to walk has no `causes`. An error with no frame of its own takes its frame, for the fingerprint and the culprit, from the first entry of `causes` that has one.
 3. **Cleaning.** `sanitizeExtra` drops `password` and `req` from the context, and `addBreadcrumb` already dropped
    `authToken` from the breadcrumb.
 4. **Context.** The user, tags, breadcrumbs, environment, release, SDK name and version and the runtime contexts are
@@ -1511,6 +1514,7 @@ Leave it off unless you serve that manifest.
 | `initialUser` | none | The user from the first event on |
 | `initialTags` | `{}` | Tags from the first event on |
 | `includeSourceContext` | `true` | Node only: source lines around the first three in-app frames |
+| `inAppOrigins` | `[]` | Browser only: origins (`"https://static.example.com"`) whose scripts are your app's code, besides the page's own origin and the origin of the code that called `init()`. A frame from any other http(s) origin (a tag manager, an ad script) is not app code, so it never becomes the fingerprint's frame or the culprit. Extension frames never count. Not used in Node or React Native |
 | `captureProcessErrors` | `false` (`true` in `/express`) | Node only: capture uncaught exceptions and unhandled rejections as fatal, flush for up to 2 s, then end the process as Node would (exit code 1); flush on SIGTERM and SIGINT and end by the signal. Your own listeners are left to decide. `close()` removes the hooks |
 | `selfHealing` | off | Browser patch runtime ([details](#privacy-and-safety)) |
 | `secretKey` | none | Accepted; not sent by this version |

@@ -148,10 +148,10 @@ describe("the browser integration", () => {
 
   it("(f) a window error with no error is one frame from the event and none from the SDK", async () => {
     browser.init(config);
-    window.dispatchEvent(new ErrorEvent("error", { message: "Script error.", filename: "https://cdn.example.com/app.js", lineno: 12, colno: 5 }));
+    window.dispatchEvent(new ErrorEvent("error", { message: "Script error.", filename: `${window.location.origin}/app.js`, lineno: 12, colno: 5 }));
     const [{ event }] = await sent();
     expect(event.exception.value).toBe("Script error.");
-    expect(event.exception.stacktrace).toEqual([{ filename: "https://cdn.example.com/app.js", lineno: 12, colno: 5, in_app: true }]);
+    expect(event.exception.stacktrace).toEqual([{ filename: `${window.location.origin}/app.js`, lineno: 12, colno: 5, in_app: true }]);
   });
 
   it("(f) a window error with no error and no file has no frames", async () => {

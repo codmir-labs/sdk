@@ -58,6 +58,22 @@ export interface WireSourceEvent {
 }
 
 const inAppOf = (frames?: FrameLike[]): FrameLike | undefined => frames?.find((f) => f.in_app === true && f.filename);
+const fileOf = (frames?: FrameLike[]): FrameLike | undefined => frames?.find((f) => f.filename);
+
+/**
+ * The frame the culprit names: the one the fingerprint uses (the first in-app frame of the top exception, else of the
+ * first cause that has one); else the top exception's first frame with a file; else that of the first cause with one.
+ */
+function culpritFrame(exception: WireSourceEvent["exception"]): FrameLike | undefined {
+  if (!exception) return undefined;
+  const causes = exception.causes ?? [];
+  return (
+    inAppOf(exception.stacktrace) ??
+    causes.map((c) => inAppOf(c.stacktrace)).find(Boolean) ??
+    fileOf(exception.stacktrace) ??
+    causes.map((c) => fileOf(c.stacktrace)).find(Boolean)
+  );
+}
 
 /**
  * Group fingerprint. Identical to `sdkFingerprint` in the platform for an event without `causes`; the platform's copy
@@ -116,9 +132,7 @@ export function toWireEvent<T extends { type: string }>(input: T): unknown {
 
   const fingerprint = source.fingerprint?.length ? source.fingerprint : sdkFingerprint(source);
   const message = source.message ?? source.exception?.value;
-  const topFrame =
-    source.exception?.stacktrace?.find((f) => f.filename) ??
-    source.exception?.causes?.map((c) => c.stacktrace?.find((f) => f.filename)).find(Boolean);
+  const topFrame = culpritFrame(source.exception);
   const { type: _type, ...rest } = source;
 
   return {
@@ -127,7 +141,7 @@ export function toWireEvent<T extends { type: string }>(input: T): unknown {
     group: {
       fingerprint,
       message,
-      culprit: topFrame ? `${topFrame.filename}:${topFrame.lineno}` : undefined,
+      culprit: topFrame ? (topFrame.lineno != null ? `${topFrame.filename}:${topFrame.lineno}` : topFrame.filename) : undefined,
       level: source.level,
     },
   };
