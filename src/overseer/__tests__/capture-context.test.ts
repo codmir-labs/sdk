@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
 /**
  * `captureException`'s second argument sets the event's tags, level, fingerprint, user and contexts when it is a capture
- * context, and is `extra` as a whole when it is anything else. The integrations send the route as the tag `route` and the
- * React component stack as `contexts.react.componentStack`. Everything is read from the body `fetch` was given.
+ * context, and is `extra` as a whole when it is anything else. The integrations send the route as the tag `route`.
+ * Everything is read from the body `fetch` was given.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as express from "../../express/index";
 import * as nextjs from "../../nextjs/index";
 import * as reactNative from "../../react-native/index";
-import { captureException, close, flush, getClient, init, setUser } from "../index";
+import { captureException, close, flush, getClient, init, setConversationId, setUser } from "../index";
 import { crash, withHint } from "../capture-hint";
 
 type Wire = {
@@ -75,17 +75,21 @@ describe("a capture context", () => {
     expect(event!.level).toBe("error");
   });
 
-  it("a wrong shape stays extra, and the event's user is unchanged", async () => {
+  it("a level that is not a level stays extra, and the event's level is error", async () => {
+    init(config);
+    captureException(new Error("a"), { level: "loud" });
+    const [event] = await sent();
+    expect(event!.extra.level).toBe("loud");
+    expect(event!.level).toBe("error");
+  });
+
+  it("a user that is not an object stays as setUser gave it, and no extra.user is sent", async () => {
     init(config);
     setUser({ id: "u1" });
     captureException(new Error("a"), { user: "bob" });
-    captureException(new Error("b"), { tags: { nested: { a: 1 } }, level: "loud" });
-    const [first, second] = await sent();
-    expect(first!.extra.user).toBe("bob");
-    expect(first!.user).toEqual({ id: "u1" });
-    expect(second!.extra).toMatchObject({ tags: { nested: { a: 1 } }, level: "loud" });
-    expect(second!.tags).toEqual({});
-    expect(second!.level).toBe("error");
+    const [event] = await sent();
+    expect(event!.user).toEqual({ id: "u1" });
+    expect(event!.extra).not.toHaveProperty("user");
   });
 
   it("a hint's level is below a capture context's level and above error", async () => {
@@ -127,6 +131,21 @@ describe("a capture context", () => {
     expect(event!.contexts.session).not.toEqual({ id: "forged" });
   });
 
+  it("a secret in a context's value is masked on the wire, and the SDK's own contexts are unchanged", async () => {
+    init(config);
+    setConversationId("conv-1");
+    captureException(new Error("plain"));
+    captureException(new Error("a"), { contexts: { payment: { note: "Bearer abc.def.ghi", step: 2 } } });
+    const [plain, event] = await sent();
+    expect(bodies.join("")).not.toContain("abc.def.ghi");
+    expect(event!.contexts.payment).toMatchObject({ step: 2 });
+    expect(String(event!.contexts.payment!.note)).not.toContain("abc.def");
+    const rest = { ...event!.contexts };
+    delete rest.payment;
+    expect(rest).toEqual(plain!.contexts);
+    expect(event!.contexts.conversation).toEqual({ id: "conv-1" });
+  });
+
   it("a string fingerprint is a one-item list, and the per-group rate limit groups by it", async () => {
     init({ ...config, rateLimit: { perGroupPerMinute: 1 } });
     captureException(new Error("first"), { fingerprint: "same" });
@@ -165,16 +184,16 @@ describe("integrations", () => {
     expect(event!.exception.mechanism).toEqual({ type: "nextjs-router", handled: false });
   });
 
-  it("captureBoundaryError sends contexts.react.componentStack and keeps its hint", async () => {
+  it("captureBoundaryError sends extra.componentStack and keeps its hint", async () => {
     nextjs.init(config);
     nextjs.captureBoundaryError(new Error("render"), { componentStack: "\n    in Cart\n    in App" });
     const [event] = await sent();
-    expect(event!.contexts.react).toEqual({ componentStack: "\n    in Cart\n    in App" });
-    expect(event!.extra).not.toHaveProperty("componentStack");
+    expect(event!.extra.componentStack).toBe("\n    in Cart\n    in App");
+    expect(event!.contexts).not.toHaveProperty("react");
     expect(event!.exception.mechanism).toEqual({ type: "nextjs-error-boundary", handled: false });
   });
 
-  it("the React Native boundary sends contexts.react.componentStack and keeps its hint", async () => {
+  it("the React Native boundary sends extra.componentStack and keeps its hint", async () => {
     init(config);
     class Component {
       constructor(public props: unknown) {}
@@ -183,8 +202,8 @@ describe("integrations", () => {
     const boundary = new Boundary({ fallback: null }) as unknown as { componentDidCatch(e: Error, info: { componentStack: string }): void };
     boundary.componentDidCatch(new Error("render"), { componentStack: "\n    in Cart\n    in App" });
     const [event] = await sent();
-    expect(event!.contexts.react).toEqual({ componentStack: "\n    in Cart\n    in App" });
-    expect(event!.extra).not.toHaveProperty("componentStack");
+    expect(event!.extra.componentStack).toBe("\n    in Cart\n    in App");
+    expect(event!.contexts).not.toHaveProperty("react");
     expect(event!.exception.mechanism).toEqual({ type: "react-error-boundary", handled: false });
   });
 });

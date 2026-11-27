@@ -5,7 +5,7 @@ import type { Breadcrumb, OverseerEvent } from "./index";
 /**
  * The text of an error event, scrubbed before `beforeSend` and before the fingerprint is computed (so a group is made of
  * the scrubbed text). {@link sanitizeExtra} judges the keys of what an app attaches; this judges the words: the message,
- * the exception value, every breadcrumb message, every string inside `extra` and breadcrumb `data`, and tag values lose
+ * the exception value, every breadcrumb message, every string inside `extra`, `contexts` and breadcrumb `data`, and tag values lose
  * what {@link redactSecrets} finds (cookies, JWTs, bearer tokens, `token=...` pairs, prefixed keys, query strings). A tag
  * whose key names a secret is dropped. Emails and IP addresses are left as they are.
  */
@@ -70,6 +70,17 @@ export function scrubEvent(event: OverseerEvent): OverseerEvent {
   }
   if (event.tags) out.tags = scrubTags(event.tags);
   if (event.extra) out.extra = record(event.extra);
+  if (event.contexts) {
+    // The values an app attached get the scrub `extra` gets; the SDK's own `conversation` and `session` ids are left alone.
+    out.contexts = Object.fromEntries(
+      Object.entries(event.contexts).map(([k, v]) => [
+        k,
+        k === "conversation" || k === "session" || v === null || typeof v !== "object" || Array.isArray(v)
+          ? v
+          : record(v as Record<string, unknown>),
+      ]),
+    );
+  }
   if (event.breadcrumbs) out.breadcrumbs = event.breadcrumbs.map(scrubBreadcrumb);
   return out;
 }

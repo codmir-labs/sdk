@@ -306,10 +306,7 @@ export function captureBoundaryError(error: Error & { digest?: string }, info?: 
   const capture = (): string =>
     coreCaptureException(
       error,
-      withHint(
-        info?.componentStack ? { contexts: { react: { componentStack: info.componentStack } } } : {},
-        crash("nextjs-error-boundary"),
-      ),
+      withHint(info?.componentStack ? { componentStack: info.componentStack } : {}, crash("nextjs-error-boundary")),
     );
   if (!digest) return capture();
   return withRequestScope({ url: base?.url ?? "", method: base?.method ?? "GET", ...base, tags: { ...base?.tags, digest } }, capture);

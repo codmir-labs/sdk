@@ -903,8 +903,7 @@ class OverseerClient {
     if (user) out.user = user as UserContext;
     else delete out.user;
     const extraUser = event.extra?.user;
-    // Only an object is a user (Express's); a caller's `extra.user` that is a string or a number is plain data.
-    if (extraUser !== undefined && typeof extraUser === "object" && extraUser !== null) {
+    if (extraUser !== undefined) {
       const reduced = userForWire(extraUser, pii);
       const extra = { ...event.extra };
       if (reduced) extra.user = reduced;

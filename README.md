@@ -210,7 +210,7 @@ captureException(err, {
   level: 'warning',                    // 'fatal' | 'error' | 'warning' | 'info' | 'debug'
   fingerprint: ['card-declined'],      // the group key; a string is a one-item list
   user: { id: 'user_42' },             // merged over setUser's, with the same sendDefaultPii rule
-  contexts: { order: { id: 7 } },      // merged over the runtime contexts; conversation and session stay the SDK's
+  contexts: { device: { name: 'kiosk-3' } }, // merged over the runtime contexts; conversation and session stay the SDK's
   extra: { orderId: 'ord_123' },       // cleaned like any extra
 });
 ```
@@ -218,10 +218,11 @@ captureException(err, {
 An object is a capture context only when every own key is one of `tags`, `extra`, `level`, `fingerprint`, `user` and `contexts`
 (at least one), and every value has its field's shape: `tags` an object of strings, numbers and booleans; `extra` and `user`
 objects; `level` one of the five levels; `fingerprint` a non-empty string or an array of strings; `contexts` an object of objects.
-Any other object, such as `{ orderId: 7, level: 'warning' }` or `{ user: 'bob' }`, is `extra` as a whole, so nothing you pass is
-lost or read as something else. A `level` here wins over the one an integration sets. The Express and Next.js integrations send the
-route pattern as the tag `route`, and the React Native and Next.js error boundaries send the component stack as
-`contexts.react.componentStack`; the platform stores tags and contexts for an error, never `extra`.
+Any other object, such as `{ orderId: 7, level: 'warning' }` or `{ level: 'loud' }`, is `extra` as a whole, so it is not read as
+something else. A `level` here wins over the one an integration sets. The Express and Next.js integrations send the
+route pattern as the tag `route`. Issues can be filtered by tags; `extra` is kept with the issue, within size limits; of
+`contexts` the platform keeps only `browser`, `os`, `runtime`, `device` and `trace`, so your app's own data belongs in `extra` or in tags.
+Secret-looking values in `extra`, `contexts`, tags and the message are masked before an event is sent.
 
 **Release and environment.** Set `release` and `environment` yourself and they are used as given. When you set neither, a
 server reads the host, each value trimmed and the first non-empty one winning:
