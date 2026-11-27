@@ -228,6 +228,8 @@ export interface FeedbackContext {
   tracePropagationTargets: Array<string | RegExp>;
 }
 
+/** Breadcrumbs kept, process-wide and per request. */
+const MAX_BREADCRUMBS = 100;
 const RATE_WINDOW_MS = 60_000;
 const DEFAULT_PER_GROUP_PER_MINUTE = 10;
 const DEFAULT_PER_MINUTE = 100;
@@ -366,14 +368,14 @@ class OverseerClient {
         mechanism: { type: "generic", handled: true },
       },
       user: this.userOf() || undefined,
-      tags: { ...this.tags },
+      tags: this.tagsOf(),
       extra: {
         // No request, headers, cookies, query, params or body, whatever the caller passed.
         ...sanitizeExtra(context),
         conversationId: this.conversationId,
         sessionId: this.sessionId,
       },
-      breadcrumbs: [...this.breadcrumbs],
+      breadcrumbs: this.breadcrumbsOf(),
       environment: this.config.environment,
       release: this.config.release,
       sdk: { ...SDK_INFO },
@@ -403,8 +405,8 @@ class OverseerClient {
       level,
       message,
       user: this.userOf() || undefined,
-      tags: { ...this.tags },
-      breadcrumbs: [...this.breadcrumbs],
+      tags: this.tagsOf(),
+      breadcrumbs: this.breadcrumbsOf(),
       environment: this.config.environment,
       release: this.config.release,
       sdk: { ...SDK_INFO },
@@ -453,7 +455,7 @@ class OverseerClient {
       userId,
       replayId,
       lastError: this.lastError,
-      breadcrumbs: this.breadcrumbs,
+      breadcrumbs: this.breadcrumbsOf(),
       tracePropagationTargets,
     };
   }
@@ -491,12 +493,28 @@ class OverseerClient {
     return own === undefined ? this.user : own;
   }
 
+  /** The tags an event gets: the process-wide ones overlaid with the request's own, which win key by key. A copy. */
+  private tagsOf(): Record<string, string> {
+    return { ...this.tags, ...getRequestScope()?.tags };
+  }
+
+  /** The breadcrumbs an event gets: the process-wide ones, then the request's own, the newest 100. A copy. */
+  private breadcrumbsOf(): Breadcrumb[] {
+    const own = getRequestScope()?.breadcrumbs;
+    return own ? [...this.breadcrumbs, ...own].slice(-MAX_BREADCRUMBS) : [...this.breadcrumbs];
+  }
+
+  /** Inside a request the tag is the request's: it never reaches another request or the process-wide tags. */
   setTag(key: string, value: string): void {
-    this.tags[key] = value;
+    const scope = getRequestScope();
+    if (scope) scope.tags = { ...scope.tags, [key]: value };
+    else this.tags[key] = value;
   }
 
   setTags(tags: Record<string, string>): void {
-    this.tags = { ...this.tags, ...tags };
+    const scope = getRequestScope();
+    if (scope) scope.tags = { ...scope.tags, ...tags };
+    else this.tags = { ...this.tags, ...tags };
   }
 
   setExtra(key: string, value: unknown): void {
@@ -545,7 +563,7 @@ class OverseerClient {
   }
 
   getTags(): Record<string, string> {
-    return { ...this.tags };
+    return this.tagsOf();
   }
 
   /**
@@ -561,17 +579,16 @@ class OverseerClient {
     return this.config.environment;
   }
 
+  /** Inside a request the breadcrumb is the request's own; outside, the process-wide trail. The newest 100 are kept. */
   addBreadcrumb(breadcrumb: Breadcrumb): void {
-    this.breadcrumbs.push({
+    const crumb: Breadcrumb = {
       ...breadcrumb,
       ...(breadcrumb.data ? { data: sanitizeExtra(breadcrumb.data) } : {}),
       timestamp: breadcrumb.timestamp || new Date().toISOString(),
-    });
-
-    // Keep last 100 breadcrumbs
-    if (this.breadcrumbs.length > 100) {
-      this.breadcrumbs = this.breadcrumbs.slice(-100);
-    }
+    };
+    const scope = getRequestScope();
+    if (scope) scope.breadcrumbs = [...(scope.breadcrumbs ?? []), crumb].slice(-MAX_BREADCRUMBS);
+    else this.breadcrumbs = [...this.breadcrumbs, crumb].slice(-MAX_BREADCRUMBS);
   }
 
   /** Sends everything queued: true when all of it was sent or refused, false when a batch is put back for a retry or `timeout` ms ran out first. */
