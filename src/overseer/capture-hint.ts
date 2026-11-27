@@ -13,7 +13,7 @@ export interface CaptureHint {
   level?: "fatal" | "error" | "warning" | "info" | "debug";
   /**
    * What stack a thrown value that is not an error gets. A global handler knows the SDK made it up: `"none"`, or the one
-   * frame the event itself names. Without it the stack starts at the caller of `captureException`. An error keeps its own stack.
+   * frame the event itself names. A call that carries a hint and no `frames` gets none too, since it comes from inside the SDK. Only an app's own call, with no hint, gets a stack that starts at its caller. An error keeps its own stack.
    */
   frames?: "none" | { filename: string; lineno?: number; colno?: number };
 }

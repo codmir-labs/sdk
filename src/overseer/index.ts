@@ -38,6 +38,7 @@ import { browserRequest, envContexts } from "./runtime-context";
 import { addSourceContext } from "./source-context";
 import { callerOrigin, normalizeOrigins, parseStackTrace } from "./stack";
 import { collectCauses } from "./causes";
+import { NoiseFilter, type NoiseCandidate } from "./noise-filter";
 import { installProcessErrors } from "./process-errors";
 import { userForWire } from "./user-pii";
 import { claimKeepalive, KEEPALIVE_MAX_BYTES, onHideFlush } from "./keepalive";
@@ -121,9 +122,43 @@ export interface OverseerConfig {
    */
   beforeSend?: (event: OverseerEvent) => OverseerEvent | null | PromiseLike<OverseerEvent | null>;
   /**
+   * Errors and messages that are never sent. A string matches as a substring, a RegExp when it tests true. An error is
+   * matched on both `<type>: <message>` and its bare message, a message event on its text. The browser's cross-origin
+   * `Script error.` and any message that starts with `ResizeObserver loop` are always ignored too (see
+   * `defaultIgnoreErrors`). An ignored event is not sampled, rate limited or passed to `beforeSend`: `onDropped` hears
+   * it as `filtered`, and `debug` logs the option.
+   */
+  ignoreErrors?: Array<string | RegExp>;
+  /** `false` turns off the built-in `ignoreErrors` entries (`Script error.` and `ResizeObserver loop…`). @default true */
+  defaultIgnoreErrors?: boolean;
+  /**
+   * Drops an error thrown in a script whose URL matches (a string as a substring, a RegExp tested). The URL is the file
+   * of the innermost stack frame, else the event's own file name; an event with neither is never dropped by it.
+   * Reported to `onDropped` as `filtered`.
+   */
+  denyUrls?: Array<string | RegExp>;
+  /**
+   * Drops an error that has a URL (see `denyUrls`) when none of these matches it. An event with no URL, and a message
+   * event, is kept. Reported to `onDropped` as `filtered`.
+   */
+  allowUrls?: Array<string | RegExp>;
+  /**
+   * How many breadcrumbs an event keeps, the client's and the request's alike: 0 to 100, default 20. A number outside
+   * the range is clamped (a fraction is rounded down); a value that is not a number is ignored and the default is used.
+   * @default 20
+   */
+  maxBreadcrumbs?: number;
+  /**
+   * Called with every breadcrumb before it is kept, automatic or added by `addBreadcrumb`, with the `hint` that
+   * `addBreadcrumb` was given. Return the breadcrumb (changed, if you like), or `null` to drop it. A throw, or a result
+   * that is not a breadcrumb object, drops the breadcrumb and never reaches your app, as with `beforeSend`; `debug`
+   * logs it. It is synchronous: a Promise is not a breadcrumb.
+   */
+  beforeBreadcrumb?: (breadcrumb: Breadcrumb, hint?: Record<string, unknown>) => Breadcrumb | null;
+  /**
    * Called when the server did not take events: a batch it refused (`status` 401 for a wrong key, say), or events it
    * dropped out of a batch it answered 200 to (`reason`, such as `payment_required`), or that the client gave up on
-   * (`status` 0: the queue was full, the client was closed before the last try went through, `beforeSend` threw, or `rateLimit` held the event back, reason `rate_limited`, or an event could not be written as JSON, reason `unserializable`, or an event was still unsent after 24 hours, reason `expired`, or the client has no `clientKey` and no `dsn`, so no event can be sent, reason `not_configured`), or an event the server kept answering with a 5xx while it took other requests, alone in its batch (its `status`, reason `retry_exhausted`; an outage drops nothing). They are not sent again.
+   * (`status` 0: an error or message matched `ignoreErrors`, `denyUrls` or `allowUrls`, reason `filtered`, the queue was full, the client was closed before the last try went through, `beforeSend` threw, or `rateLimit` held the event back, reason `rate_limited`, or an event could not be written as JSON, reason `unserializable`, or an event was still unsent after 24 hours, reason `expired`, or the client has no `clientKey` and no `dsn`, so no event can be sent, reason `not_configured`), or an event the server kept answering with a 5xx while it took other requests, alone in its batch (its `status`, reason `retry_exhausted`; an outage drops nothing). They are not sent again.
    * `eventIds` are the ids `captureEvent` returned for those events, when they are known.
    */
   onDropped?: (dropped: { events: number; status: number; reason?: string; eventIds?: string[] }) => void;
@@ -300,11 +335,13 @@ function contextsOf(contexts: CaptureContext["contexts"]): Record<string, unknow
 /** The longest `dist` sent. */
 const MAX_DIST = 64;
 
-type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'sendDefaultPii' | 'selfHealing' | 'apiKey' | 'includeSourceContext' | 'inAppOrigins' | 'captureProcessErrors' | 'onDropped' | 'rateLimit' | 'dist'> & {
+type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'ignoreErrors' | 'defaultIgnoreErrors' | 'denyUrls' | 'allowUrls' | 'maxBreadcrumbs' | 'beforeBreadcrumb' | 'sendDefaultPii' | 'selfHealing' | 'apiKey' | 'includeSourceContext' | 'inAppOrigins' | 'captureProcessErrors' | 'onDropped' | 'rateLimit' | 'dist'> & {
   initialUser?: UserContext;
   sendDefaultPii: boolean;
   onDropped?: OverseerConfig["onDropped"];
   dist?: string;
+  maxBreadcrumbs: number;
+  beforeBreadcrumb?: OverseerConfig["beforeBreadcrumb"];
   selfHealing?: SelfHealingConfig;
   includeSourceContext: boolean;
   inAppOrigins: string[];
@@ -337,8 +374,18 @@ export interface FeedbackContext {
 }
 
 /** Breadcrumbs kept, process-wide and per request. */
-// The server keeps an error's last 20 breadcrumbs, so the SDK neither buffers nor sends more.
-const MAX_BREADCRUMBS = 20;
+// The server keeps an error's last 20 breadcrumbs by default; `maxBreadcrumbs` changes it, up to 100.
+const DEFAULT_MAX_BREADCRUMBS = 20;
+const LIMIT_MAX_BREADCRUMBS = 100;
+
+/** `maxBreadcrumbs` as it is used: a number clamped to 0-100 (a fraction rounded down), else the default. */
+function breadcrumbLimit(value: unknown): number {
+  if (typeof value !== "number" || Number.isNaN(value)) return DEFAULT_MAX_BREADCRUMBS;
+  return Math.min(LIMIT_MAX_BREADCRUMBS, Math.max(0, Math.floor(value)));
+}
+
+/** The newest `max` of a list; `slice(-0)` would keep all of it. */
+const newest = <T>(list: T[], max: number): T[] => (max <= 0 ? [] : list.slice(-max));
 const RATE_WINDOW_MS = 60_000;
 const DEFAULT_PER_GROUP_PER_MINUTE = 10;
 const DEFAULT_PER_MINUTE = 100;
@@ -384,6 +431,7 @@ class OverseerClient {
   readonly [CLIENT_MARKER] = true;
   private lastError: { id: string; at: number } | null = null;
   private config: ResolvedConfig;
+  private noise: NoiseFilter;
   private replayHook: ReplayHook | null = null;
   private user: UserContext | null = null;
   private tags: Record<string, string> = {};
@@ -449,6 +497,8 @@ class OverseerClient {
       replaysOnErrorSampleRate: config.replaysOnErrorSampleRate ?? 1.0,
       beforeSend: config.beforeSend || ((e) => e),
       onDropped: config.onDropped,
+      maxBreadcrumbs: breadcrumbLimit(config.maxBreadcrumbs),
+      beforeBreadcrumb: typeof config.beforeBreadcrumb === "function" ? config.beforeBreadcrumb : undefined,
       initialUser: config.initialUser,
       sendDefaultPii: config.sendDefaultPii === true,
       initialTags: config.initialTags || {},
@@ -456,6 +506,8 @@ class OverseerClient {
       includeSourceContext: config.includeSourceContext ?? true,
       inAppOrigins: normalizeOrigins(config.inAppOrigins),
     };
+
+    this.noise = new NoiseFilter(config);
 
     const limit = config.rateLimit;
     const count = (n: unknown, fallback: number): number => (typeof n === "number" && n >= 0 ? n : fallback);
@@ -542,7 +594,6 @@ class OverseerClient {
    */
   captureFrom(error: Error | unknown, context: CaptureContext | Record<string, unknown> | undefined, caller: Caller): string {
     if (!this.config.enabled) return "";
-    if (!this.shouldSample(this.config.sampleRate)) return "";
 
     const eventId = generateId();
     // Set by an integration only (a symbol key): a caller's own `handled` or `mechanism` is plain data in `extra`.
@@ -551,7 +602,14 @@ class OverseerClient {
     const fields = readCaptureContext(context);
     const err = normalizeThrown(error);
     // Kept in this function (not in a helper): the stack of an error made up for the value starts at the app's call.
-    const stack = err.stack ?? syntheticStack(err.name, err.message, caller, hint?.frames);
+    // An integration (it passes a hint) calls from inside the SDK, so a stack made here would start in SDK code: it gets none, or the one frame it names.
+    const stack = err.stack ?? (hint && !hint.frames ? undefined : syntheticStack(err.name, err.message, caller, hint?.frames));
+
+    // Before sampling, the rate limit and `beforeSend`: an ignored event is never counted by any of them.
+    const own = fields ? fields.extra : context;
+    const file = (own as { filename?: unknown } | undefined)?.filename;
+    if (this.dropAsNoise(eventId, { texts: [`${err.name}: ${err.message}`, err.message], message: err.message, stack, file: typeof file === "string" ? file : undefined })) return eventId;
+    if (!this.shouldSample(this.config.sampleRate)) return "";
 
     const causes = collectCauses(error, this.config.inAppOrigins);
     const conversationId = this.getConversationId();
@@ -602,9 +660,10 @@ class OverseerClient {
 
   captureMessage(message: string, level: SeverityLevel = "info"): string {
     if (!this.config.enabled) return "";
-    if (!this.shouldSample(this.config.sampleRate)) return "";
 
     const eventId = generateId();
+    if (this.dropAsNoise(eventId, { texts: [message], message })) return eventId;
+    if (!this.shouldSample(this.config.sampleRate)) return "";
 
     const event: OverseerEvent = {
       id: eventId,
@@ -631,8 +690,32 @@ class OverseerClient {
    */
   captureEvent(event: OverseerEvent): string {
     if (!this.config.enabled) return "";
+    if (this.dropEventAsNoise(event)) return event.id;
     this.sendEvent({ ...event, environment: event.environment ?? this.config.environment });
     return event.id;
+  }
+
+  /** True when `ignoreErrors`, `denyUrls` or `allowUrls` drops the event: it is reported to `onDropped` as `filtered`, with the option in the debug log. */
+  private dropAsNoise(id: string, candidate: NoiseCandidate): boolean {
+    const option = this.noise.check(candidate);
+    if (!option) return false;
+    this.log(`${option} dropped an event: ${candidate.message}`);
+    this.tellDropped(1, 0, "filtered", [{ id }]);
+    return true;
+  }
+
+  /** `dropAsNoise` for an event another part of the SDK built; only an error and a message event are filtered. */
+  private dropEventAsNoise(event: OverseerEvent): boolean {
+    if (event.type === "message") {
+      const text = event.message ?? "";
+      return this.dropAsNoise(event.id, { texts: [text], message: text });
+    }
+    if (event.type !== "error" || !event.exception) return false;
+    const { stacktrace } = event.exception;
+    const type = event.exception.type ?? "Error";
+    const value = event.exception.value ?? event.message ?? "";
+    const file = stacktrace?.find((f) => f.filename)?.filename ?? event.extra?.filename;
+    return this.dropAsNoise(event.id, { texts: [`${type}: ${value}`, value], message: value, ...(typeof file === "string" ? { file } : {}) });
   }
 
   /** Set by `startReplay()` in `@codmir/sdk/replay`; null unlinks. Not part of the stable API. */
@@ -721,10 +804,10 @@ class OverseerClient {
     return { ...this.tags, ...getRequestScope()?.tags };
   }
 
-  /** The breadcrumbs an event gets: the process-wide ones, then the request's own, the newest 20. A copy. */
+  /** The breadcrumbs an event gets: the process-wide ones, then the request's own, the newest `maxBreadcrumbs`. A copy. */
   private breadcrumbsOf(): Breadcrumb[] {
     const own = getRequestScope()?.breadcrumbs;
-    return own ? [...this.breadcrumbs, ...own].slice(-MAX_BREADCRUMBS) : [...this.breadcrumbs];
+    return own ? newest([...this.breadcrumbs, ...own], this.config.maxBreadcrumbs) : newest(this.breadcrumbs, this.config.maxBreadcrumbs);
   }
 
   /** Inside a request the tag is the request's: it never reaches another request or the process-wide tags. */
@@ -816,16 +899,45 @@ class OverseerClient {
     return this.config.environment;
   }
 
-  /** Inside a request the breadcrumb is the request's own; outside, the process-wide trail. The newest 20 are kept. */
-  addBreadcrumb(breadcrumb: Breadcrumb): void {
-    const crumb: Breadcrumb = {
-      ...breadcrumb,
-      ...(breadcrumb.data ? { data: sanitizeExtra(breadcrumb.data) } : {}),
-      timestamp: breadcrumb.timestamp || new Date().toISOString(),
+  /**
+   * Inside a request the breadcrumb is the request's own; outside, the process-wide trail. The newest `maxBreadcrumbs`
+   * (20) are kept, after `beforeBreadcrumb` has seen the breadcrumb and `hint`.
+   */
+  addBreadcrumb(breadcrumb: Breadcrumb, hint?: Record<string, unknown>): void {
+    const crumb = this.prepareBreadcrumb(breadcrumb, hint);
+    if (crumb) this.keepBreadcrumb(crumb);
+  }
+
+  /** The breadcrumb as it is kept: what `beforeBreadcrumb` made of it, its data cleaned and timestamped; null when the hook dropped it or failed. */
+  private prepareBreadcrumb(breadcrumb: Breadcrumb, hint?: Record<string, unknown>): Breadcrumb | null {
+    let given: Breadcrumb | null = breadcrumb;
+    const hook = this.config.beforeBreadcrumb;
+    if (hook) {
+      try {
+        const result: unknown = hook({ ...breadcrumb, ...(breadcrumb.data ? { data: { ...breadcrumb.data } } : {}) }, hint);
+        // As with `beforeSend`: `null` is the app dropping it on purpose, a throw or anything else that is not one fails it, and a failed hook drops it.
+        if (result === null || result === undefined) return null;
+        if (typeof result !== "object" || Array.isArray(result) || typeof (result as PromiseLike<unknown>).then === "function") {
+          throw new Error("beforeBreadcrumb returned something that is not a breadcrumb");
+        }
+        given = result as Breadcrumb;
+      } catch (err) {
+        this.log("beforeBreadcrumb failed; dropping the breadcrumb:", err);
+        return null;
+      }
+    }
+    return {
+      ...given,
+      ...(given.data ? { data: sanitizeExtra(given.data) } : {}),
+      timestamp: given.timestamp || new Date().toISOString(),
     };
+  }
+
+  private keepBreadcrumb(crumb: Breadcrumb): void {
+    const max = this.config.maxBreadcrumbs;
     const scope = getRequestScope();
-    if (scope) scope.breadcrumbs = [...(scope.breadcrumbs ?? []), crumb].slice(-MAX_BREADCRUMBS);
-    else this.breadcrumbs = [...this.breadcrumbs, crumb].slice(-MAX_BREADCRUMBS);
+    if (scope) scope.breadcrumbs = newest([...(scope.breadcrumbs ?? []), crumb], max);
+    else this.breadcrumbs = newest([...this.breadcrumbs, crumb], max);
   }
 
   /**
@@ -833,12 +945,14 @@ class OverseerClient {
    * another: the newest one's `data.count` goes up (2 for the first repeat), so a message that repeats does not push the
    * rest of the trail out of the 20 an error keeps.
    */
-  addRepeatedBreadcrumb(breadcrumb: Breadcrumb): void {
+  addRepeatedBreadcrumb(breadcrumb: Breadcrumb, hint?: Record<string, unknown>): void {
+    const crumb = this.prepareBreadcrumb(breadcrumb, hint);
+    if (!crumb) return;
     const scope = getRequestScope();
     const trail = scope ? (scope.breadcrumbs ?? []) : this.breadcrumbs;
     const last = trail[trail.length - 1];
-    if (!last || last.category !== breadcrumb.category || last.level !== breadcrumb.level || last.message !== breadcrumb.message) {
-      this.addBreadcrumb(breadcrumb);
+    if (!last || last.category !== crumb.category || last.level !== crumb.level || last.message !== crumb.message) {
+      this.keepBreadcrumb(crumb);
       return;
     }
     const count = typeof last.data?.count === "number" ? last.data.count + 1 : 2;
@@ -1621,13 +1735,13 @@ export function setTags(tags: Record<string, string>): void {
   getClient()?.setTags(tags);
 }
 
-export function addBreadcrumb(breadcrumb: Breadcrumb): void {
-  getClient()?.addBreadcrumb(breadcrumb);
+export function addBreadcrumb(breadcrumb: Breadcrumb, hint?: Record<string, unknown>): void {
+  getClient()?.addBreadcrumb(breadcrumb, hint);
 }
 
 /** `addBreadcrumb`, except that a repeat of the newest breadcrumb raises its `data.count` instead of adding one. */
-export function addRepeatedBreadcrumb(breadcrumb: Breadcrumb): void {
-  getClient()?.addRepeatedBreadcrumb(breadcrumb);
+export function addRepeatedBreadcrumb(breadcrumb: Breadcrumb, hint?: Record<string, unknown>): void {
+  getClient()?.addRepeatedBreadcrumb(breadcrumb, hint);
 }
 
 export function flush(timeout?: number): Promise<boolean> {

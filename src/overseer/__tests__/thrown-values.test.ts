@@ -149,7 +149,7 @@ describe("the browser integration", () => {
   };
 
   it("(f) a window error with no error is one frame from the event and none from the SDK", async () => {
-    browser.init(config);
+    browser.init({ ...config, defaultIgnoreErrors: false });
     window.dispatchEvent(new ErrorEvent("error", { message: "Script error.", filename: `${window.location.origin}/app.js`, lineno: 12, colno: 5 }));
     const [{ event }] = await sent();
     expect(event.exception.value).toBe("Script error.");
@@ -157,7 +157,7 @@ describe("the browser integration", () => {
   });
 
   it("(f) a window error with no error and no file has no frames", async () => {
-    browser.init(config);
+    browser.init({ ...config, defaultIgnoreErrors: false });
     window.dispatchEvent(new ErrorEvent("error", { message: "Script error." }));
     const [{ event }] = await sent();
     expect(event.exception.stacktrace).toEqual([]);
