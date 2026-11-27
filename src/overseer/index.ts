@@ -601,7 +601,13 @@ class OverseerClient {
 
   /** The request's user (`null`: nobody) when it has one, else the client's. */
   private userOf(): UserContext | null {
-    const own = getRequestScope()?.user;
+    const scope = getRequestScope();
+    try {
+      scope?.refreshUser?.();
+    } catch {
+      // a lookup that fails leaves the user as it was
+    }
+    const own = scope?.user;
     return own === undefined ? this.user : own;
   }
 

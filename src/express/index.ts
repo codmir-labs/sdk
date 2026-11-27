@@ -125,8 +125,8 @@ export interface ExpressConfig extends OverseerConfig {
 
   /**
    * Extract user context from the request object.
-   * Called once per request, when `requestHandler()` runs, and again in `errorHandler()` when a later middleware has
-   * set `req.user` since. The answer is this request's user and no other request's: `null` (or `undefined`) means
+   * Called when `requestHandler()` runs, and again, at most once per change of `req.user`, when an event is captured in
+   * the request after a later middleware (an auth check) has set `req.user`. A user set with `setUser` in the request wins. The answer is this request's user and no other request's: `null` (or `undefined`) means
    * nobody, not the process-wide user. One that throws leaves the request without a user.
    *
    * @example
@@ -149,6 +149,8 @@ interface CodemirRequestContext {
   scope?: RequestScope;
   /** What `req.user` was when `extractUser` last ran, to tell a later `req.user` from it. */
   userSeen?: unknown;
+  /** What `extractUser` last put in the scope, to tell a user `setUser` set since from it. */
+  userExtracted?: UserContext | null;
 }
 
 /** Headers stripped from error reports to avoid leaking secrets */
@@ -243,6 +245,8 @@ export function requestHandler(): RequestMiddleware {
       startTime: Date.now(),
       scope,
     };
+    // `req.user` is usually set by a middleware after this one: an event captured later looks the user up again.
+    scope.refreshUser = () => refreshUser(req, scope);
 
     // Add request breadcrumb, inside the request's scope so it belongs to this request only
     withRequestScope(scope, () =>
@@ -296,12 +300,56 @@ export function bindToRequest<T extends object>(emitter: T): T {
 
 /** Sets the request's user to what `extractUser` answers, and never lets it break the request. */
 function extractInto(req: ExpressRequest, scope: RequestScope): void {
-  if (req._codmir) req._codmir.userSeen = req.user;
+  const ctx = req._codmir;
+  if (ctx) ctx.userSeen = req.user;
   try {
     scope.user = expressConfig.extractUser?.(req) || null;
   } catch {
     scope.user = null;
   }
+  if (ctx) ctx.userExtracted = scope.user;
+}
+
+/**
+ * Runs `extractUser` again when `req.user` is not what it was at the last run, so an event captured after an auth
+ * middleware has the signed-in user. A user `setUser` has put in the scope since the last run is kept.
+ */
+function refreshUser(req: ExpressRequest, scope: RequestScope): void {
+  const ctx = req._codmir;
+  if (!ctx || !expressConfig.extractUser || req.user === ctx.userSeen) return;
+  if (scope.user !== ctx.userExtracted) {
+    ctx.userSeen = req.user;
+    return;
+  }
+  extractInto(req, scope);
+}
+
+/** The HTTP status an error carries (`status`, `statusCode`, or `output.statusCode` as a boom error has it), 100 to 599, else undefined. */
+function statusOf(err: unknown): number | undefined {
+  if (typeof err !== "object" || err === null) return undefined;
+  try {
+    const e = err as { status?: unknown; statusCode?: unknown; output?: { statusCode?: unknown } | null };
+    for (const v of [e.status, e.statusCode, e.output?.statusCode]) {
+      if (typeof v === "number" && Number.isInteger(v) && v >= 100 && v <= 599) return v;
+    }
+  } catch {
+    // a throwing getter means no status
+  }
+  return undefined;
+}
+
+const defaultShouldHandleError = (err: unknown): boolean => {
+  const status = statusOf(err);
+  return status === undefined || status >= 500;
+};
+
+export interface ErrorHandlerOptions {
+  /**
+   * Decides whether an error reaching `errorHandler()` is sent. Default: only an error with no HTTP status, or a status of
+   * 500 or more (read from `status`, then `statusCode`, then `output.statusCode`). Whatever it answers, the error is passed on
+   * with `next(err)`. One that throws counts as `false`.
+   */
+  shouldHandleError?: (error: unknown, req: ExpressRequest, res: ExpressResponse) => boolean;
 }
 
 // =============================================================================
@@ -313,7 +361,8 @@ function extractInto(req: ExpressRequest, scope: RequestScope): void {
  *
  * Captures exceptions with full request context including method, URL,
  * headers (with sensitive values stripped), query parameters, and route params.
- * Calls `next(err)` so the error is not swallowed.
+ * Calls `next(err)` so the error is not swallowed. An error with a 4xx status is passed on and not sent, unless
+ * `shouldHandleError` says so.
  *
  * @example
  * ```typescript
@@ -321,13 +370,24 @@ function extractInto(req: ExpressRequest, scope: RequestScope): void {
  * app.use(Codmir.errorHandler());
  * ```
  */
-export function errorHandler(): ErrorMiddleware {
+export function errorHandler(options: ErrorHandlerOptions = {}): ErrorMiddleware {
+  const shouldHandle = options.shouldHandleError ?? defaultShouldHandleError;
   return (
     err: unknown,
     req: ExpressRequest,
-    _res: ExpressResponse,
+    res: ExpressResponse,
     next: NextFunction
   ): void => {
+    let handle = false;
+    try {
+      handle = shouldHandle(err, req, res);
+    } catch {
+      // a predicate that throws sends nothing, and the error still goes on
+    }
+    if (!handle) {
+      next(err);
+      return;
+    }
     // Never the request's headers, cookies, query, params or body. The event's `request` (origin, path, method)
     // comes from the scope below; the route pattern is the one safe thing to add.
     const requestContext: Record<string, unknown> = withHint({}, crash("express-error-handler"));
@@ -336,7 +396,10 @@ export function errorHandler(): ErrorMiddleware {
     // The request's scope is the one `requestHandler` made, with the user `setUser` or `extractUser` gave it.
     const scope = req._codmir?.scope ?? scopeOf(req);
     // `extractUser` runs again only when a later middleware has set `req.user` since.
-    if (expressConfig.extractUser && (!req._codmir?.scope || req.user !== req._codmir.userSeen)) extractInto(req, scope);
+    if (expressConfig.extractUser) {
+      if (req._codmir?.scope) refreshUser(req, scope);
+      else extractInto(req, scope);
+    }
     if (expressConfig.extractUser && scope.user) requestContext.user = scope.user;
 
     // The client IP is personal data: only with `sendDefaultPii: true`.

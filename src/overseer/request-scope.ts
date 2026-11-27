@@ -29,6 +29,8 @@ export interface RequestScope {
   tags?: Record<string, string>;
   /** The request's own breadcrumbs, at most the newest 100, which an event carries after the process-wide ones. */
   breadcrumbs?: Breadcrumb[];
+  /** Brings `user` up to date at the moment an event is built (Express: `req.user` may have been set since the scope opened). Must not throw. */
+  refreshUser?: () => void;
 }
 
 export interface RequestScopeStrategy {

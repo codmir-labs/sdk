@@ -778,7 +778,30 @@ app.listen(3000);
 | --- | --- |
 | `requestHandler()` | Adds an `http.request` breadcrumb (method and path), runs `extractUser` once, and runs the rest of the chain in the request's scope, so any capture in the handler's async tail carries this request's `request.url`, `request.method` and user. Mount it first. |
 | `tracingHandler()` | Continues an incoming `traceparent` or starts a trace, opens an `http.server` transaction named after the route pattern (`GET /orders/:id`), ends it when the response finishes or the client hangs up, and adds an `http.response` breadcrumb with the status and duration. A 5xx marks it `error`. |
-| `errorHandler()` | Captures the error with the route pattern and the request's user, then calls `next(err)` so your own error handler still runs. It runs `extractUser` again only when a later middleware has set `req.user` since. Mount it after the routes. |
+| `errorHandler(options?)` | Captures the error with the route pattern and the request's user, then calls `next(err)` so your own error handler still runs. An error with a 4xx status is passed on and not sent (see below). Mount it after the routes. |
+
+**4xx errors are not sent by default.** A malformed JSON body (`400`), an unknown path (`next(createError(404))`) or a failed
+login (`401`) is the client's doing, not a bug in your app, and sending it let any visitor create events and issues.
+`errorHandler()` now sends an error only when it carries no HTTP status or a status of 500 or more, read from `status`,
+then `statusCode`, then `output.statusCode` (a boom error), and only an integer from 100 to 599 counts. Every error is
+still passed to `next(err)`, and the transaction's status and the request breadcrumb do not change. To decide yourself,
+pass `shouldHandleError: (error, req, res) => boolean`; one that throws sends nothing. This one also reports 404s:
+
+```ts
+app.use(
+  Codmir.errorHandler({
+    shouldHandleError: (error) => {
+      const status = (error as { status?: number }).status;
+      return status === undefined || status >= 500 || status === 404;
+    },
+  }),
+);
+```
+
+**A capture inside a route has the signed-in user.** `requestHandler()` runs `extractUser` before your auth middleware sets
+`req.user`, so an event captured later in the request, in a route handler for instance, runs it again with `req.user` as
+it stands then: at most once per change of `req.user`, never once per event. A user set with `setUser` in the request
+wins over `extractUser`'s.
 
 `init()` also wraps the global `fetch`, so outgoing calls inside a traced request become `http.client` spans and carry
 a `traceparent` to same-origin URLs and to your `tracePropagationTargets`.
@@ -1750,7 +1773,7 @@ Each framework's `init()` takes the core options plus its own:
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `extractUser` | none | `(req) => user \| null`, run once per request, and again in `errorHandler()` when a later middleware set `req.user`; its answer is that request's user, and `null` means nobody |
+| `extractUser` | none | `(req) => user \| null`, run when `requestHandler()` runs, and again when an event is captured after a later middleware set `req.user` (once per change); its answer is that request's user, and `null` means nobody |
 | `captureRequestBody` | `false` | Deprecated and ignored: a request body is never sent |
 | `captureResponseBody` | `false` | Accepted, not read at this version |
 
