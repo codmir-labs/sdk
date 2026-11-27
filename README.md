@@ -482,10 +482,23 @@ x-overseer-key: osk_example
    - `/releases/<id>/` becomes `/releases/<release>/`;
    - a content hash before the extension is removed: a `.` or `-` segment of 8 or more characters made of hex digits, or
      of letters and digits with at least one of each, so `main.3f2a9c1e.js` is `main.js` and `index-8f2a1b3c.js` is
-     `index.js`, while `index-header.js` and `vendor-react.js` keep their names.
+     `index.js`; or Rollup's (and so Vite's): exactly the last 8 characters of the name, after a `-` or `.`, made of
+     letters, digits, `_` and `-` with at least one digit or upper-case letter, so `index-Dx_9lC-p.js` is `index.js`.
+     `.chunk`, `.bundle` and `.min` before `.js`, `.mjs` or `.cjs` are part of the extension, so
+     `main.3f2a9c1e.chunk.js` is `main.chunk.js`. `index-header.js`, `vendor-react.js` and `app-settings.js` keep their
+     names.
 
    A function name loses `async `, `new `, `[as x]`, generic receivers such as `Object.` and `Module.`, and Firefox's
    `promise callback*`.
+
+   **Minified bundles.** A minifier renames functions, and differently in every build (`p`, `x`, `C`, then `s`, `x`,
+   `_`), so a function name there would start a new group on each deploy. A frame whose function looks mangled keys as
+   its normalized file alone: a name of 1 or 2 characters (letters, digits, `_`, `$`), or of 3 on line 1 or 2 at a
+   column above 1000, deep inside a one-line bundle. So does an anonymous frame with no source line on line 1 or 2 at a
+   column above 1000, whose line number says nothing there. When any of the key's frames is one of these, the folded
+   message (as above) is added after the frame parts, so two different errors in one bundle stay apart and each stays
+   stable across deploys, with no source map. To get frame-based grouping back, keep the names in the bundler: esbuild
+   `keepNames`, terser `keep_fnames` and `keep_classnames`. Source maps are not used for grouping yet.
 
    **The legacy key and the one-time move.** Releases before this one keyed on the type, the first in-app frame's
    `file:line` and the masked message. Every error still carries that key as `group.legacyFingerprint`, so the platform
@@ -2194,7 +2207,7 @@ so one bug stays one issue across deploys, browsers and user input; two throw si
 routes, stay two. Too much in one issue: the frames are in your own code, so look at what the first three in-app frames
 share, and set `event.fingerprint` in `beforeSend` to split it. Too many issues: a frameless error groups by its message,
 so give it a stack or set `event.fingerprint`; a file whose name differs by more than a
-content hash or a path prefix is a different file. `event.fingerprint` set in `beforeSend` wins over the computed one.
+content hash or a path prefix is a different file; a minified build whose function names are mangled keys on the file and the message, so keep the names (esbuild `keepNames`, terser `keep_fnames` and `keep_classnames`). `event.fingerprint` set in `beforeSend` wins over the computed one.
 
 </details>
 
