@@ -572,7 +572,8 @@ addBreadcrumb({ category: 'checkout', message: 'coupon applied' });
 | Spans | Every `fetch` and XHR made inside a trace becomes an `http.client` span; same-origin requests and your `tracePropagationTargets` get a `traceparent` header |
 | Transactions | With `tracesSampleRate` above 0: one `pageload` transaction, then one `navigation` transaction per client-side route change, with web vitals on the pageload |
 
-An error carries its last 20 breadcrumbs, so the trail is short: add the ones that matter.
+An error carries its last 20 breadcrumbs, so the trail is short: add the ones that matter. The SDK's own requests (errors,
+replay uploads, feedback) never become breadcrumbs or spans.
 
 `init()` in `@codmir/sdk/browser` does nothing outside a browser and logs a warning, so it is safe in code that also
 renders on a server. Add [session replay](#session-replay) with one more import.

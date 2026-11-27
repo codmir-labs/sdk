@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 /**
- * What an error's breadcrumbs say: the newest 20, navigation messages that name the page, and fetch and XHR messages that
- * name the path and the status.
+ * What an error's breadcrumbs say: the newest 20, navigation messages that name the page, fetch and XHR messages that
+ * name the path and the status, and none for the SDK's own requests (errors, replay, feedback).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addBreadcrumb, captureException, close, init, type OverseerEvent } from "../../overseer/index";
 import { trackNavigation } from "../../overseer/navigation";
-import { instrumentFetch, instrumentXhr } from "../index";
+import { instrumentFetch, instrumentXhr, startSpan } from "../index";
 
 const DSN = "https://ingest.example.test/api/overseer";
 let events: OverseerEvent[];
@@ -144,5 +144,48 @@ describe("xhr messages", () => {
     teardown.push(instrumentXhr());
     await xhr("/api/cart?id=7");
     expect(xhrCrumbs().at(-1)!.message).toBe("GET /api/cart failed");
+  });
+});
+
+describe("the SDK's own requests", () => {
+  it("a replay upload through fetch makes no breadcrumb and no span", async () => {
+    const seen: Array<{ url: string; traceparent: string | null }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        seen.push({ url: String(input), traceparent: new Headers(init?.headers).get("traceparent") });
+        return new Response("{}", { status: 200 });
+      }),
+    );
+    teardown.push(instrumentFetch({ breadcrumbs: true }));
+    await startSpan({ op: "function", name: "root" }, async () => {
+      await fetch(`${DSN}/replay`, { method: "POST", body: "{}" });
+      await fetch(`${DSN}/feedback`, { method: "POST", body: "{}" });
+      await fetch(`${DSN}/ingest`, { method: "POST", body: "{}" });
+      await fetch("https://ingest.example.test/api/cart");
+    });
+    expect(seen.slice(0, 3).map((s) => s.traceparent)).toEqual([null, null, null]);
+    expect(seen[3]!.traceparent).not.toBeNull();
+    expect(crumbs().filter((c) => c.category === "fetch").map((c) => c.message)).toEqual(["GET /api/cart 200"]);
+  });
+
+  it("an XHR to the replay URL makes no breadcrumb, an app request on the same origin does", async () => {
+    const proto = XMLHttpRequest.prototype;
+    proto.open = function () {} as typeof proto.open;
+    proto.send = function (this: XMLHttpRequest) {
+      Object.defineProperty(this, "status", { value: 200, configurable: true });
+      queueMicrotask(() => this.dispatchEvent(new Event("loadend")));
+    };
+    teardown.push(instrumentXhr());
+    const call = (url: string) =>
+      new Promise<void>((resolve) => {
+        const x = new XMLHttpRequest();
+        x.addEventListener("loadend", () => resolve());
+        x.open("POST", url);
+        x.send();
+      });
+    await call(`${DSN}/replay`);
+    await call("https://ingest.example.test/api/cart");
+    expect(crumbs().filter((c) => c.category === "xhr").map((c) => c.message)).toEqual(["POST /api/cart 200"]);
   });
 });
