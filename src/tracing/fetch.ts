@@ -1,8 +1,8 @@
 import { addBreadcrumb, getClient } from "../overseer/index";
 import { isLive, type Installed } from "../overseer/lifecycle";
-import { scrubUrl } from "../overseer/url-scrub";
+import { scrubUrlsIn } from "../overseer/url-scrub";
 import { getActiveSpan } from "./context";
-import { isSdkRequest, resolveUrl, shouldPropagate } from "./url-match";
+import { isSdkRequest, requestPath, resolveUrl, scrubRequestUrl, shouldPropagate } from "./url-match";
 
 export { resolveUrl, shouldPropagate };
 
@@ -39,14 +39,15 @@ export function instrumentFetch(options: InstrumentFetchOptions = {}): () => voi
     if (!installed.active) return original.call(globalThis, input, init);
     const fullUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     // The breadcrumb names origin and path only: a query or fragment can hold a token.
-    const rawUrl = scrubUrl(fullUrl);
+    const rawUrl = scrubRequestUrl(fullUrl);
     const method = (init?.method || (typeof input === "object" && "method" in input ? input.method : "") || "GET").toUpperCase();
     const url = resolveUrl(fullUrl);
+    const path = url ? requestPath(url, rawUrl) : "";
     if (!url || isOwnRequest(url)) return original.call(globalThis, input, init);
 
     const parent = getActiveSpan();
-    const span = parent?.startChild({ op: "http.client", name: `${method} ${url.pathname}` }) ?? null;
-    span?.setData("url", `${url.origin}${url.pathname}`);
+    const span = parent?.startChild({ op: "http.client", name: `${method} ${path}` }) ?? null;
+    span?.setData("url", rawUrl);
     span?.setData("http.request.method", method);
 
     let nextInit = init;
@@ -66,7 +67,7 @@ export function instrumentFetch(options: InstrumentFetchOptions = {}): () => voi
       if (breadcrumbs) {
         addBreadcrumb({
           category: "fetch",
-          message: `${method} ${url.pathname} ${response.status}`,
+          message: `${method} ${path} ${response.status}`,
           data: { method, url: rawUrl, status: response.status, duration: Date.now() - started },
           level: response.ok ? "info" : "error",
         });
@@ -77,11 +78,11 @@ export function instrumentFetch(options: InstrumentFetchOptions = {}): () => voi
       if (breadcrumbs) {
         addBreadcrumb({
           category: "fetch",
-          message: `${method} ${url.pathname} failed`,
+          message: `${method} ${path} failed`,
           data: {
             method,
             url: rawUrl,
-            error: error instanceof Error ? error.message : "Network error",
+            error: error instanceof Error ? scrubUrlsIn(error.message) : "Network error",
             duration: Date.now() - started,
           },
           level: "error",

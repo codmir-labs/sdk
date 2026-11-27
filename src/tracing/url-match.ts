@@ -1,5 +1,6 @@
 /** URL helpers shared by the request instrumentation and `@codmir/sdk/feedback`. Browser-safe, imports nothing. */
 
+import { scrubUrl } from "../overseer/url-scrub";
 import { feedbackUrl, ingestUrl, patchesManifestUrl, replayUrl } from "../endpoints";
 
 export function resolveUrl(raw: string): URL | null {
@@ -9,6 +10,23 @@ export function resolveUrl(raw: string): URL | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * `scrubUrl` for a request's URL. The page's address is the base only for a protocol-relative URL (`//user:pass@host/x`),
+ * which cannot be told from a path without it; any other relative URL stays relative, as a breadcrumb always showed it.
+ */
+export function scrubRequestUrl(raw: string): string {
+  const page = (globalThis as { location?: { href?: string } }).location?.href;
+  return scrubUrl(raw, /^\s*[/\\]{2}/.test(raw) ? page : undefined);
+}
+
+/**
+ * What a request breadcrumb names: the path of a URL with a host, else its scrubbed form (a `data:` URL's path is its whole
+ * payload). `scrubbed` is the `scrubUrl` of the same URL.
+ */
+export function requestPath(url: URL, scrubbed: string): string {
+  return url.href.startsWith(`${url.protocol}//`) ? url.pathname : scrubbed;
 }
 
 /**
