@@ -18,7 +18,8 @@
  *   `poster`, `href` or `xlink:href` becomes one fixed placeholder. Every other attribute stays as it is;
  * - each `attributes` entry of a mutation under a block is dropped, and so is any other incremental event (input, mouse
  *   interaction, scroll, media) whose `data.id` is under a block, as the recorder drops them itself for a light-DOM
- *   block. Under a mask, attributes and input values stay as the recorder sends them, its own light-DOM rule.
+ *   block. Under a mask, input values stay as the recorder sends them, its own light-DOM rule, and attributes follow
+ *   the rule above.
  *
  * - any other incremental event whose numeric `data.id` is negative, or names a node the mirror does not know, is dropped:
  *   the recorder sends id -1 for a node it never serialized (an input in a blocked shadow root at the first snapshot), and
