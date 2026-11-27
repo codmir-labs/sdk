@@ -44,6 +44,9 @@ import {
 import {
   buildSegmentBody,
   chunkEvents,
+  eventBytes,
+  MAX_BUFFER_BYTES,
+  MAX_ERROR_EVENT_IDS,
   postSegment,
   replayEndpoint,
   type HideRun,
@@ -73,8 +76,9 @@ export interface ReplaySession {
   viewport: { width: number; height: number };
   /** @deprecated Always empty; events live in the segments that were uploaded. */
   events: ReplayEvent[];
+  /** Ids of the errors captured, the newest 500 (the page may capture far more over its life). */
   errorIds: string[];
-  /** Metadata of the segments emitted so far. Their `events` are not retained once uploaded. */
+  /** Metadata of the newest 500 segments emitted. Their `events` are not retained once uploaded. */
   segments: ReplaySegment[];
   tags: Record<string, string>;
 }
@@ -252,6 +256,24 @@ type RrwebRecord = typeof import("@rrweb/record").record;
 /** Recovery snapshots taken with no stored segment in between; past this a loss waits for the next periodic checkout. */
 const MAX_RECOVERY_SNAPSHOTS = 3;
 
+/** The session record keeps the ids of this many of the newest errors... */
+const MAX_SESSION_ERROR_IDS = 500;
+/** ...and the metadata of this many of the newest segments, so a page that lives for days does not grow it for ever. */
+const MAX_SESSION_SEGMENTS = 500;
+
+/** At most this many requests of one recorder are in flight at once (the retry queue's one request counts); the rest wait their turn. */
+const MAX_UPLOADS_IN_FLIGHT = 2;
+
+/** An early checkout is requested when the current generation reaches this, so the two generations stay within the cap... */
+const CHECKOUT_AT_BYTES = MAX_BUFFER_BYTES / 2;
+/** ...and only when it has grown this far past its snapshot, so a large snapshot cannot loop. */
+const MIN_GROWTH_FOR_CHECKOUT = MAX_BUFFER_BYTES / 4;
+
+/** The newest `max` of `list`, kept in place. */
+function keepNewest<T>(list: T[], max: number): void {
+  if (list.length > max) list.splice(0, list.length - max);
+}
+
 /** A segment whose upload ended "retry later" waits in a queue of at most this many segments... */
 const MAX_QUEUED_SEGMENTS = 10;
 /** ...or this many bytes of request bodies, whichever comes first. */
@@ -306,9 +328,18 @@ export class ReplayRecorder {
   private sessionStartTime = 0;
   /** Events of the segment being built (session and post-error modes). */
   private events: RrwebEvent[] = [];
-  /** On-error buffer: the previous and the current checkout generation. */
+  /** {@link eventBytes} of `events`, measured as each was recorded. */
+  private eventsBytes = 0;
+  /** On-error buffer: the previous and the current checkout generation, each with its measured bytes. */
   private prevBuffer: RrwebEvent[] = [];
+  private prevBytes = 0;
   private curBuffer: RrwebEvent[] = [];
+  private curBytes = 0;
+  /** Bytes of the current generation up to its FullSnapshot, and whether that snapshot has arrived yet. */
+  private curHeadBytes = 0;
+  private curHeadOpen = true;
+  /** An early checkout is scheduled (the current generation alone is over the cap). */
+  private checkoutTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingErrorIds: string[] = [];
   /** Set when the server refused a segment (no card or credits); nothing more uploads this session. */
   private uploadsRefused = false;
@@ -328,6 +359,10 @@ export class ReplayRecorder {
   private awaitingCheckout = false;
   /** A FullSnapshot did not fit one request: this replay cannot play from there, so it records and uploads no more. */
   private halted = false;
+  /** Segments emitted and not yet sent because {@link MAX_UPLOADS_IN_FLIGHT} requests are out: in arrival order across replays, in sequence order within one. */
+  private waiting: QueuedSegment[] = [];
+  /** Requests for segments from `waiting` or straight from `emitSegment` that have not answered; a request sent as the page hid is not counted. */
+  private inFlight = 0;
   /** Segments whose upload ended "retry later", of any replay: in arrival order across replays, in sequence order within one; they go out one at a time. */
   private queue: QueuedSegment[] = [];
   private queueBytes = 0;
@@ -446,20 +481,54 @@ export class ReplayRecorder {
    * mode it uploads the buffer as a segment and keeps recording for `postErrorDuration`.
    */
   markError(errorId: string): void {
-    this.session?.errorIds.push(errorId);
+    if (this.session) {
+      this.session.errorIds.push(errorId);
+      keepNewest(this.session.errorIds, MAX_SESSION_ERROR_IDS);
+    }
     if (this.mode === "buffer") {
-      this.pendingErrorIds.push(errorId);
+      this.pushPendingErrorId(errorId);
       this.mode = "post-error";
       const history = this.prevBuffer.concat(this.curBuffer);
-      this.prevBuffer = [];
-      this.curBuffer = [];
+      this.clearBuffer();
       // Nothing recorded yet (rrweb still loading, or waiting for `load`): the ids ride on the post-error segment.
       if (history.length > 0) this.emitSegment(history, this.takeErrorIds());
       this.postErrorTimer = setTimeout(() => this.endPostError(), this.config.postErrorDuration);
       (this.postErrorTimer as { unref?: () => void }).unref?.();
     } else if (this.mode === "session" || this.mode === "post-error") {
-      this.pendingErrorIds.push(errorId);
+      this.pushPendingErrorId(errorId);
     }
+  }
+
+  /** A body carries the newest {@link MAX_ERROR_EVENT_IDS} ids, so no more are kept while they wait for a segment. */
+  private pushPendingErrorId(errorId: string): void {
+    this.pendingErrorIds.push(errorId);
+    keepNewest(this.pendingErrorIds, MAX_ERROR_EVENT_IDS);
+  }
+
+  private clearBuffer(): void {
+    this.prevBuffer = [];
+    this.prevBytes = 0;
+    this.curBuffer = [];
+    this.curBytes = 0;
+    this.curHeadBytes = 0;
+    this.curHeadOpen = true;
+    this.cancelCheckout();
+  }
+
+  private cancelCheckout(): void {
+    if (this.checkoutTimer) clearTimeout(this.checkoutTimer);
+    this.checkoutTimer = null;
+  }
+
+  private takeEvents(): RrwebEvent[] {
+    const events = this.events;
+    this.clearEvents();
+    return events;
+  }
+
+  private clearEvents(): void {
+    this.events = [];
+    this.eventsBytes = 0;
   }
 
   addCustomEvent(name: string, payload: unknown): void {
@@ -498,9 +567,8 @@ export class ReplayRecorder {
   private beginReplay(): void {
     this.replayId = uuidv4();
     this.segments = { next: 0 };
-    this.events = [];
-    this.prevBuffer = [];
-    this.curBuffer = [];
+    this.clearEvents();
+    this.clearBuffer();
     this.pendingErrorIds = [];
     this.recoveryPending = false;
     this.recoveries = 0;
@@ -559,12 +627,30 @@ export class ReplayRecorder {
 
   private onEvent(event: RrwebEvent, isCheckout: boolean): void {
     if (this.mode === "buffer") {
+      const bytes = eventBytes(event);
       // A checkout starts with a Meta event: that is where the older generation can go.
       if (isCheckout && event.type === RRWEB_META) {
         this.prevBuffer = this.curBuffer;
+        this.prevBytes = this.curBytes;
         this.curBuffer = [];
+        this.curBytes = 0;
+        this.curHeadBytes = 0;
+        this.curHeadOpen = true;
+        this.cancelCheckout();
       }
       this.curBuffer.push(event);
+      this.curBytes += bytes;
+      if (this.curHeadOpen) {
+        this.curHeadBytes += bytes;
+        if (event.type === RRWEB_FULL_SNAPSHOT) this.curHeadOpen = false;
+      }
+      // Over the cap the older generation goes first: the current one starts at a checkout, so the history still opens with a snapshot.
+      if (this.prevBytes + this.curBytes > MAX_BUFFER_BYTES) {
+        this.prevBuffer = [];
+        this.prevBytes = 0;
+      }
+      // The current generation is half the cap: start a new one, so the older keeps about half the cap of history at a rotation.
+      if (this.curBytes >= CHECKOUT_AT_BYTES && this.curBytes - this.curHeadBytes > MIN_GROWTH_FOR_CHECKOUT) this.requestCheckout();
       return;
     }
     if (this.mode === "idle" || this.halted) return;
@@ -574,8 +660,30 @@ export class ReplayRecorder {
       this.awaitingCheckout = false;
       this.epoch++; // a segment sent before the checkout is older than it
     }
+    const bytes = eventBytes(event);
+    // A segment never holds more than the cap: what is gathered goes out before an event that would pass it.
+    if (this.events.length > 0 && this.eventsBytes + bytes > MAX_BUFFER_BYTES) this.flushSegment();
     this.events.push(event);
-    if (this.events.length >= this.config.maxSegmentEvents) this.flushSegment();
+    this.eventsBytes += bytes;
+    if (this.events.length >= this.config.maxSegmentEvents || this.eventsBytes >= MAX_BUFFER_BYTES) this.flushSegment();
+  }
+
+  /**
+   * Takes a full snapshot on a timer, not inside rrweb's emit: the Meta event it emits starts a new generation, and
+   * that is when the oversized one is dropped.
+   */
+  private requestCheckout(): void {
+    if (this.checkoutTimer) return;
+    this.checkoutTimer = setTimeout(() => {
+      this.checkoutTimer = null;
+      if (this.mode !== "buffer") return;
+      try {
+        this.record?.takeFullSnapshot(true);
+      } catch {
+        // never into the page
+      }
+    }, 0);
+    (this.checkoutTimer as { unref?: () => void }).unref?.();
   }
 
   private tick(): void {
@@ -604,6 +712,7 @@ export class ReplayRecorder {
     this.hideStepped = false;
     try {
       this.sendQueueOnHide(run);
+      this.sendWaitingOnHide();
       this.flushSegment(true);
     } finally {
       this.hideRun = null;
@@ -651,6 +760,20 @@ export class ReplayRecorder {
     }
   }
 
+  /**
+   * What waits for a free slot goes now, in order, like the retry queue: the page may be gone before a slot opens, so
+   * the cap of two does not hold here. Where the queue must wait (offline, or a server wait) it joins the queue instead.
+   */
+  private sendWaitingOnHide(): void {
+    const pending = this.waiting;
+    this.waiting = [];
+    for (const segment of pending) {
+      if (this.uploadsRefused) return;
+      if (this.queueMustWait()) this.enqueue(segment, null);
+      else this.send(segment, true);
+    }
+  }
+
   /** Offline, or a wait the server asked for that has not passed: the queue sends nothing, a hide included. */
   private queueMustWait(): boolean {
     return isOffline() || (this.queueDueKind === "server" && Date.now() < this.queueDueAt);
@@ -661,15 +784,13 @@ export class ReplayRecorder {
     if (this.recoveryPending) {
       // What was recorded since the lost segment cannot play without it: while offline it is dropped rather than sent.
       if (isOffline()) {
-        this.events = [];
+        this.clearEvents();
         return;
       }
       this.recover();
     }
     if (this.events.length === 0) return;
-    const events = this.events;
-    this.events = [];
-    this.emitSegment(events, this.takeErrorIds(), hiding);
+    this.emitSegment(this.takeEvents(), this.takeErrorIds(), hiding);
   }
 
   /** The post-error window is over: upload what followed the error, then go back to buffering under a new id. */
@@ -709,7 +830,10 @@ export class ReplayRecorder {
         // The player seeks to the end of the earliest segment that lists the error, so the last chunk is the one that ends at it.
         errorIds: index === chunks.length - 1 ? errorIds : [],
       };
-      this.session?.segments.push({ ...segment, events: [] });
+      if (this.session) {
+        this.session.segments.push({ ...segment, events: [] });
+        keepNewest(this.session.segments, MAX_SESSION_SEGMENTS);
+      }
       try {
         this.onSegmentReady?.(segment);
       } catch {
@@ -738,10 +862,49 @@ export class ReplayRecorder {
       this.enqueue(segment, null);
       return;
     }
-    void postSegment(upload, this.bodyOf(segment), hiding, true, this.hideRun ?? undefined).then((outcome) => {
-      if (typeof outcome === "object") this.enqueue(segment, outcome.delayMs);
-      else this.settle(segment, outcome, hiding);
-    });
+    if (hiding) {
+      this.send(segment, true);
+      return;
+    }
+    // At most two requests are out at once: the others wait, in sequence order, and a slot that opens starts the next.
+    let at = this.waiting.length;
+    while (at > 0 && this.waiting[at - 1].replayId === replayId && this.waiting[at - 1].sequenceNumber > sequenceNumber) at--;
+    this.waiting.splice(at, 0, segment);
+    this.pump();
+  }
+
+  /** Starts waiting segments while a slot is free. The retry queue's request takes a slot while it is out. */
+  private pump(): void {
+    while (this.waiting.length > 0 && !this.uploadsRefused && this.inFlight + (this.draining ? 1 : 0) < MAX_UPLOADS_IN_FLIGHT) {
+      const next = this.waiting.shift() as QueuedSegment;
+      // A segment is never sent past one that waits for a retry: it joins the queue, as it would have on arrival.
+      if (this.queue.length > 0) this.enqueue(next, null);
+      else this.send(next, false);
+    }
+  }
+
+  private send(segment: QueuedSegment, hiding: boolean): void {
+    const upload = this.config.upload;
+    if (!upload) return;
+    const body = this.bodyOf(segment); // before the slot is counted: a throw here must not leak it
+    if (!hiding) this.inFlight++;
+    void postSegment(upload, body, hiding, true, this.hideRun ?? undefined).then(
+      (outcome) => {
+        if (!hiding) this.inFlight--;
+        if (typeof outcome === "object") this.enqueue(segment, outcome.delayMs);
+        else this.settle(segment, outcome, hiding);
+        if (hiding) return;
+        this.pump();
+        this.drain();
+      },
+      () => {
+        // postSegment does not reject; if it ever does, the slot is freed like an answered one's
+        if (!hiding) this.inFlight--;
+        if (hiding) return;
+        this.pump();
+        this.drain();
+      },
+    );
   }
 
   private bodyOf(segment: QueuedSegment) {
@@ -755,6 +918,7 @@ export class ReplayRecorder {
     if (!upload) return;
     if (outcome === "refused") {
       this.uploadsRefused = true;
+      this.waiting = [];
       this.clearQueue();
       // Nothing more can be stored this session: stop recording too (deferred, we may be inside stop()).
       setTimeout(() => this.stop(), 0);
@@ -784,6 +948,7 @@ export class ReplayRecorder {
 
   /** A segment is gone for good: what waits behind it in the queue cannot play without it, so it goes too. */
   private lose(replayId: string, epoch: number): void {
+    this.waiting = this.waiting.filter((waiting) => waiting.replayId !== replayId || waiting.epoch > epoch);
     const kept = this.queue.filter((queued) => queued.replayId !== replayId || queued.epoch > epoch);
     if (kept.length !== this.queue.length) {
       this.queueBytes = kept.reduce((sum, queued) => sum + queued.bytes, 0);
@@ -849,11 +1014,12 @@ export class ReplayRecorder {
    * Sends the head of the queue, when its delay has passed and the page is not known to be offline. `online`, which
    * calls this with `force`, skips a backoff but not a wait the server asked for. While offline nothing is sent and
    * no attempt is counted: the timer is re-armed, so a queue still drains when no `online` listener is left. One
-   * request at a time; the next waits for its answer.
+   * request at a time; the next waits for its answer, and for a free slot of the two in flight.
    */
   private drain(force = false): void {
     const upload = this.config.upload;
     if (this.draining || this.queue.length === 0 || !upload || this.uploadsRefused) return;
+    if (this.inFlight >= MAX_UPLOADS_IN_FLIGHT) return; // a request that settles drains the queue after it
     if (isOffline()) {
       this.armQueueTimer(this.queueBackoffMs || QUEUE_BACKOFF_START_MS);
       return;
@@ -884,6 +1050,7 @@ export class ReplayRecorder {
           this.lose(head.replayId, head.epoch);
         }
         this.armQueueTimer();
+        this.pump(); // the slot is free
         return;
       }
       if (at >= 0) {
@@ -892,6 +1059,7 @@ export class ReplayRecorder {
       }
       if (this.queue.length === 0) this.clearQueue();
       this.settle(head, outcome, false);
+      this.pump();
       this.drain();
     });
   }
@@ -911,7 +1079,8 @@ export class ReplayRecorder {
   private haltReplay(reason: string): void {
     if (this.halted) return;
     this.halted = true;
-    this.events = [];
+    this.clearEvents();
+    this.waiting = this.waiting.filter((segment) => segment.replayId !== this.replayId);
     if (this.config.upload?.debug) console.log(`[Overseer replay] ${reason}`);
     setTimeout(() => this.stop(), 0);
   }
@@ -929,7 +1098,7 @@ export class ReplayRecorder {
     if (this.recoveries >= MAX_RECOVERY_SNAPSHOTS) {
       // Nothing is getting through (a wrong key, a failing server, a dead network): no more snapshots until the next checkout.
       this.awaitingCheckout = true;
-      this.events = [];
+      this.clearEvents();
       return;
     }
     this.recoveryPending = true;
@@ -942,7 +1111,7 @@ export class ReplayRecorder {
     if (this.mode !== "session" && this.mode !== "post-error") return;
     this.epoch++;
     this.recoveries++;
-    this.events = [];
+    this.clearEvents();
     try {
       this.record?.takeFullSnapshot(true);
     } catch {
@@ -964,9 +1133,8 @@ export class ReplayRecorder {
     }
     this.stopRrweb = undefined;
     this.record = null;
-    this.events = [];
-    this.prevBuffer = [];
-    this.curBuffer = [];
+    this.clearEvents();
+    this.clearBuffer();
     this.pendingErrorIds = [];
     this.recoveryPending = false;
     this.recoveries = 0;
