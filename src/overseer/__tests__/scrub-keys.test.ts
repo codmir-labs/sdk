@@ -172,7 +172,7 @@ describe("through a real capture", () => {
     addBreadcrumb({ type: "log", message: "m", data: { apiKey: "SECRET_CRUMB", note: "n" } });
     captureException(new Error("boom"), {
       user: new Account(1, "SECRET_HASH"),
-      doc: { toJSON: () => ({ email: "e@x.io", password: "SECRET_PW" }) },
+      doc: { toJSON: () => ({ email: "a@b.c", password: "SECRET_PW" }) },
       target: new URL("https://api.example.com/v1?token=SECRET_URL"),
       "x-api-key": "SECRET_XAPIKEY",
       cardNumber: "SECRET_CARD",
@@ -183,7 +183,7 @@ describe("through a real capture", () => {
     await flush();
     const wire = bodies.join("\n");
     expect(wire).toContain("boom");
-    expect(wire).toContain("e@x.io");
+    expect(wire).toContain("a@b.c");
     expect(wire).not.toContain("SECRET");
   });
 });
