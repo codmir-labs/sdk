@@ -38,6 +38,7 @@ import { collectCauses } from "./causes";
 import { installProcessErrors } from "./process-errors";
 import { userForWire } from "./user-pii";
 import { setAppRoot } from "./frame-file";
+import { detectEnvironment, detectRelease } from "./detect";
 import {
   DEFAULT_DSN,
   KEEPALIVE_MAX_BYTES,
@@ -350,8 +351,8 @@ class OverseerClient {
       clientKey: resolvedKey,
       secretKey: config.secretKey || "",
       overseerKey: resolvedKey,
-      environment: config.environment || "development",
-      release: config.release || "unknown",
+      environment: config.environment || detectEnvironment() || "development",
+      release: config.release || detectRelease() || "unknown",
       enabled: config.enabled ?? true,
       debug: config.debug ?? false,
       sampleRate: config.sampleRate ?? 1.0,
@@ -401,6 +402,12 @@ class OverseerClient {
       } catch {
         // a deleted working directory: no root
       }
+    }
+
+    if (this.config.debug && this.config.release === "unknown") {
+      console.log(
+        "[Overseer] No release: set the `release` option or the CODMIR_RELEASE environment variable, or events are sent with the release `unknown`.",
+      );
     }
 
     if (this.config.debug) {

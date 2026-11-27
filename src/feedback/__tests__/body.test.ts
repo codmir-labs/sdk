@@ -6,7 +6,10 @@ import { PAGE, REPLAY_ID, setup, teardown, type Harness } from "./harness";
 
 const NOW = new Date("2026-11-24T10:00:00.000Z");
 let h: Harness;
-afterEach(() => teardown(h));
+afterEach(() => {
+  teardown(h);
+  vi.unstubAllEnvs();
+});
 
 const ALLOWED = ["text", "replayId", "eventId", "failed", "pagePath", "environment", "release", "userId", "at", "replyWhenFixed", "sdk"];
 
@@ -71,6 +74,8 @@ describe("the body", () => {
   it("a bare context: the text, the environment, the time and the SDK, nothing else", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(NOW);
+    // vitest.setup.ts clears the host's release and environment variables, but leaves NODE_ENV as vitest sets it.
+    vi.stubEnv("NODE_ENV", "");
     h = await setup({});
     expect(typeof window).toBe("undefined");
     await h.fb.sendFeedback("hello");

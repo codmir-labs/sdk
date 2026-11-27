@@ -8,6 +8,8 @@ export default defineConfig({
   // packages/agent-kit has its own vitest config (npm run test:agent-kit).
   test: {
     exclude: ["**/node_modules/**", "**/dist/**", "packages/**"],
+    // Clears the host's release and environment variables, so a CI runner's do not reach a test.
+    setupFiles: ["./vitest.setup.ts"],
     // rrweb keeps `Date.now` from when it loads. Inlined, `vi.resetModules()` loads it afresh under each test's
     // fake clock, so the replay tests can move rrweb's time.
     server: { deps: { inline: [/rrweb/] } },

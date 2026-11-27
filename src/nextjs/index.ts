@@ -32,6 +32,7 @@ import {
   type Breadcrumb,
   type SeverityLevel,
 } from "../overseer/index";
+import { detectNextClientHost } from "../overseer/detect";
 import { listen, Stops } from "../overseer/lifecycle";
 import { withHint, crash, eventFrame } from "../overseer/capture-hint";
 import { trackNavigation } from "../overseer/navigation";
@@ -113,8 +114,19 @@ export function init(config: NextjsConfig = {}): void {
     ...coreConfig
   } = config;
 
+  // Vercel exposes these two to client bundles when system environment variables are exposed. Each is read on its own,
+  // as a literal, so the bundler inlines it even where there is no `process`; an explicit value, and on a server the
+  // plain variables, win.
+  const host = typeof window !== "undefined" ? detectNextClientHost() : { release: "", environment: "" };
+  const release = coreConfig.release || host.release;
+  const environment = coreConfig.environment || host.environment;
+
   // Initialize core
-  coreInit(coreConfig);
+  coreInit({
+    ...coreConfig,
+    ...(release?.trim() ? { release: release.trim() } : {}),
+    ...(environment?.trim() ? { environment: environment.trim() } : {}),
+  });
   isInitialized = true;
 
   // Browser-only setup
