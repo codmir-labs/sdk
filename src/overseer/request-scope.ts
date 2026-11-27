@@ -36,10 +36,29 @@ export interface RequestScopeStrategy {
   run<T>(scope: RequestScope, fn: () => T): T;
 }
 
+/**
+ * The AsyncLocalStorage that holds the requests: one per process, in a `Symbol.for` slot, because a bundler may load
+ * this module more than once (Next.js: instrumentation and each route) and a scope opened by one copy must be seen by
+ * the others. This module cannot import Node, so `installNodeTracingContext` hands the store over.
+ */
+interface RequestStore {
+  getStore(): RequestScope | undefined;
+  run<T>(scope: RequestScope, fn: () => T): T;
+}
+const STORE_SLOT = Symbol.for("codmir.request-scope.store");
+const slots = globalThis as Record<symbol, RequestStore | undefined>;
+
+/** Creates the process's request store on first use; every later call, from any copy of the module, keeps it. */
+export function shareRequestScopeStore(create: () => RequestStore): void {
+  if (!slots[STORE_SLOT]) slots[STORE_SLOT] = create();
+}
+
 let current: RequestScope | undefined;
 const slotStrategy: RequestScopeStrategy = {
-  get: () => current,
+  get: () => slots[STORE_SLOT]?.getStore() ?? current,
   run(scope, fn) {
+    const store = slots[STORE_SLOT];
+    if (store) return store.run(scope, fn);
     const previous = current;
     current = scope;
     try {

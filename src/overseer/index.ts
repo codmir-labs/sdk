@@ -251,7 +251,11 @@ function signalAccepted(signal: AbortSignal): boolean {
   }
 }
 
+/** What marks a value in the registry slot as one of this SDK's clients. A symbol, so a copy of the SDK recognises another's. */
+const CLIENT_MARKER = Symbol.for("codmir.overseer.client.marker");
+
 class OverseerClient {
+  readonly [CLIENT_MARKER] = true;
   private lastError: { id: string; at: number } | null = null;
   private config: ResolvedConfig;
   private replayHook: ReplayHook | null = null;
@@ -1104,81 +1108,97 @@ let client: OverseerClient | null = null;
 /** Where `init()` leaves the client for another copy of this module: `getClient()` of a sibling entry. */
 const CLIENT_SLOT = Symbol.for("codmir.overseer.client");
 
+const slots = globalThis as Record<symbol, unknown>;
+
+/** The slot's value when it is one of this SDK's clients, else null: a foreign value there is no client. */
+function slotClient(): OverseerClient | null {
+  const value = slots[CLIENT_SLOT] as Partial<OverseerClient> | null | undefined;
+  if (typeof value !== "object" || value === null) return null;
+  if (typeof value.captureException !== "function" || (value as Record<symbol, unknown>)[CLIENT_MARKER] !== true) return null;
+  return value as OverseerClient;
+}
+
 export function init(config: OverseerConfig = {}): void {
   // The client being replaced stops here: its timers, retries, listeners and runtime patches.
   client?.close();
   client = new OverseerClient(config);
   client.init();
   // The slot lets `@codmir/sdk/feedback` and `@codmir/sdk/logs` find the client without importing this module.
-  (globalThis as Record<symbol, unknown>)[CLIENT_SLOT] = client;
+  slots[CLIENT_SLOT] = client;
 }
 
+/**
+ * This copy's own client, else the one another copy of the module left in the slot. A bundler may load the SDK once
+ * per server layer (Next.js: instrumentation, each route), and only the copy that ran `init` has a client of its own.
+ */
 export function getClient(): OverseerClient | null {
-  return client;
+  return client ?? slotClient();
 }
 
 export function captureException(error: Error | unknown, context?: Record<string, unknown>): string {
-  return client?.captureFrom(error, context, captureException) || "";
+  return getClient()?.captureFrom(error, context, captureException) || "";
 }
 
 export function captureMessage(message: string, level?: SeverityLevel): string {
-  return client?.captureMessage(message, level) || "";
+  return getClient()?.captureMessage(message, level) || "";
 }
 
 export function setUser(user: UserContext | null): void {
-  client?.setUser(user);
+  getClient()?.setUser(user);
 }
 
 export function setTag(key: string, value: string): void {
-  client?.setTag(key, value);
+  getClient()?.setTag(key, value);
 }
 
 export function setTags(tags: Record<string, string>): void {
-  client?.setTags(tags);
+  getClient()?.setTags(tags);
 }
 
 export function addBreadcrumb(breadcrumb: Breadcrumb): void {
-  client?.addBreadcrumb(breadcrumb);
+  getClient()?.addBreadcrumb(breadcrumb);
 }
 
 export function flush(timeout?: number): Promise<boolean> {
-  return client?.flush(timeout) || Promise.resolve(true);
+  return getClient()?.flush(timeout) || Promise.resolve(true);
 }
 
+/** Closes this copy's own client and empties the slot when it holds that client; another copy's client is left alone. */
 export function close(): void {
   client?.close();
+  if (client && slots[CLIENT_SLOT] === client) delete slots[CLIENT_SLOT];
 }
 
 export function setConversationId(conversationId: string | null): void {
-  client?.setConversationId(conversationId);
+  getClient()?.setConversationId(conversationId);
 }
 
 export function getConversationId(): string | null {
-  return client?.getConversationId() || null;
+  return getClient()?.getConversationId() || null;
 }
 
 export function setSessionId(sessionId: string | null): void {
-  client?.setSessionId(sessionId);
+  getClient()?.setSessionId(sessionId);
 }
 
 export function getSessionId(): string | null {
-  return client?.getSessionId() || null;
+  return getClient()?.getSessionId() || null;
 }
 
 export function getDsn(): string {
-  return client?.getDsn() || "";
+  return getClient()?.getDsn() || "";
 }
 
 export function getEnvironment(): string {
-  return client?.getEnvironment() || "development";
+  return getClient()?.getEnvironment() || "development";
 }
 
 export function getClientKey(): string {
-  return client?.getClientKey() || "";
+  return getClient()?.getClientKey() || "";
 }
 
 export function getOverseerKey(): string {
-  return client?.getOverseerKey() || "";
+  return getClient()?.getOverseerKey() || "";
 }
 
 export { OverseerClient };

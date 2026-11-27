@@ -48,10 +48,17 @@ function stackStrategy(): ContextStrategy {
   };
 }
 
-let strategy: ContextStrategy = stackStrategy();
+/**
+ * The strategy is one per process, in a `Symbol.for` slot: a bundler may load this module more than once (Next.js:
+ * instrumentation and each route), and a span made active by one copy must be the active span of the others.
+ */
+const STRATEGY_SLOT = Symbol.for("codmir.tracing.strategy");
+const slots = globalThis as Record<symbol, ContextStrategy | undefined>;
+const ownDefault: ContextStrategy = stackStrategy();
+const strategy = (): ContextStrategy => slots[STRATEGY_SLOT] ?? ownDefault;
 
 export function setContextStrategy(next: ContextStrategy): void {
-  strategy = next;
+  slots[STRATEGY_SLOT] = next;
 }
 
 /**
@@ -60,7 +67,7 @@ export function setContextStrategy(next: ContextStrategy): void {
  * (AsyncLocalStorage on Node).
  */
 export function releaseTrace(root: Span): Span[] {
-  return strategy.release?.(root.traceId) ?? [];
+  return strategy().release?.(root.traceId) ?? [];
 }
 
 /** A root that stays active until cleared, for the browser's pageload and navigation transactions. */
@@ -72,12 +79,12 @@ export function setStandingRoot(span: Span | undefined): void {
 
 /** The span in scope, else the standing root, so work started outside any `startSpan` still nests under the page. */
 export function getActiveSpan(): Span | undefined {
-  return strategy.get() ?? standingRoot;
+  return strategy().get() ?? standingRoot;
 }
 
 /** Runs `fn` with `span` as the active span, without ending it. */
 export function withActiveSpan<T>(span: Span, fn: () => T): T {
-  return strategy.run(span, fn);
+  return strategy().run(span, fn);
 }
 
 export function isThenable(value: unknown): value is PromiseLike<unknown> {

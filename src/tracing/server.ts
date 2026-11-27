@@ -9,11 +9,12 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomFillSync } from "node:crypto";
 import { setRandomFill } from "./propagation";
 import { setContextStrategy, withActiveSpan } from "./context";
-import { requestScopeFrom, setRequestScopeStrategy, withRequestScope, type RequestScope } from "../overseer/request-scope";
+import { requestScopeFrom, shareRequestScopeStore, withRequestScope, type RequestScope } from "../overseer/request-scope";
 import { startTransaction } from "./index";
 import type { Span, Transaction } from "./span";
 
 let als: AsyncLocalStorage<Span> | undefined;
+const STORE_SLOT = Symbol.for("codmir.tracing.store");
 
 /**
  * The one place a Node async context strategy is installed: Express, Next.js, Hono and Remix all call
@@ -23,12 +24,13 @@ let als: AsyncLocalStorage<Span> | undefined;
 export function installNodeTracingContext(): void {
   if (als) return;
   setRandomFill((buf) => void randomFillSync(buf));
-  const store = new AsyncLocalStorage<Span>();
+  // One store per process, in a slot, so a copy of this module that comes second (Next.js bundles one per layer) shares it.
+  const slots = globalThis as Record<symbol, AsyncLocalStorage<Span> | undefined>;
+  const store = slots[STORE_SLOT] ?? (slots[STORE_SLOT] = new AsyncLocalStorage<Span>());
   als = store;
   setContextStrategy({ get: () => store.getStore(), run: (span, fn) => store.run(span, fn) });
   // The request an error is captured under rides the same install, so it is per async flow too.
-  const requests = new AsyncLocalStorage<RequestScope>();
-  setRequestScopeStrategy({ get: () => requests.getStore(), run: (scope, fn) => requests.run(scope, fn) });
+  shareRequestScopeStore(() => new AsyncLocalStorage<RequestScope>());
 }
 
 export interface ServerRequestInfo {
