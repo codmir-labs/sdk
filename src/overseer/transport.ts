@@ -6,6 +6,7 @@
  * so every error is converted here before it leaves the process. Other event types are sent as they are.
  */
 
+import { messageKey, pathPattern } from "../logs/redact";
 import { normalizeFrameFile } from "./frame-file";
 
 /** Public ingest base. Never derived from `window.location`: that is the customer's own origin. */
@@ -148,6 +149,21 @@ function frameKey(frame: FrameLike): string {
 
 const KEY_FRAMES = 3;
 
+const URL_IN_TEXT = /\bhttps?:\/\/[^\s'"`<>)\]]+/gi;
+
+/**
+ * The message part of a key with no frame. The log monitor's `messageKey` folds quoted values, dates, times, durations,
+ * short hex, numbers and emails (its redaction); a URL in the text is first cut to its path as `pathPattern` writes it.
+ * Then today's masks (UUID, hex runs, digits), cut to 100.
+ */
+function foldMessage(message: string): string {
+  return messageKey(message.replace(URL_IN_TEXT, (url) => pathPattern(url)))
+    .replace(/\b[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b/gi, "<UUID>")
+    .replace(/(?=[0-9a-f]*[a-f])[0-9a-f]{8,}/gi, "<ID>")
+    .replace(/\d+/g, "<N>")
+    .slice(0, 100);
+}
+
 /**
  * Group fingerprint, v2: where the error is, not what it says.
  *
@@ -159,8 +175,10 @@ const KEY_FRAMES = 3;
  *   when source context gives one, else its line number. Fewer than 3 in-app frames means fewer parts.
  * - No line number and no message is in the key of an error that has a frame, so an edit above the throw, another
  *   engine's wording or a user's text never starts a new group.
- * - With no in-app frame the message is the second part, masked as before: UUIDs masked to `<UUID>`, runs of 8+ hex
- *   characters holding at least one letter a-f masked to `<ID>` and digits masked to `<N>` (in that order), cut to 100.
+ * - With no in-app frame (a frameless error, or a message event) the message is the second part, folded: a URL in it is
+ *   cut to its path (`pathPattern`), then the log monitor's `messageKey` rules apply (emails, quoted values, dates,
+ *   times, durations, short hex, numbers), then UUIDs are masked to `<UUID>`, runs of 8+ hex characters holding at
+ *   least one letter a-f to `<ID>` and digits to `<N>` (in that order), cut to 100 characters.
  * - Root type: when `causes` is not empty, the last part is the type of the deepest entry reached by following
  *   `source: "cause"` links from the top. If the top has no `cause`, the type of `causes[0]`.
  */
@@ -176,13 +194,7 @@ export function sdkFingerprint(event: WireSourceEvent): string[] {
   if (frames.length) {
     for (const f of frames.slice(0, KEY_FRAMES)) parts.push(frameKey(f));
   } else {
-    parts.push(
-      (exception?.value ?? event.message ?? "")
-        .replace(/\b[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b/gi, "<UUID>")
-        .replace(/(?=[0-9a-f]*[a-f])[0-9a-f]{8,}/gi, "<ID>")
-        .replace(/\d+/g, "<N>")
-        .slice(0, 100),
-    );
+    parts.push(foldMessage(exception?.value ?? event.message ?? ""));
   }
 
   if (causes) {

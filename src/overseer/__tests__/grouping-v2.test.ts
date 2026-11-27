@@ -117,6 +117,26 @@ describe("F1: an edit above the throw keeps the group", () => {
   });
 });
 
+/** The review's pairs of one message with different user text. */
+const USER_TEXT: Record<string, [string, string]> = {
+  email: ["User alice@example.com already registered", "User bob@example.org already registered"],
+  url_path_slug: ["Failed to load https://api.example.com/v1/users/alice/settings", "Failed to load https://api.example.com/v1/users/bob/settings"],
+  zod_enum: ["Invalid enum value. Expected 'active' | 'paused', received 'archived'", "Invalid enum value. Expected 'active' | 'paused', received 'draft'"],
+  json_snippet: [`Unexpected token 'N', "Not Found" is not valid JSON`, `Unexpected token 'I', "Internal S"... is not valid JSON`],
+  quoted_input: [`Product "Blue Shirt" is out of stock`, `Product "Red Hat" is out of stock`],
+  cuid: ["Order clx9g2x0e0000ldw7qzk3yv8m not found", "Order cly1h4k2p0003mnb8rta5wq2z not found"],
+  nanoid: ["Session V1StGXR8_Z5jdHi6B-myT expired", "Session Uakgb_J5m9g-0JDMbcJqLJ expired"],
+  prefixed_id: ["No such customer: 'cus_NffrFeUfNV2Hib'", "No such customer: 'cus_OaaPqLmZx9Wtrk'"],
+  base36: ["Ticket i2qfs446pix7 is locked", "Ticket k9zzt0q1mbr3 is locked"],
+  git_sha7: ["Deploy a1b2c3d failed", "Deploy e4f5a6b failed"],
+  jwt: ["Invalid token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1MSJ9.sig1", "Invalid token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1MiJ9.sig2"],
+  iso_time: ["Expired at 2026-11-26T20:15:00.123Z", "Expired at 2026-12-01T08:00:59.999Z"],
+  date_string: ["Expired at Thu Nov 26 2026 20:15:00 GMT+0000 (Coordinated Universal Time)", "Expired at Fri Dec 04 2026 09:00:00 GMT+0100 (Central European Standard Time)"],
+  ipv6: ["connect ECONNREFUSED fe80::1ff:fe23:4567:890a", "connect ECONNREFUSED fd12:3456:789a::1"],
+  path_user: ["ENOENT: no such file or directory, open '/srv/app/uploads/user-alice/avatar.png'", "ENOENT: no such file or directory, open '/srv/app/uploads/user-bob/avatar.png'"],
+  vite_chunk: ["Failed to fetch dynamically imported module: https://shop.example.com/assets/Cart-BxKz3_qA.js", "Failed to fetch dynamically imported module: https://shop.example.com/assets/Cart-Dk9wPz0L.js"],
+};
+
 describe("F2: the message is not in the key when a frame is", () => {
   const at = "    at addToCart (/srv/app/src/cart.js:10:5)";
 
@@ -132,26 +152,8 @@ describe("F2: the message is not in the key when a frame is", () => {
     expect(hermes).toEqual(chrome);
   });
 
-  const PAIRS: Record<string, [string, string]> = {
-    email: ["User alice@example.com already registered", "User bob@example.org already registered"],
-    url_path_slug: ["Failed to load https://api.example.com/v1/users/alice/settings", "Failed to load https://api.example.com/v1/users/bob/settings"],
-    zod_enum: ["Invalid enum value. Expected 'active' | 'paused', received 'archived'", "Invalid enum value. Expected 'active' | 'paused', received 'draft'"],
-    json_snippet: [`Unexpected token 'N', "Not Found" is not valid JSON`, `Unexpected token 'I', "Internal S"... is not valid JSON`],
-    quoted_input: [`Product "Blue Shirt" is out of stock`, `Product "Red Hat" is out of stock`],
-    cuid: ["Order clx9g2x0e0000ldw7qzk3yv8m not found", "Order cly1h4k2p0003mnb8rta5wq2z not found"],
-    nanoid: ["Session V1StGXR8_Z5jdHi6B-myT expired", "Session Uakgb_J5m9g-0JDMbcJqLJ expired"],
-    prefixed_id: ["No such customer: 'cus_NffrFeUfNV2Hib'", "No such customer: 'cus_OaaPqLmZx9Wtrk'"],
-    base36: ["Ticket i2qfs446pix7 is locked", "Ticket k9zzt0q1mbr3 is locked"],
-    git_sha7: ["Deploy a1b2c3d failed", "Deploy e4f5a6b failed"],
-    jwt: ["Invalid token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1MSJ9.sig1", "Invalid token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1MiJ9.sig2"],
-    iso_time: ["Expired at 2026-11-26T20:15:00.123Z", "Expired at 2026-12-01T08:00:59.999Z"],
-    date_string: ["Expired at Thu Nov 26 2026 20:15:00 GMT+0000 (Coordinated Universal Time)", "Expired at Fri Dec 04 2026 09:00:00 GMT+0100 (Central European Standard Time)"],
-    ipv6: ["connect ECONNREFUSED fe80::1ff:fe23:4567:890a", "connect ECONNREFUSED fd12:3456:789a::1"],
-    path_user: ["ENOENT: no such file or directory, open '/srv/app/uploads/user-alice/avatar.png'", "ENOENT: no such file or directory, open '/srv/app/uploads/user-bob/avatar.png'"],
-    vite_chunk: ["Failed to fetch dynamically imported module: https://shop.example.com/assets/Cart-BxKz3_qA.js", "Failed to fetch dynamically imported module: https://shop.example.com/assets/Cart-Dk9wPz0L.js"],
-  };
 
-  it.each(Object.entries(PAIRS))("user text (%s) on one frame is one fingerprint", (_name, [a, b]) => {
+  it.each(Object.entries(USER_TEXT))("user text (%s) on one frame is one fingerprint", (_name, [a, b]) => {
     expect(fpOf("Error", a, `Error: x\n${at}`)).toEqual(fpOf("Error", b, `Error: x\n${at}`));
   });
 
@@ -212,5 +214,49 @@ describe("F6: where the code was served or installed is not in the key", () => {
   it("the frames that are sent keep their file as it is", () => {
     const wire = captured(fail("Error", "x", "Error: x\n    at render (https://acme.shop.example.com/static/js/main.3f2a9c1e.js:1:5)")).event as unknown as { exception: { stacktrace: Array<{ filename: string }> } };
     expect(wire.exception.stacktrace[0]!.filename).toBe("https://acme.shop.example.com/static/js/main.3f2a9c1e.js");
+  });
+});
+
+describe("frameless: the folded message is the key", () => {
+  const frameless = (message: string, type = "Error") => captured(fail(type, message, `${type}: x`)).group.fingerprint;
+  const messageEvent = (message: string) => sdkFingerprint({ id: "m", type: "message", timestamp: "t", level: "error", message });
+
+  it("an error with no frame and a message event keep their message in the key", () => {
+    expect(frameless("Payment provider is down")).toEqual(["Error", "Payment provider is down"]);
+    expect(messageEvent("Payment provider is down")).toEqual(["Error", "Payment provider is down"]);
+    expect(frameless("Payment provider is down")).not.toEqual(frameless("Inventory is down"));
+    expect(messageEvent("Payment provider is down")).not.toEqual(messageEvent("Inventory is down"));
+  });
+
+  it("emails, quoted values, dates, durations, short hex, URL paths and numbers are folded", () => {
+    const same = (a: string, b: string) => {
+      expect(frameless(a)).toEqual(frameless(b));
+      expect(messageEvent(a)).toEqual(messageEvent(b));
+    };
+    same("User alice@example.com already registered", "User bob@example.org already registered");
+    same(`Product "Blue Shirt" is out of stock`, `Product "Red Hat" is out of stock`);
+    same("Invalid enum value, received 'archived'", "Invalid enum value, received 'draft'");
+    same("Expired at 2026-11-26T20:15:00.123Z", "Expired at 2026-12-01T08:00:59.999Z");
+    same("Timed out after 250ms", "Timed out after 1.5s");
+    same("Deploy a1b2c3d failed", "Deploy e4f5a6b failed");
+    same("Job 3f2a9c1e8b7d4e6fa5b4c3d2e1f0a9b8 failed", "Job 0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d failed");
+    same("Order 1001 not found", "Order 2002 not found");
+    same("Failed to load https://acme.example.com/v1/orders/1001?token=abc", "Failed to load https://globex.example.net/v1/orders/2002?token=def");
+  });
+
+  it("the key is cut to 100 characters", () => {
+    expect(frameless("connection lost ".repeat(40))[1]).toHaveLength(100);
+  });
+
+  it("a frameless error with causes still ends with the root cause's type", () => {
+    const wrapped = (root: string) => {
+      const e = fail("Error", "could not load the cart", "Error: x");
+      return sdkFingerprint({
+        id: "e", type: "error", timestamp: "t", level: "error",
+        exception: { type: "Error", value: e.message, causes: [{ type: root, value: "boom", source: "cause", parent: -1 }] },
+      });
+    };
+    expect(wrapped("TypeError")).toEqual(["Error", "could not load the cart", "TypeError"]);
+    expect(wrapped("RangeError")).toEqual(["Error", "could not load the cart", "RangeError"]);
   });
 });

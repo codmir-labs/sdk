@@ -167,9 +167,8 @@ describe("wire shape (criterion 1)", () => {
     // deadbeef12 is one run of 10 hex characters, so it masks to <ID> before digits are masked.
     expect(fp[2].startsWith("user <ID> got <N> zzz")).toBe(true);
     expect(fp[2]).toHaveLength(100);
-    const frameless = sdkFingerprint({ ...base, exception: { type: "Error", value } });
-    expect(frameless[1].startsWith("user <ID> got <N> zzz")).toBe(true);
-    expect(frameless[1]).toHaveLength(100);
+    // With no frame the message is folded (see grouping-v2.test.ts): the hex run and the number are masked.
+    expect(sdkFingerprint({ ...base, exception: { type: "Error", value: "user deadbeef12 got 404" } })).toEqual(["Error", "user [hex] got #"]);
     // 1001 and 2002 differ only in digits: same group.
     const a = sdkFingerprint({ ...base, exception: { type: "E", value: "order 1001 not found" } });
     const b = sdkFingerprint({ ...base, exception: { type: "E", value: "order 2002 not found" } });
