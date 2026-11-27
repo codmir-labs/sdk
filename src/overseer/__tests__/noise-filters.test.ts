@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as browser from "../../browser/index";
-import { addBreadcrumb, captureException, captureMessage, close, flush, init, type OverseerConfig } from "../index";
+import { addBreadcrumb, captureException, captureMessage, close, flush, getClient, init, type OverseerConfig } from "../index";
 import { withHint, crash } from "../capture-hint";
 import { withRequestScope } from "../request-scope";
 
@@ -109,6 +109,33 @@ describe("ignoreErrors", () => {
     captureException(new Error("Cart is empty"));
     expect((await sent()).map((e) => e.exception?.value)).toEqual(["Cart is empty"]);
     expect(dropped).toHaveLength(2);
+  });
+
+  it("a global RegExp drops two matching events in a row", async () => {
+    start({ ignoreErrors: [/cart/gi] });
+    // A message event has one text, so a stale lastIndex from the first would make the second miss.
+    captureMessage("Cart is empty");
+    captureMessage("Cart is empty");
+    captureException(new Error("Cart total is wrong"));
+    captureException(new Error("Cart total is wrong"));
+    captureMessage("deploy finished");
+    expect((await sent()).map((e) => e.message)).toEqual(["deploy finished"]);
+    expect(dropped.map((d) => d.reason)).toEqual(["filtered", "filtered", "filtered", "filtered"]);
+  });
+
+  it("filters an error event and a message event sent with captureEvent", async () => {
+    start({ ignoreErrors: ["noise"] });
+    const client = getClient()!;
+    const at = new Date().toISOString();
+    const errorId = client.captureEvent({ id: "evt-error", type: "error", timestamp: at, level: "error", exception: { type: "Error", value: "some noise here" } } as never);
+    const messageId = client.captureEvent({ id: "evt-message", type: "message", timestamp: at, level: "info", message: "more noise" });
+    expect([errorId, messageId]).toEqual(["evt-error", "evt-message"]);
+    expect(dropped).toEqual([
+      { events: 1, status: 0, reason: "filtered", eventIds: ["evt-error"] },
+      { events: 1, status: 0, reason: "filtered", eventIds: ["evt-message"] },
+    ]);
+    expect(await sent()).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("matches `<type>: <message>` as well as the bare message", async () => {
@@ -258,6 +285,18 @@ describe("maxBreadcrumbs", () => {
     crumbs(5);
     captureException(new Error("x"));
     expect((await sent())[0]!.breadcrumbs ?? []).toEqual([]);
+  });
+
+  it("keeps up to maxBreadcrumbs in a request's list, above 20", async () => {
+    start({ maxBreadcrumbs: 50 });
+    withRequestScope({ url: "https://app.example.com/x", method: "GET" }, () => {
+      for (let i = 1; i <= 30; i++) addBreadcrumb({ message: `request ${i}` });
+      captureException(new Error("in request"));
+    });
+    const crumbs = (await sent())[0]!.breadcrumbs!.map((b) => b.message);
+    expect(crumbs).toHaveLength(30);
+    expect(crumbs[0]).toBe("request 1");
+    expect(crumbs[29]).toBe("request 30");
   });
 
   it("limits a request's list and the combined list alike", async () => {

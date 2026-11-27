@@ -150,9 +150,9 @@ export interface OverseerConfig {
   maxBreadcrumbs?: number;
   /**
    * Called with every breadcrumb before it is kept, automatic or added by `addBreadcrumb`, with the `hint` that
-   * `addBreadcrumb` was given. Return the breadcrumb (changed, if you like), or `null` to drop it. A throw, or a result
-   * that is not a breadcrumb object, drops the breadcrumb and never reaches your app, as with `beforeSend`; `debug`
-   * logs it. It is synchronous: a Promise is not a breadcrumb.
+   * `addBreadcrumb` was given. Return the breadcrumb (changed, if you like), or `null`, or nothing, to drop it. A throw, or a
+   * result that is not a breadcrumb object, drops the breadcrumb and never reaches your app, as with `beforeSend`;
+   * `debug` logs it. It is synchronous: a Promise is not a breadcrumb.
    */
   beforeBreadcrumb?: (breadcrumb: Breadcrumb, hint?: Record<string, unknown>) => Breadcrumb | null;
   /**
