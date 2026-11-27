@@ -23,6 +23,11 @@ export interface WithCodmirTracingOptions {
    * to group by route; without it the transaction is named after the URL path, one per distinct id.
    */
   route?: string;
+  /**
+   * Send the transaction before the handler's response is returned. Default: on for a serverless runtime (Vercel,
+   * AWS Lambda, Netlify, Cloud Run, or a request that has Next's `waitUntil`), off on a long-running server.
+   */
+  flushOnEnd?: boolean;
 }
 
 function describe(request: Request, options?: WithCodmirTracingOptions) {
@@ -31,6 +36,7 @@ function describe(request: Request, options?: WithCodmirTracingOptions) {
     route: options?.route ?? pathOf(request.url),
     traceparent: request.headers.get("traceparent"),
     url: request.url,
+    flushOnEnd: options?.flushOnEnd,
   };
 }
 

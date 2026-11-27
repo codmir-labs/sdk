@@ -37,6 +37,7 @@ import { withHint, crash, eventFrame } from "../overseer/capture-hint";
 import { trackNavigation } from "../overseer/navigation";
 import { scrubUrl } from "../overseer/url-scrub";
 import { requestScopeFrom, withRequestScope } from "../overseer/request-scope";
+import { flushInBackground } from "../overseer/flush-in-background";
 
 // =============================================================================
 // Types
@@ -135,7 +136,8 @@ export function close(): void {
 // =============================================================================
 
 /**
- * Capture a server-side request error (App Router)
+ * Capture a server-side request error (App Router). The event is only queued: `await flushRequestError()` before the
+ * response on a serverless platform, or the function may be frozen first.
  */
 export function captureRequestError(
   error: RequestError,
@@ -155,9 +157,15 @@ export function captureRequestError(
   return request ? withRequestScope(requestScopeFrom({ url: request.url, method: request.method }), capture) : capture();
 }
 
+/** Sends what `captureRequestError` queued: awaited, or handed to Next's `waitUntil` when the request has one. */
+export const flushRequestError = (): Promise<void> => flushInBackground(2000);
+
 /**
  * Handler for Next.js App Router errors
  * Use in instrumentation.ts: export const onRequestError = captureRouterError
+ *
+ * Next awaits it and a serverless function is frozen right after, so the event is sent before it returns (2 s at most),
+ * or handed to Next's `waitUntil` when the request has one.
  */
 export async function captureRouterError(
   error: RequestError,
@@ -184,6 +192,7 @@ export async function captureRouterError(
       ),
     ),
   );
+  await flushInBackground(2000);
 }
 
 /**

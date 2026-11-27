@@ -10,8 +10,11 @@ import { randomFillSync } from "node:crypto";
 import { setRandomFill } from "./propagation";
 import { setContextStrategy, withActiveSpan } from "./context";
 import { requestScopeFrom, shareRequestScopeStore, withRequestScope, type RequestScope } from "../overseer/request-scope";
+import { flushInBackground, isServerlessRuntime } from "../overseer/flush-in-background";
 import { startTransaction } from "./index";
 import type { Span, Transaction } from "./span";
+
+export { flushInBackground } from "../overseer/flush-in-background";
 
 let als: AsyncLocalStorage<Span> | undefined;
 const STORE_SLOT = Symbol.for("codmir.tracing.store");
@@ -41,6 +44,12 @@ export interface ServerRequestInfo {
   traceparent?: string | null;
   /** The request URL: errors captured while `fn` runs carry its origin and path, never its query. */
   url?: string | null;
+  /**
+   * Send the transaction before the request's promise settles. Default: on a serverless runtime only (`VERCEL`,
+   * `AWS_LAMBDA_FUNCTION_NAME`, `NETLIFY`, `K_SERVICE`, or a Next.js request with `waitUntil`); a long-running server
+   * does not flush per request.
+   */
+  flushOnEnd?: boolean;
 }
 
 /** Anything with a numeric `status`: a fetch `Response`, a Hono/Next response. */
@@ -95,6 +104,10 @@ export async function traceServerRequest<T>(
   const scope = info.url ? requestScopeFrom({ url: info.url, method }) : undefined;
   const inScope = <R>(f: () => R): R => (scope ? withRequestScope(scope, f) : f());
 
+  const flushAfter = async (): Promise<void> => {
+    if (info.flushOnEnd ?? isServerlessRuntime()) await flushInBackground(2000);
+  };
+
   let result: T;
   try {
     result = await inScope(() => withActiveSpan(tx, () => fn(tx)));
@@ -108,11 +121,13 @@ export async function traceServerRequest<T>(
         tx.end();
       }
     });
+    await flushAfter();
     throw err;
   }
   inScope(() => {
     rename();
     finishWithStatus(tx, statusOf(result));
   });
+  await flushAfter();
   return result;
 }

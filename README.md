@@ -552,7 +552,7 @@ export const middleware = withCodmirMiddleware(() => NextResponse.next());
 To capture an error you handled yourself, with the request it belongs to:
 
 ```ts
-import { captureRequestError } from '@codmir/sdk/nextjs';
+import { captureRequestError, flushRequestError } from '@codmir/sdk/nextjs';
 
 export async function POST(request: Request) {
   try {
@@ -560,10 +560,18 @@ export async function POST(request: Request) {
     return Response.json({ received: order !== null });
   } catch (err) {
     captureRequestError(err as Error, { routePath: '/api/orders', routeType: 'route' }, request);
+    await flushRequestError(); // on a serverless platform, send it before answering
     return Response.json({ error: 'internal error' }, { status: 500 });
   }
 }
 ```
+
+`captureRequestError` only queues the event. `flushRequestError()` sends it (2 seconds at most): it hands the send to
+Next's `waitUntil` when the request has one, and otherwise you await it, so the function is not frozen first.
+`onRequestError` (`captureRouterError`) does this itself, because Next awaits it. On a serverless runtime (`VERCEL`,
+`AWS_LAMBDA_FUNCTION_NAME`, `NETLIFY`, `K_SERVICE`, or a request with Next's `waitUntil`), `withCodmirTracing` and
+`withCodmirMiddleware` also send the transaction before they return; pass `flushOnEnd: false` to turn that off, or
+`flushOnEnd: true` to turn it on elsewhere. A long-running Node server does not flush per request.
 
 <details>
 <summary><b>What <code>@codmir/sdk/nextjs</code> does in the browser</b></summary>
@@ -667,7 +675,9 @@ export default app;
 
 `codmirTracing()` names each transaction after the matched route (`GET /users/:id`), continues an incoming
 `traceparent`, and marks the transaction `error` on a 5xx or a thrown handler. It needs `node:async_hooks`; `hono` is an
-optional peer dependency.
+optional peer dependency. When a handler throws and the runtime gives the request an execution context (Cloudflare
+Workers), the queued error and the transaction are handed to `c.executionCtx.waitUntil` (2 seconds at most) so the
+isolate stays alive until they are sent; a request without an error, and Node, are unchanged.
 
 ### Remix
 
@@ -2086,7 +2096,8 @@ Nothing is written to disk.
 <summary><b>Does it work in serverless functions?</b></summary>
 
 Yes, with one rule: `await flush(2000)` before the function returns, because events are sent up to one second after the first
-unsent capture and a frozen function never gets that second.
+unsent capture and a frozen function never gets that second. Next.js `onRequestError`, the Next.js route wrappers
+(`flushOnEnd` overrides the serverless detection) and a failing Hono request on Workers do this for you.
 
 </details>
 
