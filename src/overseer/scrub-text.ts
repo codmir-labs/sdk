@@ -64,6 +64,9 @@ export function scrubEvent(event: OverseerEvent): OverseerEvent {
   if (event.exception) {
     out.exception = { ...event.exception };
     if (typeof event.exception.value === "string") out.exception.value = redactSecrets(event.exception.value);
+    if (Array.isArray(event.exception.causes)) {
+      out.exception.causes = event.exception.causes.map((c) => (typeof c?.value === "string" ? { ...c, value: redactSecrets(c.value) } : c));
+    }
   }
   if (event.tags) out.tags = scrubTags(event.tags);
   if (event.extra) out.extra = record(event.extra);

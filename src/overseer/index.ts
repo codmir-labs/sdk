@@ -34,6 +34,7 @@ import { normalizeThrown, syntheticStack, type Caller } from "./thrown-value";
 import { browserRequest, envContexts } from "./runtime-context";
 import { addSourceContext } from "./source-context";
 import { parseStackTrace } from "./stack";
+import { collectCauses } from "./causes";
 import { installProcessErrors } from "./process-errors";
 import { userForWire } from "./user-pii";
 import {
@@ -172,6 +173,22 @@ export interface ExceptionData {
   value: string;
   stacktrace?: StackFrame[];
   mechanism?: { type: string; handled: boolean };
+  /**
+   * The errors behind this one, breadth first over `cause` and `AggregateError.errors`, at most 10 and 5 deep. Absent
+   * when there is nothing to walk.
+   */
+  causes?: ExceptionCause[];
+}
+
+export interface ExceptionCause {
+  type: string;
+  value: string;
+  /** At most 30 frames, never with source context. */
+  stacktrace?: StackFrame[];
+  /** `"cause"` or `"errors[i]"`. */
+  source: string;
+  /** Index in `causes` of the error this one hangs from, or -1 for the top exception. */
+  parent: number;
 }
 
 export interface StackFrame {
@@ -408,6 +425,8 @@ class OverseerClient {
     // Kept in this function (not in a helper): the stack of an error made up for the value starts at the app's call.
     const stack = err.stack ?? syntheticStack(err.name, err.message, caller, hint?.frames);
 
+    const causes = collectCauses(error);
+
     const event: OverseerEvent = {
       id: eventId,
       type: "error",
@@ -419,6 +438,7 @@ class OverseerClient {
         value: err.message,
         stacktrace: this.stackFor(stack),
         mechanism: hint?.mechanism ?? { type: "generic", handled: true },
+        ...(causes ? { causes } : {}),
       },
       user: this.userOf() || undefined,
       tags: this.tagsOf(),

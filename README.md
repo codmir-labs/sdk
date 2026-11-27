@@ -374,7 +374,12 @@ captureException(err, { orderId: 'ord_123', password: 'hunter2', req: { headers:
    SDK's own files. A script URL in a frame (`https://`, `blob:`, `webpack-internal:`) keeps its origin and path only,
    never the query or fragment, so a token or a `?v=` cache-buster never reaches the culprit or the fingerprint. In
    Node, the first three in-app frames whose file can be read also get `pre_context`, `context_line` and
-   `post_context` (5 lines each side).
+   `post_context` (5 lines each side). The errors behind it go in `exception.causes`: each entry is
+   `{ type, value, stacktrace?, source, parent }`, where `source` is `"cause"` or `"errors[i]"` (an `AggregateError`'s inner
+   errors, so a `Promise.any` failure sends why each promise failed; `errors` is read from an `AggregateError` only, never from another error that keeps a list there) and `parent` is the index of the entry it hangs from
+   (`-1` for the top error). The walk is breadth first, cycle-safe, at most 5 deep, 10 inner errors per `AggregateError` and
+   10 entries in all; each entry has at most 30 frames and no source lines, and its message is scrubbed like the top one's.
+   An error with nothing to walk has no `causes`. An error with no frame of its own takes its culprit from the first entry of `causes` that has one.
 3. **Cleaning.** `sanitizeExtra` drops `password` and `req` from the context, and `addBreadcrumb` already dropped
    `authToken` from the breadcrumb.
 4. **Context.** The user, tags, breadcrumbs, environment, release, SDK name and version and the runtime contexts are
@@ -445,7 +450,10 @@ x-overseer-key: osk_example
 6. **Grouping.** The fingerprint is the error type, the `file:line` of the first in-app frame, and the message with
    UUIDs masked as `<UUID>`, then runs of 8 or more hex characters with at least one letter as `<ID>`, then digits as `<N>`, cut to 100
    characters. Two declined cards
-   with different numbers group together. Set `event.fingerprint` in `beforeSend` to group your own way.
+   with different numbers group together. When the error has `causes`, the frame and message come from the top error if it
+   has an in-app frame, else from the first cause that has one, and a fourth part is added: the type of the root cause (the
+   deepest `cause` link). Wrapped errors thrown at one line therefore group once by their root cause, and every
+   `Promise.any` failure by where its first inner error came from. Set `event.fingerprint` in `beforeSend` to group your own way.
 7. **Delivery.** A 2xx ends it. A network error, a 5xx, 408 or 429 puts the batch back and retries after 1 s, 2 s,
    4 s ... up to 60 s, honouring `Retry-After`. Any other 4xx drops the batch, because sending it again cannot help.
 
@@ -2136,7 +2144,9 @@ Source lines are read for the first three in-app frames with an absolute path or
 <details>
 <summary><b>Errors group too much or too little</b></summary>
 
-The fingerprint is the error type, the first in-app frame's `file:line` and the message with digits masked. Set
+The fingerprint is the error type, the first in-app frame's `file:line` and the message with digits masked; for an error
+with a `cause` or `AggregateError.errors` it also ends with the root cause's type, and takes the frame and message from the
+first cause that has an in-app frame when the error itself has none. Set
 `event.fingerprint` in `beforeSend` to choose your own grouping; it wins over the computed one.
 
 </details>

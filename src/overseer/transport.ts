@@ -48,24 +48,46 @@ export interface WireSourceEvent {
   timestamp: string;
   level: string;
   message?: string;
-  exception?: { type: string; value: string; stacktrace?: FrameLike[] };
+  exception?: {
+    type: string;
+    value: string;
+    stacktrace?: FrameLike[];
+    causes?: Array<{ type: string; value: string; stacktrace?: FrameLike[]; source: string; parent: number }>;
+  };
   fingerprint?: string[];
 }
 
+const inAppOf = (frames?: FrameLike[]): FrameLike | undefined => frames?.find((f) => f.in_app === true && f.filename);
+
 /**
- * Group fingerprint, identical to `sdkFingerprint` in the platform:
- * error name, `file:line` of the first in-app frame, then the message with UUIDs masked to `<UUID>`, runs of
- * 8+ hex characters holding at least one letter a-f masked to `<ID>` and digits masked to `<N>` (in that order), cut
- * to 100 characters. A digit-only number is always `<N>`, whatever its length.
+ * Group fingerprint. Identical to `sdkFingerprint` in the platform for an event without `causes`; the platform's copy
+ * adds the causes rule below in its own part.
+ *
+ * - primary: the top exception when it has an in-app frame; otherwise the first `causes` entry, in walk order, that has
+ *   one; otherwise the top exception.
+ * - Parts: the top exception's type, then the `file:line` of primary's first in-app frame, then primary's masked
+ *   message: UUIDs masked to `<UUID>`, runs of 8+ hex characters holding at least one letter a-f masked to `<ID>` and
+ *   digits masked to `<N>` (in that order), cut to 100 characters. A digit-only number is always `<N>`, whatever its length.
+ * - Root type: when `causes` is not empty, a fourth part: the type of the deepest entry reached by following
+ *   `source: "cause"` links from the top. If the top has no `cause`, the type of `causes[0]`.
+ * - An event without `causes` gives the first three parts only, as before.
  */
 export function sdkFingerprint(event: WireSourceEvent): string[] {
   const exception = event.exception;
+  const causes = exception?.causes?.length ? exception.causes : undefined;
   const parts: string[] = [exception?.type || "Error"];
 
-  const inAppFrame = exception?.stacktrace?.find((f) => f.in_app === true && f.filename);
+  let inAppFrame = inAppOf(exception?.stacktrace);
+  let message = exception?.value ?? event.message ?? "";
+  if (!inAppFrame && causes) {
+    const primary = causes.find((c) => inAppOf(c.stacktrace));
+    if (primary) {
+      inAppFrame = inAppOf(primary.stacktrace);
+      message = primary.value ?? "";
+    }
+  }
   if (inAppFrame) parts.push(`${inAppFrame.filename}:${inAppFrame.lineno}`);
 
-  const message = exception?.value ?? event.message ?? "";
   parts.push(
     message
       .replace(/\b[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b/gi, "<UUID>")
@@ -73,6 +95,14 @@ export function sdkFingerprint(event: WireSourceEvent): string[] {
       .replace(/\d+/g, "<N>")
       .slice(0, 100),
   );
+
+  if (causes) {
+    let at = -1;
+    for (let i = 0; i < causes.length; i++) {
+      if (causes[i]!.parent === at && causes[i]!.source === "cause") at = i;
+    }
+    parts.push(causes[Math.max(at, 0)]!.type);
+  }
   return parts;
 }
 
@@ -86,7 +116,9 @@ export function toWireEvent<T extends { type: string }>(input: T): unknown {
 
   const fingerprint = source.fingerprint?.length ? source.fingerprint : sdkFingerprint(source);
   const message = source.message ?? source.exception?.value;
-  const topFrame = source.exception?.stacktrace?.find((f) => f.filename);
+  const topFrame =
+    source.exception?.stacktrace?.find((f) => f.filename) ??
+    source.exception?.causes?.map((c) => c.stacktrace?.find((f) => f.filename)).find(Boolean);
   const { type: _type, ...rest } = source;
 
   return {
