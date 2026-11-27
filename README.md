@@ -1853,6 +1853,7 @@ Each framework's `init()` takes the core options plus its own:
 | Not retried | Any other 4xx | `isRetryableStatus()` |
 | Page hide | `pagehide` or `visibilitychange` to hidden sends the queue with `keepalive`, under 60,000 bytes per request | `flushOnHide()` |
 | Breadcrumbs | The last 20 (the server keeps an error's last 20) | `addBreadcrumb()` |
+| Repeated breadcrumb | One identical to the newest (same category, level and message) raises its `data.count` instead of adding another | `addRepeatedBreadcrumb()` |
 | Spans per transaction | 1,000 | `MAX_SPANS_PER_TRANSACTION` |
 | Source context | 3 frames, 5 lines each side, 240 characters per line, files up to 1 MB | `addSourceContext()` |
 | Replay request | About 1.8 MB and 10,000 events; the newest 500 error ids per segment | `chunkEvents()`, `buildSegmentBody()` |

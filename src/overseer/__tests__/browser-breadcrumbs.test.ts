@@ -156,6 +156,20 @@ describe("console breadcrumbs", () => {
     expect(crumb.message).toContain("[secret]");
   });
 
+  // Sending scrubs a breadcrumb again, but only what is left of it: a cut at 200 characters can split a value so that no
+  // pattern matches the rest (a bearer token needs 6 characters, a prefixed key 8), so the message is scrubbed before the cut.
+  it.each([
+    ["a bearer token", "Bearer qzxvbnmasdfg", ["qzx"]],
+    ["a prefixed key", "sk_live_abcdefghijkl", ["sk_live", "abcd"]],
+  ])("masks %s that straddles the cut at 200 characters", async (_name, value, parts) => {
+    start();
+    // 190 characters of plain words, so the value starts at 190 and only its first 10 characters survive a cut.
+    console.warn("w ".repeat(95) + value);
+    const [crumb] = (await trail()).filter((c) => c.category === "console");
+    expect(crumb.message.length).toBeLessThanOrEqual(200);
+    for (const part of parts) expect(crumb.message).not.toContain(part);
+  });
+
   it("three identical warnings in a row are one breadcrumb with a count of 3, and the trail keeps the rest", async () => {
     start();
     document.body.click();
@@ -210,6 +224,20 @@ describe("console breadcrumbs", () => {
     debug = true;
     start({ trackConsole: ["error", "warn", "info", "log", "debug"] });
     console.log("the app says hi");
+    const messages = (await trail()).filter((c) => c.category === "console").map((c) => c.message);
+    expect(messages).toEqual(["the app says hi"]);
+  });
+
+  it("never records the SDK's own debug lines, and records the app's in the same run", async () => {
+    debug = true;
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    start({ trackConsole: ["log", "warn"] });
+    console.log("the app says hi");
+    // Capturing and flushing make the client log (`[Overseer] ...`) through the patched console.
+    captureException(new Error("first"));
+    await flush();
+    const own = log.mock.calls.filter((c) => String(c[0]).startsWith("[Overseer]"));
+    expect(own.length).toBeGreaterThan(0);
     const messages = (await trail()).filter((c) => c.category === "console").map((c) => c.message);
     expect(messages).toEqual(["the app says hi"]);
   });
