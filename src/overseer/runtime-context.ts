@@ -127,12 +127,71 @@ function browserContexts(): EnvContexts {
   return parseUserAgent(nav.userAgent, nav.userAgentData);
 }
 
+type Globals = {
+  Deno?: { version?: { deno?: unknown } };
+  EdgeRuntime?: unknown;
+  HermesInternal?: { getRuntimeProperties?: () => Record<string, unknown> };
+  navigator?: { userAgent?: unknown; product?: unknown };
+};
+
+/** What the app says about the OS of a React Native device: the runtime cannot tell without importing `react-native`. */
+let appOs: ContextEntry | undefined;
+
+/**
+ * Sets the OS that React Native events carry, from what the app passes to `setDeviceInfo`. Ignored outside React
+ * Native. `undefined` clears it.
+ */
+export function setAppOs(info: { platform?: string; osVersion?: string } | undefined): void {
+  const name = info?.platform === "ios" ? "iOS" : info?.platform === "android" ? "Android" : info?.platform;
+  appOs = info ? clean({ name, version: info.osVersion }) : undefined;
+}
+
+function reactNativeContexts(g: Globals): EnvContexts {
+  const props = g.HermesInternal ? safely(() => g.HermesInternal?.getRuntimeProperties?.()) : undefined;
+  const version = props?.["OSS Release Version"];
+  const runtime = g.HermesInternal ? { name: "hermes", version: typeof version === "string" ? version : undefined } : { name: "react-native" };
+  return { runtime: clean(runtime), device: { type: "mobile" } };
+}
+
+function safely<T>(fn: () => T): T | undefined {
+  try {
+    return fn();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Where the code runs, looked up in this order: Bun, Deno, edge-runtime (Next.js and Vercel Edge), workerd
+ * (Cloudflare Workers), React Native, a browser, Node. Bun, Deno and Node 21+ all set `process.versions.node` or a
+ * global `navigator`, so the first three kinds are checked before either is taken as proof of Node or a browser.
+ */
+function detect(): EnvContexts {
+  const g = globalThis as unknown as Globals;
+  const bun = typeof process !== "undefined" ? process.versions?.bun : undefined;
+  if (typeof bun === "string") return { runtime: { name: "bun", version: bun } };
+  const deno = g.Deno?.version?.deno;
+  if (typeof deno === "string") return { runtime: { name: "deno", version: deno } };
+  if (typeof g.EdgeRuntime === "string") return { runtime: { name: "edge-runtime" } };
+  if (g.navigator?.userAgent === "Cloudflare-Workers") return { runtime: { name: "workerd" } };
+  if (g.navigator?.product === "ReactNative") return reactNativeContexts(g);
+  if (typeof window !== "undefined" && typeof document !== "undefined") return browserContexts();
+  if (typeof process !== "undefined" && typeof process.versions?.node === "string") return nodeContexts();
+  return {};
+}
+
 let cached: EnvContexts | undefined;
 
-/** Browser, os and device in a window; runtime and os in Node; nothing elsewhere. Computed once: none of it changes while the process lives. */
+/**
+ * Runtime, plus os and device where they are known: browser, os and device in a window; runtime and os in Node;
+ * the runtime alone in Bun, Deno, edge-runtime and workerd; runtime, mobile device and the app's OS in React Native.
+ * Computed once: none of it changes while the process lives.
+ */
 export function envContexts(): EnvContexts {
-  if (!cached) cached = typeof window !== "undefined" ? browserContexts() : isNode() ? nodeContexts() : {};
-  return cached;
+  if (!cached) cached = detect();
+  return cached.runtime?.name === "hermes" || cached.runtime?.name === "react-native"
+    ? { ...cached, ...(appOs ? { os: appOs } : {}) }
+    : cached;
 }
 
 /** For tests. */

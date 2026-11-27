@@ -165,7 +165,8 @@ function formatEnvironment(env: EnvironmentInfo): string {
 function detectEnvironment(): string {
   const parts: string[] = []
 
-  if (typeof navigator !== 'undefined') {
+  // Node 21+ has a global `navigator` too: only a window with a document is a browser.
+  if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof navigator !== 'undefined') {
     parts.push(`browser: ${navigator.userAgent}`)
   }
 

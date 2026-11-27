@@ -85,6 +85,12 @@ export interface OverseerConfig {
   environment?: string;
   /** Release version */
   release?: string;
+  /**
+   * Distribution of the release, such as a build number or a bundle id. Bundled apps (React Native, for one) use it to
+   * tell builds of one release apart and to match source maps. Sent as the event's `dist` beside `release`; longer than
+   * 64 characters is cut to 64.
+   */
+  dist?: string;
   /** Enable/disable SDK */
   enabled?: boolean;
   /** Enable debug logging */
@@ -182,6 +188,8 @@ export interface OverseerEvent {
   sdk?: { name: string; version: string };
   environment?: string;
   release?: string;
+  /** The distribution of the release, from the `dist` option. */
+  dist?: string;
   fingerprint?: string[];
 }
 
@@ -289,10 +297,14 @@ function contextsOf(contexts: CaptureContext["contexts"]): Record<string, unknow
 // Core Client
 // =============================================================================
 
-type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'sendDefaultPii' | 'selfHealing' | 'apiKey' | 'includeSourceContext' | 'inAppOrigins' | 'captureProcessErrors' | 'onDropped' | 'rateLimit'> & {
+/** The longest `dist` sent. */
+const MAX_DIST = 64;
+
+type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'sendDefaultPii' | 'selfHealing' | 'apiKey' | 'includeSourceContext' | 'inAppOrigins' | 'captureProcessErrors' | 'onDropped' | 'rateLimit' | 'dist'> & {
   initialUser?: UserContext;
   sendDefaultPii: boolean;
   onDropped?: OverseerConfig["onDropped"];
+  dist?: string;
   selfHealing?: SelfHealingConfig;
   includeSourceContext: boolean;
   inAppOrigins: string[];
@@ -427,6 +439,7 @@ class OverseerClient {
       overseerKey: resolvedKey,
       environment: config.environment || detectEnvironment() || "development",
       release: config.release || detectRelease() || "unknown",
+      dist: typeof config.dist === "string" && config.dist ? config.dist.slice(0, MAX_DIST) : undefined,
       enabled: config.enabled ?? true,
       debug: config.debug ?? false,
       sampleRate: config.sampleRate ?? 1.0,
@@ -569,6 +582,7 @@ class OverseerClient {
       breadcrumbs: this.breadcrumbsOf(),
       environment: this.config.environment,
       release: this.config.release,
+      ...(this.config.dist ? { dist: this.config.dist } : {}),
       sdk: { ...SDK_INFO },
       ...this.requestOf(),
       ...(fields?.fingerprint ? fingerprintOf(fields.fingerprint) : {}),
@@ -603,6 +617,7 @@ class OverseerClient {
       breadcrumbs: this.breadcrumbsOf(),
       environment: this.config.environment,
       release: this.config.release,
+      ...(this.config.dist ? { dist: this.config.dist } : {}),
       sdk: { ...SDK_INFO },
     };
 

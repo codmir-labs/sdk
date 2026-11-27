@@ -272,6 +272,20 @@ With `debug: true`, `init` logs once when the release is still `unknown`.
 **auto** works once `init()` has run. **hook** and **middleware** mean you export, mount or call one function. **wrap**
 means you wrap a handler. **manual** means you call the API. **opt-in** means you call `startReplay()`.
 
+### Where the SDK says it runs
+
+An error event says where it ran. The SDK checks in this order and uses the first match:
+
+| `runtime.name` | Where | `runtime.version` | Other contexts |
+| --- | --- | --- | --- |
+| `bun` | Bun | the Bun version | none |
+| `deno` | Deno | the Deno version | none |
+| `edge-runtime` | Next.js Edge and Vercel Edge | none | none |
+| `workerd` | Cloudflare Workers | none | none |
+| `hermes` (else `react-native`) | React Native | the Hermes release, when it says | `device.type` is `mobile`; `os` is what you pass to `setDeviceInfo` (`platform` and `osVersion`), since the SDK does not import `react-native` |
+| none | a browser (`window` and `document`) | none | `browser`, `os` and `device`, from `navigator.userAgentData`, else the userAgent |
+| `node` | Node, including 21+, which has a global `navigator` | the Node version | `os` is the platform and its release |
+
 ## Entry points
 
 Each import is its own bundle, so a page that only reports errors never loads the replay recorder or the API client.
@@ -1785,6 +1799,7 @@ Leave it off unless you serve that manifest.
 | `dsn` | `https://www.codmir.com/api/v1/overseer` once a key is set | Where events go: errors to `<dsn>/ingest`, replay to `<dsn>/replay`. A DSN ending in `/ingest` is used as it is |
 | `environment` | the first set of `CODMIR_ENVIRONMENT`, `VERCEL_ENV`, `NODE_ENV`, else `'development'` | On every event and request (the request field is cut to 32 characters) |
 | `release` | the first set of `CODMIR_RELEASE`, `VERCEL_GIT_COMMIT_SHA`, `RAILWAY_GIT_COMMIT_SHA`, `RENDER_GIT_COMMIT`, `SOURCE_VERSION`, `CF_PAGES_COMMIT_SHA`, `COMMIT_REF`, `GITHUB_SHA`, else `'unknown'` | Your release version (request field cut to 64 characters) |
+| `dist` | none | The distribution of the release, such as a build number. Bundled apps (React Native, for one) use it to tell builds apart and to match source maps. Sent on error and message events as `dist` beside `release`, not on transactions; cut to 64 characters |
 | `service` | none | Service name on each request (cut to 64 characters) |
 | `enabled` | `true` | `false` makes every capture a no-op that returns `''` |
 | `debug` | `false` | Logs `[Overseer]` lines: init, failed sends, retries, events the server dropped |
