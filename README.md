@@ -1357,10 +1357,12 @@ when `upload.debug` is on), and the rest of its list still applies.
 - An error history over that size is sent as several segments in order; the error's id rides on the last one, which
   ends at the error, so the player lands on the error and not on the end of an earlier chunk.
 - The on-error buffer holds at most 4 MiB of event JSON, each event measured once when it is recorded. Over that the
-  older of its two checkout generations goes, and a generation that fills 4 MiB alone is closed by an early full
-  snapshot, so the history an error sends always opens with a Meta event and a FullSnapshot. A session or post-error
-  segment is also cut when it reaches 4 MiB, besides 30 s and `maxSegmentEvents`. A page that changes a lot therefore
-  keeps less than 30 to 60 s of history; one that changes little is unaffected.
+  older of its two checkout generations goes, and the current generation is closed by an early full snapshot once it
+  reaches half the cap (2 MiB) and has grown 1 MiB past its own snapshot, so the history an error sends always opens
+  with a Meta event and a FullSnapshot. A session or post-error segment is also cut when it reaches 4 MiB, besides
+  30 s and `maxSegmentEvents`. A page that changes a lot therefore keeps less than 30 to 60 s of history, and takes a
+  full snapshot more often: a page that re-renders a 500-row table every second closed 14 generations in 120 s, where
+  closing only at a full 4 MiB closed 7. One that changes little is unaffected.
 - A replay has at most two uploads in flight at a time: the chunks of an error's history, and segments emitted while
   others are out, go in sequence order and the next starts when one answers, so an error sends no more than about
   4 MiB, two requests at a time, not everything at once. At page hide what still waits goes out like the retry queue.

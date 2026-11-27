@@ -466,6 +466,96 @@ describe("a snapshot too large for one request halts the replay", () => {
   });
 });
 
+describe("waiting segments and the retry queue", () => {
+  const recorderConfig = { sessionSampleRate: 1, maxSegmentEvents: 1, upload: { url: REPLAY_URL, key: "osk_test" } };
+  const unavailable = () => new Response("{}", { status: 503 });
+  const rejected = () => new Response("{}", { status: 400 });
+  const replayIdOf = (call: Call) => (call.body as unknown as { replay_id: string }).replay_id;
+  const emit = async (recorder: { addCustomEvent: (name: string, data: unknown) => void }, count: number) => {
+    for (let i = 0; i < count; i++) {
+      recorder.addCustomEvent("one", { i });
+      await advance(0);
+    }
+  };
+
+  it("a waiting segment that gets a free slot joins the retry queue behind an older one instead of being sent", async () => {
+    hold = true;
+    const { recorder } = await startRecorder(recorderConfig);
+    await emit(recorder, 6);
+    expect(sequence()).toEqual([0, 1]);
+    // segment 0 answers 503 twice (the request retries itself once): it waits for a retry in the queue, and the
+    // slot it frees must not start segment 2
+    await release(unavailable());
+    await advance(5000);
+    expect(sequence()).toEqual([0, 1, 0]);
+    open.splice(1, 1)[0](unavailable()); // open: segment 1, then the retry of segment 0
+    await advance(0);
+    expect(sequence()).toEqual([0, 1, 0]);
+    // the retry goes first, and what waited follows it: the server never sees a newer segment before an older one
+    hold = false;
+    await release();
+    await advance(120_000);
+    const sent = sequence();
+    expect(sent.slice(0, 4)).toEqual([0, 1, 0, 0]);
+    const stored = sent.slice(3);
+    expect(stored).toEqual([...stored].sort((a, b) => a - b));
+    expect(new Set(stored).size).toBe(stored.length);
+    expect(stored.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("a retry that is due while two requests are out waits, and never more than two requests are in flight", async () => {
+    hold = true;
+    const { recorder } = await startRecorder(recorderConfig);
+    let online = false;
+    Object.defineProperty(navigator, "onLine", { configurable: true, get: () => online });
+    await emit(recorder, 6);
+    expect(sequence()).toEqual([0, 1]);
+    // a hide while offline moves what waits into the retry queue, with two requests still out
+    window.dispatchEvent(new Event("pagehide"));
+    await advance(0);
+    online = true;
+    window.dispatchEvent(new Event("online"));
+    await advance(120_000);
+    expect(sequence()).toEqual([0, 1]);
+    expect(mostInFlight).toBe(2);
+    // a slot opens: the retry queue takes it, and two requests are again the most
+    await release();
+    expect(sequence()).toEqual([0, 1, 2]);
+    hold = false;
+    while (open.length > 0) await release();
+    await advance(120_000);
+    expect(mostInFlight).toBe(2);
+    const sent = sequence();
+    expect(new Set(sent).size).toBe(sent.length);
+    expect(sent).toEqual([...sent].sort((a, b) => a - b));
+    expect(sent.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it("a segment lost for good takes the waiting segments of its replay with it, and a later replay's still go out", async () => {
+    hold = true;
+    const { recorder } = await startRecorder(recorderConfig);
+    await emit(recorder, 6);
+    expect(sequence()).toEqual([0, 1]);
+    const first = replayIdOf(replayCalls()[0]);
+    // the replay ends and a new one starts while the first one's segments still wait
+    recorder.stop();
+    recorder.start();
+    await vi.dynamicImportSettled();
+    await advance(0);
+    await emit(recorder, 4);
+    expect(sequence()).toEqual([0, 1]);
+    // segment 0 of the first replay is refused for good: nothing more of that replay is sent
+    await release(rejected());
+    await advance(0);
+    while (open.length > 0) await release();
+    await advance(120_000);
+    expect(replayCalls().filter((c) => replayIdOf(c) === first).map((c) => c.body.segment)).toEqual([0, 1]);
+    const later = replayCalls().filter((c) => replayIdOf(c) !== first).map((c) => c.body.segment);
+    expect(later.length).toBeGreaterThanOrEqual(3);
+    expect(later).toEqual(later.map((_, i) => i));
+  });
+});
+
 /** JSON bytes the clock and the chat page held at 30, 60, 120 and 300 s before the cap (measured on 66d0439). */
 const CLOCK_BYTES: Record<number, number> = { 30: 6823, 60: 13664, 120: 13347, 300: 12182 };
 const CHAT_BYTES: Record<number, number> = { 30: 35929, 60: 96994, 120: 196346, 300: 494787 };
