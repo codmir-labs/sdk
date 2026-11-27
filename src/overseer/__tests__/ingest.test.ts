@@ -81,7 +81,7 @@ afterEach(() => {
 });
 
 function client(extra: Record<string, unknown> = {}): OverseerClient {
-  const c = new OverseerClient({ clientKey: "osk_test", environment: "production", release: "1.2.3", ...extra });
+  const c = new OverseerClient({ clientKey: "osk_test", environment: "production", release: "1.2.3", rateLimit: false, ...extra });
   c.init();
   return c;
 }
@@ -398,7 +398,7 @@ describe("default dsn (criterion 5)", () => {
 
 describe("onDropped: what the server did not take", () => {
   const told: unknown[] = [];
-  const client = (onDropped?: (d: unknown) => void): OverseerClient => new OverseerClient({ clientKey: "osk_x", onDropped });
+  const client = (onDropped?: (d: unknown) => void): OverseerClient => new OverseerClient({ clientKey: "osk_x", onDropped, rateLimit: false });
   beforeEach(() => void told.splice(0));
 
   it("is called with the status of a refused batch, and not for one that is tried again", async () => {

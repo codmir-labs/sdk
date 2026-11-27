@@ -194,6 +194,8 @@ export function createCloud(
         service: base.service,
         release: base.release,
         environment: o.environment ?? base.environment,
+        // The monitor has its own caps (per batch, per day, once an hour per finding); a second one would refuse findings it counts as sent.
+        rateLimit: false,
         onDropped: (d) => {
           refused += d.events;
           reason = cut(d.reason ?? `status ${d.status}`, 64);

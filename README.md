@@ -198,7 +198,7 @@ await flush(); // before a short-lived process exits
 **3. Check the setup** with [`verify()`](#verify-your-setup), then pick your framework below.
 
 > [!TIP]
-> Events are sent one second after the last capture, in batches. A script that exits right away should
+> Events are sent at most one second after the first unsent capture, or at once when a batch is full, in batches. A script that exits right away should
 > `await flush()` first, or the queue dies with the process.
 
 ## Platforms
@@ -325,7 +325,7 @@ sequenceDiagram
     end
     C->>C: sendEvent() runs beforeSend(event), then enqueue()
     C-->>App: event id
-    Note over C: flush timer, 1 s after the last capture
+    Note over C: flush timer, 1 s after the first unsent capture; at once when a batch is full
     C->>C: flush() then drain() then sendBatch(up to 100 events)
     C->>T: buildBody(events) with toWireEvent() and sdkFingerprint()
     C->>N: POST dsn/ingest with x-overseer-key
@@ -366,7 +366,7 @@ captureException(err, { orderId: 'ord_123', password: 'hunter2', req: { headers:
 4. **Context.** The user, tags, breadcrumbs, environment, release, SDK name and version and the runtime contexts are
    attached. Inside a server request the event also gets `request.url` (origin and path) and `request.method`; in a
    browser, `request.url` is the page's origin and path.
-5. **Queue and send.** One second after the last capture the queue is sent as one request:
+5. **Queue and send.** At most one second after the first unsent capture (or at once when a batch is full) the queue is sent as one request:
 
 ```http
 POST https://www.codmir.com/api/v1/overseer/ingest
@@ -1375,7 +1375,8 @@ Leave it off unless you serve that manifest.
 | `replaysSessionSampleRate` | `0` | Read by `startReplay()` |
 | `replaysOnErrorSampleRate` | `1` | Read by `startReplay()` |
 | `beforeSend` | keeps every event | `(event) => event \| null`, for errors and messages; `null` drops the event |
-| `onDropped` | none | `({ events, status, reason, eventIds }) => void`, called when the server did not take events: a batch it refused, or ones it dropped behind a 200, or ones the client gave up on (`status` 0: the queue was full, or the client was closed before the last try went through). `eventIds` are the ids `captureEvent` returned for them |
+| `onDropped` | none | `({ events, status, reason, eventIds }) => void`, called when the server did not take events: a batch it refused, or ones it dropped behind a 200, or ones the client gave up on (`status` 0: the queue was full, the client was closed before the last try went through, or `rateLimit` held the event back). `status` 0 comes with a `reason`: `queue_full`, `closed`, `too_large`, `before_send` or `rate_limited`; the server's own reasons (such as `payment_required`) come with its status. `eventIds` are the ids `captureEvent` returned for them |
+| `rateLimit` | `{ perGroupPerMinute: 10, perMinute: 100 }` | Caps `error` and `message` events per rolling minute: so many of one group (the event's own `fingerprint`, else the default one) and so many in all. The rest are not sent; `onDropped` hears them as `rate_limited` (`status` 0), in one call a second at most, and on `close()`. It runs after `beforeSend`, so an event the app dropped never counts. Transactions are never capped. `false` turns it off |
 | `initialUser` | none | The user from the first event on |
 | `initialTags` | `{}` | Tags from the first event on |
 | `includeSourceContext` | `true` | Node only: source lines around the first three in-app frames |
@@ -1518,7 +1519,8 @@ Each framework's `init()` takes the core options plus its own:
 
 | What | Value | Source |
 | --- | --- | --- |
-| Send delay | 1 s after the last capture | `enqueue()` |
+| Send delay | At most 1 s after the first unsent capture, or at once when a batch is full | `enqueue()` |
+| Repeats | 10 per group and 100 in all per minute; the rest are not sent | `rateLimit` |
 | Events per request | 100 | `MAX_BATCH_EVENTS` |
 | Queue | 1,000 events; the oldest are dropped first | `MAX_QUEUE_SIZE` |
 | Retry | Network error, 5xx, 408 and 429; 1 s doubling to 60 s, or `Retry-After` when longer | `retryDelayMs()`, `isRetryableStatus()` |
