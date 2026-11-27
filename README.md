@@ -1068,6 +1068,8 @@ when `upload.debug` is on), and the rest of its list still applies.
 - **Session mode** (session rate hit): records and uploads a segment every 30 s or 5,000 events.
 - **On-error mode** (only the error rate hit): keeps the last 30 to 60 s in memory, uploads it when `captureException`
   runs, keeps recording for 30 s more, uploads that, then goes back to buffering under a new replay id.
+  An error captured before the recorder has loaded still leaves the buffer rotating: its id rides on the segment that
+  follows it, and the next error uploads the last 30 to 60 s, not everything since the page opened.
 - Each upload is one `POST <dsn>/replay` with `x-overseer-key`, cut to stay under about 1.8 MB and 10,000 events; a
   network error, 5xx, 408 or 429 is retried once. When the page hides, a small enough segment goes out with
   `keepalive`.

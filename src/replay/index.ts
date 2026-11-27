@@ -258,6 +258,8 @@ export class ReplayRecorder {
   private pendingErrorIds: string[] = [];
   /** Set when the server refused a segment (no card or credits); nothing more uploads this session. */
   private uploadsRefused = false;
+  /** Chosen for the on-error buffer at start: rrweb then needs periodic checkouts, even if an error came first. */
+  private buffered = false;
   private record: RrwebRecord | null = null;
   private stopRrweb: (() => void) | undefined;
   /** Bumped by start and stop so a late `import()` knows it was cancelled. */
@@ -291,6 +293,7 @@ export class ReplayRecorder {
     if (!mode) return null;
 
     this.mode = mode;
+    this.buffered = mode === "buffer";
     this.sessionStartTime = Date.now();
     this.beginReplay();
     this.session = {
@@ -354,7 +357,8 @@ export class ReplayRecorder {
       const history = this.prevBuffer.concat(this.curBuffer);
       this.prevBuffer = [];
       this.curBuffer = [];
-      this.emitSegment(history, this.takeErrorIds());
+      // Nothing recorded yet (rrweb still loading, or waiting for `load`): the ids ride on the post-error segment.
+      if (history.length > 0) this.emitSegment(history, this.takeErrorIds());
       this.postErrorTimer = setTimeout(() => this.endPostError(), this.config.postErrorDuration);
       (this.postErrorTimer as { unref?: () => void }).unref?.();
     } else if (this.mode === "session" || this.mode === "post-error") {
@@ -426,7 +430,7 @@ export class ReplayRecorder {
         },
         ...rrwebPrivacy,
         // On-error mode needs a full snapshot at the start of whatever window is uploaded.
-        ...(this.mode === "buffer" ? { checkoutEveryNms: Math.max(1000, Math.floor(this.config.bufferDuration / 2)) } : {}),
+        ...(this.buffered ? { checkoutEveryNms: Math.max(1000, Math.floor(this.config.bufferDuration / 2)) } : {}),
         errorHandler: () => true,
       });
     } catch (err) {
