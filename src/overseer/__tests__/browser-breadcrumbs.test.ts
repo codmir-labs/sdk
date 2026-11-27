@@ -13,17 +13,19 @@ type Crumb = { category: string; level?: string; message: string; data?: Record<
 let bodies: Array<{ events: Array<{ type: string; event: { breadcrumbs: Crumb[] } }> }> = [];
 let stop: Stop | undefined;
 let debug = false;
+let ingestStatus = 200;
 
 beforeEach(() => {
   bodies = [];
   debug = false;
+  ingestStatus = 200;
   // The console methods are spies first, so the patch goes over them and nothing prints.
   for (const method of ["error", "warn", "info", "log", "debug"] as const) vi.spyOn(console, method).mockImplementation(() => {});
   vi.stubGlobal(
     "fetch",
     vi.fn(async (_url: string, init: RequestInit) => {
       if (String(_url).includes("ingest")) bodies.push(JSON.parse(String(init.body)));
-      return new Response("{}", { status: 200 });
+      return new Response("{}", { status: String(_url).includes("ingest") ? ingestStatus : 200 });
     }),
   );
 });
@@ -233,10 +235,12 @@ describe("console breadcrumbs", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     start({ trackConsole: ["log", "warn"] });
     console.log("the app says hi");
-    // Capturing and flushing make the client log (`[Overseer] ...`) through the patched console.
+    // A refused batch makes the client log (`[Overseer] Server rejected ...`) after the patch is on.
+    ingestStatus = 400;
     captureException(new Error("first"));
     await flush();
-    const own = log.mock.calls.filter((c) => String(c[0]).startsWith("[Overseer]"));
+    ingestStatus = 200;
+    const own = log.mock.calls.filter((c) => String(c[0]).startsWith("[Overseer]") && String(c[1]).startsWith("Server rejected"));
     expect(own.length).toBeGreaterThan(0);
     const messages = (await trail()).filter((c) => c.category === "console").map((c) => c.message);
     expect(messages).toEqual(["the app says hi"]);
