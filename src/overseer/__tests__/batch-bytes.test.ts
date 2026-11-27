@@ -33,7 +33,7 @@ afterEach(() => {
 });
 
 function client(onDropped = vi.fn()) {
-  const c = new OverseerClient({ clientKey: "osk_test", environment: "production", onDropped });
+  const c = new OverseerClient({ clientKey: "osk_test", environment: "production", onDropped, rateLimit: false });
   c.init();
   return { c, onDropped };
 }

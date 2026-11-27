@@ -41,10 +41,12 @@ import {
   isRetryableStatus,
   readDroppedEvents,
   retryDelayMs,
+  sdkFingerprint,
   utf8Bytes,
   withoutOldestBreadcrumbs,
   wireEventBytes,
   RETRY_MAX_MS,
+  type WireSourceEvent,
 } from "./transport";
 
 // =============================================================================
@@ -98,10 +100,17 @@ export interface OverseerConfig {
   /**
    * Called when the server did not take events: a batch it refused (`status` 401 for a wrong key, say), or events it
    * dropped out of a batch it answered 200 to (`reason`, such as `payment_required`), or that the client gave up on
-   * (`status` 0: the queue was full, the client was closed before the last try went through, or `beforeSend` threw). They are not sent again.
+   * (`status` 0: the queue was full, the client was closed before the last try went through, `beforeSend` threw, or `rateLimit` held the event back, reason `rate_limited`). They are not sent again.
    * `eventIds` are the ids `captureEvent` returned for those events, when they are known.
    */
   onDropped?: (dropped: { events: number; status: number; reason?: string; eventIds?: string[] }) => void;
+  /**
+   * How many `error` and `message` events leave per rolling minute: `perGroupPerMinute` (default 10) for one group,
+   * the event's own `fingerprint` or else the default one, and `perMinute` (default 100) for the whole client.
+   * The rest are not sent and `onDropped` hears them as `rate_limited`, at most once a second. Transactions are never
+   * counted. `false` turns the limit off.
+   */
+  rateLimit?: { perGroupPerMinute?: number; perMinute?: number } | false;
   /** Initial user context */
   initialUser?: UserContext;
   /** Initial tags */
@@ -186,7 +195,7 @@ export type SeverityLevel = "fatal" | "error" | "warning" | "info" | "debug";
 // Core Client
 // =============================================================================
 
-type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'selfHealing' | 'apiKey' | 'includeSourceContext' | 'onDropped'> & {
+type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'selfHealing' | 'apiKey' | 'includeSourceContext' | 'onDropped' | 'rateLimit'> & {
   initialUser?: UserContext;
   onDropped?: OverseerConfig["onDropped"];
   selfHealing?: SelfHealingConfig;
@@ -219,6 +228,14 @@ export interface FeedbackContext {
   tracePropagationTargets: Array<string | RegExp>;
 }
 
+const RATE_WINDOW_MS = 60_000;
+const DEFAULT_PER_GROUP_PER_MINUTE = 10;
+const DEFAULT_PER_MINUTE = 100;
+/** Dropped ids kept for one `onDropped` call; the count stays exact. */
+const MAX_REPORTED_IDS = 1000;
+/** Above this many groups, groups with no event in the last minute are forgotten. */
+const MAX_TRACKED_GROUPS = 1000;
+
 class OverseerClient {
   private lastError: { id: string; at: number } | null = null;
   private config: ResolvedConfig;
@@ -228,6 +245,14 @@ class OverseerClient {
   private breadcrumbs: Breadcrumb[] = [];
   private eventQueue: QueuedEvent[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  // Bytes queued since the last send started: a full batch leaves at once.
+  private queuedBytes = 0;
+  private rateLimits: { perGroup: number; perMinute: number } | null;
+  // Times (ms) of the events let through in the last minute, per group and in all.
+  private groupSent = new Map<string, number[]>();
+  private allSent: number[] = [];
+  private rateDropped: { events: number; ids: string[] } | null = null;
+  private rateDroppedTimer: ReturnType<typeof setTimeout> | null = null;
   private isInitialized = false;
   private conversationId: string | null = null;
   private sessionId: string | null = null;
@@ -237,6 +262,8 @@ class OverseerClient {
   // Once closed, the client never schedules a retry.
   private closed = false;
   private flushing: Promise<boolean> | null = null;
+  // True while `flushing` can still pick up events that are queued now.
+  private flushOpen = false;
   // `beforeSend` hooks that returned a Promise and have not settled; `flush()` waits for them.
   private pendingHooks = new Set<Promise<void>>();
   private onPageHide = (): void => this.flushOnHide();
@@ -271,6 +298,16 @@ class OverseerClient {
       selfHealing: config.selfHealing,
       includeSourceContext: config.includeSourceContext ?? true,
     };
+
+    const limit = config.rateLimit;
+    const count = (n: unknown, fallback: number): number => (typeof n === "number" && n >= 0 ? n : fallback);
+    this.rateLimits =
+      limit === false
+        ? null
+        : {
+            perGroup: count(limit?.perGroupPerMinute, DEFAULT_PER_GROUP_PER_MINUTE),
+            perMinute: count(limit?.perMinute, DEFAULT_PER_MINUTE),
+          };
 
     if (this.config.initialUser) {
       this.user = this.config.initialUser;
@@ -539,10 +576,13 @@ class OverseerClient {
 
   /** Sends everything queued: true when all of it was sent or refused, false when a batch is put back for a retry or `timeout` ms ran out first. */
   flush(timeout?: number): Promise<boolean> {
-    if (!this.flushing) {
-      this.flushing = (this.pendingHooks.size > 0 ? this.settleHooks().then(() => this.drain()) : this.drain()).finally(() => {
-        this.flushing = null;
+    // A send that has looked at the queue for the last time takes nothing more: an event queued after that needs a send of its own.
+    if (!this.flushing || !this.flushOpen) {
+      this.flushOpen = true;
+      const sending: Promise<boolean> = (this.pendingHooks.size > 0 ? this.settleHooks().then(() => this.drain()) : this.drain()).finally(() => {
+        if (this.flushing === sending) this.flushing = null;
       });
+      this.flushing = sending;
     }
     const sending = this.flushing;
     if (typeof timeout !== "number" || !(timeout < Infinity)) return sending;
@@ -564,6 +604,7 @@ class OverseerClient {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
+    this.reportRateDropped();
     if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
       window.removeEventListener("pagehide", this.onPageHide);
     }
@@ -622,8 +663,63 @@ class OverseerClient {
       this.hookFailed(original, new Error("beforeSend returned something that is not an event"));
       return;
     }
+    if (this.rateLimited(processed)) return;
     if (processed.type === "error") this.lastError = { id: processed.id, at: Date.now() };
     this.enqueue(processed);
+  }
+
+  /** True when the event is over the limit and was dropped. Only `error` and `message` events count, and only those let through. */
+  private rateLimited(event: OverseerEvent): boolean {
+    const limits = this.rateLimits;
+    if (!limits || (event.type !== "error" && event.type !== "message")) return false;
+    const now = Date.now();
+    const since = now - RATE_WINDOW_MS;
+    const group = (event.fingerprint?.length ? event.fingerprint : sdkFingerprint(event as WireSourceEvent)).join("\u0000");
+
+    const recent = (times: number[]): number[] => {
+      let from = 0;
+      while (from < times.length && times[from] <= since) from++;
+      if (from > 0) times.splice(0, from);
+      return times;
+    };
+    const times = recent(this.groupSent.get(group) ?? []);
+    if (times.length >= limits.perGroup || recent(this.allSent).length >= limits.perMinute) {
+      this.log(`Rate limit: dropped an event of group "${group.split("\u0000").join(" | ")}"`);
+      this.noteRateDropped(event.id);
+      return true;
+    }
+    times.push(now);
+    this.allSent.push(now);
+    this.groupSent.set(group, times);
+    if (this.groupSent.size > MAX_TRACKED_GROUPS) {
+      for (const [key, list] of this.groupSent) if (recent(list).length === 0) this.groupSent.delete(key);
+    }
+    return false;
+  }
+
+  /** Collects dropped events so `onDropped` hears them in one call a second, not one per event. */
+  private noteRateDropped(id: string): void {
+    const pending = (this.rateDropped ??= { events: 0, ids: [] });
+    pending.events++;
+    if (id && pending.ids.length < MAX_REPORTED_IDS) pending.ids.push(id);
+    if (this.closed) {
+      this.reportRateDropped();
+      return;
+    }
+    if (this.rateDroppedTimer) return;
+    this.rateDroppedTimer = setTimeout(() => this.reportRateDropped(), 1000);
+    (this.rateDroppedTimer as { unref?: () => void }).unref?.();
+  }
+
+  private reportRateDropped(): void {
+    if (this.rateDroppedTimer) {
+      clearTimeout(this.rateDroppedTimer);
+      this.rateDroppedTimer = null;
+    }
+    const pending = this.rateDropped;
+    if (!pending) return;
+    this.rateDropped = null;
+    this.tellDropped(pending.events, 0, "rate_limited", pending.ids.map((id) => ({ id })));
   }
 
   /** A failed hook drops the event: it may have been half way through scrubbing it. */
@@ -638,14 +734,20 @@ class OverseerClient {
 
   private enqueue(event: QueuedEvent): void {
     this.eventQueue.push(event);
+    this.queuedBytes += wireEventBytes(event) + 1;
     this.trimQueue();
 
     // A pending retry will pick this event up; flushing now would skip its backoff.
     if (this.retryTimer) return;
 
-    // Debounced flush
-    if (this.flushTimer) clearTimeout(this.flushTimer);
-    this.flushTimer = setTimeout(() => void this.flush(), 1000);
+    // A full batch leaves at once.
+    if (this.eventQueue.length >= MAX_BATCH_EVENTS || this.queuedBytes >= MAX_BATCH_BYTES) {
+      void this.flush();
+      return;
+    }
+
+    // The timer is never pushed back: events leave at most 1 s after the first one waiting.
+    if (!this.flushTimer) this.flushTimer = setTimeout(() => void this.flush(), 1000);
   }
 
   private log(...args: unknown[]): void {
@@ -663,6 +765,7 @@ class OverseerClient {
   }
 
   private async drain(): Promise<boolean> {
+    this.queuedBytes = 0;
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
@@ -705,13 +808,16 @@ class OverseerClient {
       if (this.closed) {
         // close() makes one last attempt; a failure then is final.
         this.tellDropped(batch.length, 0, "closed", batch);
+        this.flushOpen = false;
         return false;
       }
       this.eventQueue.unshift(...batch);
       this.trimQueue();
       this.scheduleRetry(outcome.retryAfterMs);
+      this.flushOpen = false;
       return false;
     }
+    this.flushOpen = false;
     return true;
   }
 
@@ -841,6 +947,7 @@ class OverseerClient {
    */
   private flushOnHide(): void {
     if (!this.config.dsn || this.eventQueue.length === 0 || typeof fetch !== "function") return;
+    this.queuedBytes = 0;
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
