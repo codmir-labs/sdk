@@ -4,6 +4,7 @@
  */
 
 import { replayUrl } from "../endpoints";
+import { claimKeepalive, KEEPALIVE_MAX_BYTES } from "../overseer/keepalive";
 import { utf8Bytes } from "../overseer/transport";
 import { scrubUrl } from "../overseer/url-scrub";
 import { SDK_INFO } from "../version";
@@ -18,8 +19,7 @@ export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 /** Headroom under {@link MAX_BODY_BYTES} for the envelope and for the events being sized one by one. */
 export const TARGET_BODY_BYTES = 1_800_000;
 export const MAX_EVENTS_PER_SEGMENT = 10_000;
-/** `fetch(..., { keepalive: true })` bodies are limited to 64 KB by browsers. */
-export const KEEPALIVE_MAX_BYTES = 60_000;
+export { KEEPALIVE_MAX_BYTES };
 export const RETRY_DELAY_MS = 1000;
 /** A 429 without a readable `Retry-After`: the server's rate window is 60 s. */
 export const DEFAULT_RETRY_AFTER_MS = 60_000;
@@ -185,14 +185,21 @@ type Attempt =
   | { kind: "ok" | "refused" | "retry" | "drop" | "too_large" }
   | { kind: "rate_limited"; delayMs: number };
 
+/** The sends of one page hide, in order: once one goes without `keepalive`, every later one does too. */
+export interface HideRun {
+  cut: boolean;
+}
+
 /**
  * POSTs one segment. A network error or a 5xx/408 is retried once, about 1 s later; a second failure resolves
  * {@link RetryLater} with no delay. A 429 is not retried at once: it resolves {@link RetryLater} with the server's
  * `Retry-After` (60 s without one). A 413 is not retried and resolves `too_large` so the caller can split it; any other
  * status drops the segment (`failed`). Never rejects.
  *
- * `hiding` is the pagehide path: the request goes out with `keepalive` when the body fits 64 KB (UTF-8 bytes), no retry,
- * and every failure, a 429 included, resolves `failed`: the page is going away, so nothing waits.
+ * `hiding` is the pagehide path: no immediate retry, and the request takes `keepalive` while its body fits the SDK's one
+ * keepalive budget ({@link claimKeepalive}) and no earlier request of the same {@link HideRun} went without. A failure
+ * that a retry could cure, a 429 included, resolves {@link RetryLater} like any other: the page may only have been
+ * hidden, and the caller's queue holds the segment either way.
  * `immediateRetry: false` skips the 1 s retry (the caller's queue paces its own attempts).
  * `sendBeacon` is deliberately not used: it cannot set `x-overseer-key`, so the server would see an unkeyed
  * request (the same reason the error transport does not use it).
@@ -202,10 +209,18 @@ export async function postSegment(
   body: SegmentUploadBody,
   hiding = false,
   immediateRetry = true,
+  run: HideRun = { cut: false },
 ): Promise<UploadOutcome> {
   if (typeof fetch !== "function") return "failed";
   const payload = JSON.stringify(body);
-  const keepalive = hiding && utf8Bytes(payload) <= KEEPALIVE_MAX_BYTES;
+  let release: (() => void) | null = null;
+  if (hiding && !run.cut) {
+    const bytes = utf8Bytes(payload);
+    release = bytes <= KEEPALIVE_MAX_BYTES ? claimKeepalive(bytes) : null;
+    // One that does not fit ends keepalive for the rest of the hide: a later segment never travels where an earlier one did not.
+    if (!release) run.cut = true;
+  }
+  const keepalive = release !== null;
   const log = (...args: unknown[]) => {
     if (target.debug) console.log("[Overseer replay]", ...args);
   };
@@ -238,8 +253,7 @@ export async function postSegment(
 
   try {
     let result = await attempt();
-    if (hiding && (result.kind === "retry" || result.kind === "rate_limited")) return "failed";
-    if (result.kind === "retry" && immediateRetry) {
+    if (result.kind === "retry" && immediateRetry && !hiding) {
       await sleep(RETRY_DELAY_MS);
       result = await attempt();
     }
@@ -259,5 +273,7 @@ export async function postSegment(
     }
   } catch {
     return "failed";
+  } finally {
+    release?.();
   }
 }

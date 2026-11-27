@@ -29,8 +29,7 @@ export const RETRY_MAX_MS = 60_000;
 export function requestTimeoutMs(): number {
   return typeof process !== "undefined" && process.versions?.node ? 10_000 : 30_000;
 }
-/** `fetch(..., { keepalive: true })` bodies are limited to 64 KB by browsers; stay under it. */
-export const KEEPALIVE_MAX_BYTES = 60_000;
+export { KEEPALIVE_MAX_BYTES } from "./keepalive";
 
 /** Envelope limits the server validates (TelemetryIngestBodySchema); a longer value would 400 the whole batch. */
 const MAX_SESSION_ID = 128;

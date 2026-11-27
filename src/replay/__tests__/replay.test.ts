@@ -711,16 +711,16 @@ describe("upload helpers", () => {
 
     vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("offline"); }));
     useFakeClock();
-    const result = postSegment(target, body, true); // hiding: no retry wait
+    const result = postSegment(target, body, true); // hiding: no retry wait, and the failure waits in the caller's queue
     await vi.advanceTimersByTimeAsync(0);
-    expect(await result).toBe("failed");
+    expect(await result).toEqual({ outcome: "retry_later", delayMs: null });
   });
 
   it("treats 202 {stored:false} as a refusal: no retry, and no more uploads this session", async () => {
     useFakeClock();
     respond = () => new Response(JSON.stringify({ stored: false, reason: "payment_required" }), { status: 202 });
     const { overseer, replay } = await load({ replaysSessionSampleRate: 1 });
-    replay.startReplay();
+    replay.startReplay({ firstSegmentDelay: 30_000 });
     await settle();
     const { record } = await import("@rrweb/record");
     record.addCustomEvent("a", 1);
@@ -751,7 +751,7 @@ describe("upload helpers", () => {
     useFakeClock();
     respond = () => new Response("{}", { status: 503 });
     const { replay } = await load({ replaysSessionSampleRate: 1 });
-    replay.startReplay();
+    replay.startReplay({ firstSegmentDelay: 30_000 });
     await settle();
     const { record } = await import("@rrweb/record");
     record.addCustomEvent("a", 1);
