@@ -330,9 +330,12 @@ sequenceDiagram
     C->>B: stackFor(err.stack), sanitizeExtra(context), requestOf(), envContexts()
     B-->>C: frames, cleaned extra, request url and method, contexts
     opt startReplay() is recording
-        C->>H: getReplayId() and onError(eventId)
+        C->>H: getReplayId()
     end
     C->>C: sendEvent() runs beforeSend(event), then enqueue()
+    opt the event was queued and startReplay() is recording
+        C->>H: onError(eventId)
+    end
     C-->>App: event id
     Note over C: flush timer, 1 s after the first unsent capture; at once when a batch is full
     C->>C: flush() then drain() then sendBatch(up to 100 events)
@@ -980,7 +983,8 @@ startReplay();
 ```
 
 Both rates at 0 record nothing and never load rrweb. While a replay records, every error event carries
-`tags.replay_id`, and the replay's segments list the ids of the errors captured while they recorded.
+`tags.replay_id`, and the replay's segments list the ids of the errors that were queued while they recorded: an error
+your `beforeSend` drops (or one that is rate limited) never makes an on-error replay upload.
 `startReplay()` returns the replay id, or `null` when nothing records: no client, no client key, not in a browser, or
 neither rate hit.
 
@@ -1068,9 +1072,18 @@ when `upload.debug` is on), and the rest of its list still applies.
 - **Session mode** (session rate hit): records and uploads a segment every 30 s or 5,000 events.
 - **On-error mode** (only the error rate hit): keeps the last 30 to 60 s in memory, uploads it when `captureException`
   runs, keeps recording for 30 s more, uploads that, then goes back to buffering under a new replay id.
-- Each upload is one `POST <dsn>/replay` with `x-overseer-key`, cut to stay under about 1.8 MB and 10,000 events; a
+  An error captured before the recorder has loaded still leaves the buffer rotating: its id rides on the segment that
+  follows it, and the next error uploads the last 30 to 60 s, not everything since the page opened.
+- Each upload is one `POST <dsn>/replay` with `x-overseer-key`, cut to stay under about 1.8 MB (UTF-8) and 10,000 events; a
   network error, 5xx, 408 or 429 is retried once. When the page hides, a small enough segment goes out with
   `keepalive`.
+- An error history over that size is sent as several segments in order; the error's id rides on the last one, which
+  ends at the error, so the player lands on the error and not on the end of an earlier chunk.
+- Sizes are counted in UTF-8 bytes, the unit the server limits, so a page in Chinese, Japanese, Korean or Cyrillic is cut
+  as small as one in English. A `keepalive` send is used only when the body is 60,000 UTF-8 bytes or less. A segment the
+  server still refuses with `413` is not retried: it is cut in two and each half is sent (the first under its own
+  segment number, the second under the next free one of that replay, with the error ids), down to one event, which is
+  dropped.
 - If the server answers that it stored nothing (`202` with `stored: false`), the recorder stops uploading for the
   rest of the session.
 - `createReplayRecorder(config)` gives you a `ReplayRecorder` without the client wiring: with no `upload` target it

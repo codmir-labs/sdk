@@ -442,7 +442,7 @@ class OverseerClient {
     };
 
     this.linkReplay(event);
-    this.sendEvent(event);
+    this.sendEvent(event, true);
     return eventId;
   }
 
@@ -518,7 +518,7 @@ class OverseerClient {
     return { session: this.config.replaysSessionSampleRate, onError: this.config.replaysOnErrorSampleRate };
   }
 
-  /** While a replay records, the error carries its id (`tags.replay_id` is what the server reads) and the replay learns the error id. */
+  /** While a replay records, the error carries its id (`tags.replay_id` is what the server reads). */
   private linkReplay(event: OverseerEvent): void {
     const hook = this.replayHook;
     if (!hook) return;
@@ -528,7 +528,15 @@ class OverseerClient {
         event.tags = { ...event.tags, replay_id: replayId };
         event.contexts = { ...event.contexts, replay: { replay_id: replayId } };
       }
-      hook.onError(event.id);
+    } catch {
+      // replay must never break error capture
+    }
+  }
+
+  /** The replay learns of an error only once it is queued, so an error `beforeSend` drops never uploads a replay. */
+  private notifyReplay(eventId: string): void {
+    try {
+      this.replayHook?.onError(eventId);
     } catch {
       // replay must never break error capture
     }
@@ -741,7 +749,7 @@ class OverseerClient {
     return out;
   }
 
-  private sendEvent(raw: OverseerEvent): void {
+  private sendEvent(raw: OverseerEvent, linkedToReplay = false): void {
     // Before the hook and before any fingerprint: the hook and the group see the user `sendDefaultPii` allows and the
     // scrubbed text.
     const event = scrubEvent(this.withWireUser(raw));
@@ -755,18 +763,18 @@ class OverseerClient {
     if (result && typeof (result as PromiseLike<unknown>).then === "function") {
       const pending: Promise<void> = Promise.resolve(result as PromiseLike<OverseerEvent | null>)
         .then(
-          (processed) => this.afterHook(event, processed),
+          (processed) => this.afterHook(event, processed, linkedToReplay),
           (err) => this.hookFailed(event, err),
         )
         .finally(() => this.pendingHooks.delete(pending));
       this.pendingHooks.add(pending);
       return;
     }
-    this.afterHook(event, result as OverseerEvent | null);
+    this.afterHook(event, result as OverseerEvent | null, linkedToReplay);
   }
 
   /** What the hook returned: `null` is the app dropping the event on purpose; anything else that is not an event is a failed hook. */
-  private afterHook(original: OverseerEvent, processed: OverseerEvent | null | undefined): void {
+  private afterHook(original: OverseerEvent, processed: OverseerEvent | null | undefined, linkedToReplay = false): void {
     if (processed === null || processed === undefined) return;
     if (typeof processed !== "object") {
       this.hookFailed(original, new Error("beforeSend returned something that is not an event"));
@@ -775,6 +783,7 @@ class OverseerClient {
     if (this.rateLimited(processed)) return;
     if (processed.type === "error") this.lastError = { id: processed.id, at: Date.now() };
     this.enqueue(processed);
+    if (linkedToReplay) this.notifyReplay(typeof processed.id === "string" ? processed.id : original.id);
   }
 
   /** True when the event is over the limit and was dropped. Only `error` and `message` events count, and only those let through. */

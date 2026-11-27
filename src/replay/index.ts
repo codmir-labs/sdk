@@ -248,7 +248,8 @@ export class ReplayRecorder {
   private session: ReplaySession | null = null;
   private mode: Mode = "idle";
   private replayId = "";
-  private nextSegment = 0;
+  /** Segment numbers of the replay now recording; a segment cut in two after a 413 keeps drawing from the counter of its own replay. */
+  private segments = { next: 0 };
   private sessionStartTime = 0;
   /** Events of the segment being built (session and post-error modes). */
   private events: RrwebEvent[] = [];
@@ -258,6 +259,8 @@ export class ReplayRecorder {
   private pendingErrorIds: string[] = [];
   /** Set when the server refused a segment (no card or credits); nothing more uploads this session. */
   private uploadsRefused = false;
+  /** Chosen for the on-error buffer at start: rrweb then needs periodic checkouts, even if an error came first. */
+  private buffered = false;
   private record: RrwebRecord | null = null;
   private stopRrweb: (() => void) | undefined;
   /** Bumped by start and stop so a late `import()` knows it was cancelled. */
@@ -291,6 +294,7 @@ export class ReplayRecorder {
     if (!mode) return null;
 
     this.mode = mode;
+    this.buffered = mode === "buffer";
     this.sessionStartTime = Date.now();
     this.beginReplay();
     this.session = {
@@ -354,7 +358,8 @@ export class ReplayRecorder {
       const history = this.prevBuffer.concat(this.curBuffer);
       this.prevBuffer = [];
       this.curBuffer = [];
-      this.emitSegment(history, this.takeErrorIds());
+      // Nothing recorded yet (rrweb still loading, or waiting for `load`): the ids ride on the post-error segment.
+      if (history.length > 0) this.emitSegment(history, this.takeErrorIds());
       this.postErrorTimer = setTimeout(() => this.endPostError(), this.config.postErrorDuration);
       (this.postErrorTimer as { unref?: () => void }).unref?.();
     } else if (this.mode === "session" || this.mode === "post-error") {
@@ -397,7 +402,7 @@ export class ReplayRecorder {
 
   private beginReplay(): void {
     this.replayId = uuidv4();
-    this.nextSegment = 0;
+    this.segments = { next: 0 };
     this.events = [];
     this.prevBuffer = [];
     this.curBuffer = [];
@@ -426,7 +431,7 @@ export class ReplayRecorder {
         },
         ...rrwebPrivacy,
         // On-error mode needs a full snapshot at the start of whatever window is uploaded.
-        ...(this.mode === "buffer" ? { checkoutEveryNms: Math.max(1000, Math.floor(this.config.bufferDuration / 2)) } : {}),
+        ...(this.buffered ? { checkoutEveryNms: Math.max(1000, Math.floor(this.config.bufferDuration / 2)) } : {}),
         errorHandler: () => true,
       });
     } catch (err) {
@@ -496,15 +501,17 @@ export class ReplayRecorder {
     const { chunks, dropped } = chunkEvents(events);
     if (dropped > 0 && this.config.upload?.debug) console.log(`[Overseer replay] dropped ${dropped} oversized event(s)`);
 
+    const counter = this.segments;
     chunks.forEach((chunk, index) => {
       const segment: ReplaySegment = {
         id: generateId(),
         sessionId: this.replayId,
-        sequenceNumber: this.nextSegment++,
+        sequenceNumber: counter.next++,
         startTime: chunk[0].timestamp,
         endTime: chunk[chunk.length - 1].timestamp,
         events: chunk,
-        errorIds: index === 0 ? errorIds : [],
+        // The player seeks to the end of the earliest segment that lists the error, so the last chunk is the one that ends at it.
+        errorIds: index === chunks.length - 1 ? errorIds : [],
       };
       this.session?.segments.push({ ...segment, events: [] });
       try {
@@ -512,24 +519,35 @@ export class ReplayRecorder {
       } catch {
         // a consumer's handler must not break recording
       }
-      const upload = this.config.upload;
-      if (upload && !this.uploadsRefused) {
-        void postSegment(
-          upload,
-          buildSegmentBody(upload, {
-            replayId: segment.sessionId,
-            sequenceNumber: segment.sequenceNumber,
-            events: segment.events,
-            errorIds: segment.errorIds ?? [],
-          }),
-          hiding,
-        ).then((outcome) => {
-          if (outcome === "refused") {
-            this.uploadsRefused = true;
-            // Nothing more can be stored this session: stop recording too (deferred, we may be inside stop()).
-            setTimeout(() => this.stop(), 0);
-          }
-        });
+      this.upload(counter, segment.sessionId, segment.sequenceNumber, segment.events, segment.errorIds ?? [], hiding);
+    });
+  }
+
+  private upload(
+    counter: { next: number },
+    replayId: string,
+    sequenceNumber: number,
+    events: RrwebEvent[],
+    errorIds: string[],
+    hiding: boolean,
+  ): void {
+    const upload = this.config.upload;
+    if (!upload || this.uploadsRefused) return;
+    void postSegment(upload, buildSegmentBody(upload, { replayId, sequenceNumber, events, errorIds }), hiding).then((outcome) => {
+      if (outcome === "refused") {
+        this.uploadsRefused = true;
+        // Nothing more can be stored this session: stop recording too (deferred, we may be inside stop()).
+        setTimeout(() => this.stop(), 0);
+      } else if (outcome === "too_large") {
+        // The server took it for over its cap: send it in two halves, the first under its own number, the second under
+        // the next one of that replay; the error ids go with the later half. One event too big alone is dropped.
+        if (events.length < 2) {
+          if (upload.debug) console.log("[Overseer replay] the server refused a single event as too large; dropping it");
+          return;
+        }
+        const middle = Math.ceil(events.length / 2);
+        this.upload(counter, replayId, sequenceNumber, events.slice(0, middle), [], hiding);
+        this.upload(counter, replayId, counter.next++, events.slice(middle), errorIds, hiding);
       }
     });
   }
