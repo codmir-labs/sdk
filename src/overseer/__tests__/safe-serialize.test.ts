@@ -98,13 +98,15 @@ describe("safe serialization", () => {
 
   it("(f) drops an event whose toJSON throws, reports it, and sends the next one in the same batch", async () => {
     const { c, onDropped } = client();
-    const badId = c.captureException(new Error("bad"), {
-      boom: {
-        toJSON() {
-          throw new Error("no");
-        },
+    // The context is cleaned before it is queued (a throwing toJSON there is cut), so the throw comes from the user.
+    c.setUser({
+      id: "u",
+      toJSON() {
+        throw new Error("no");
       },
     } as never);
+    const badId = c.captureException(new Error("bad"));
+    c.setUser(null);
     c.captureException(new Error("good"));
     expect(await c.flush()).toBe(true);
     await vi.advanceTimersByTimeAsync(5000);

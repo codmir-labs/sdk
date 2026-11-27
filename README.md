@@ -1305,10 +1305,17 @@ that undoes them. Cloud mode is off unless you pass `cloud`.
 
 - **What you attach is cleaned.** The `context` you pass to `captureException` and the `data` of every breadcrumb lose,
   at every level (anything nested deeper than 6 levels becomes `[Truncated]`): keys containing `cookie`,
-  `authorization`, `token`, `secret` or `password`, in any case; keys named `request`, `req`, `headers`, `header`,
+  `authorization`, `token`, `secret`, `password`, `passwd`, `pwd`, `jwt`, `session`, `signature`, `credential`, `cvv` or
+  `cvc`, `api key` or `private key` (with or without `-` or `_`: `apiKey`, `x-api-key`) and `card number` (`cardNumber`,
+  `card_number`), in any case; keys that are `auth`, but not `author` or `authority`; keys that are `sid` or `sig` or have
+  it as a whole part (`x-sig`, `userSid`, but not `side`, `design` or `signal`); keys named `request`, `req`, `headers`, `header`,
   `cookies`, `query`, `querystring`, `query_string`, `params`,
   `body`, `rawbody` or `formdata`; any `Request`, `Headers`, `URLSearchParams` or `FormData`; and any object that looks
-  like a request (it has `headers` and a `method` or `url`).
+  like a request (it has `headers` and a `method` or `url`). A value that is not a plain object is cleaned too: an `Error`
+  becomes `{ name, message }` (and its `cause`, cleaned the same way), a `URL` becomes its origin and path, and any other
+  class instance (a database document, an entity) is replaced by what its `toJSON()` returns, or by its own properties
+  when it has none, with the same rules applied to them (a `toJSON` that throws gives `"[Unserializable]"`). `Date`, `Map`,
+  `Set` and typed arrays are kept as they are.
 - **URLs keep origin and path only.** `fetch` and XHR breadcrumbs, navigation breadcrumbs, transactions and
   `request.url` drop the query string and fragment, so an `?access_token=` or an OAuth `#access_token=` in a URL does
   not ride along with your errors. Session replay's meta events carry the page's address as origin and path too, and

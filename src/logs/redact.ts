@@ -5,6 +5,8 @@
  * The rule the monitor builds on: nothing a log line says is kept or sent until it went through {@link redact}.
  */
 
+import { SECRET_WORDS } from "../overseer/secret-keys";
+
 /** Longest text any function here looks at. */
 export const MAX_INPUT = 1000;
 /** Longest group key. */
@@ -25,7 +27,7 @@ const PLACEHOLDER = "\\[(?:secret|token|jwt|email|ip|id|uuid|hex|num|cookie|reda
 // `auth` but not `author` (`authorization` stays one), and `sig` only as a whole part: `signal` and `design` are no secrets.
 // The name may be quoted, as in a JSON pair.
 const SECRET_PAIR = new RegExp(
-  `((?:token|secret|password|passwd|pwd|api[-_]?key|auth(?!or(?!i[sz]))|signature|session|credential)[A-Za-z0-9_-]{0,40}|(?:^|[^A-Za-z0-9])sig(?:[_-][A-Za-z0-9_-]{0,40})?)(["']?)\\s*[=:]\\s*(?!(?:bearer|basic)\\b|${PLACEHOLDER})("[^"]*"|'[^']*'|[^\\s,;&)}\\]]+)`,
+  `((?:${SECRET_WORDS})[A-Za-z0-9_-]{0,40}|(?:^|[^A-Za-z0-9])sig(?:[_-][A-Za-z0-9_-]{0,40})?)(["']?)\\s*[=:]\\s*(?!(?:bearer|basic)\\b|${PLACEHOLDER})("[^"]*"|'[^']*'|[^\\s,;&)}\\]]+)`,
   "gi",
 );
 // Each prefix has its own form, so that no ordinary word is one: `skipped_records` and `npm-mirror-service` are words.
