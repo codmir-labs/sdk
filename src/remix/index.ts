@@ -175,15 +175,7 @@ export function handleError(
 
   // Response errors carry status information
   if (isResponseLike(error)) {
-    if (!remixConfig.captureResponseErrors) return;
-
-    context.responseStatus = error.status;
-    context.responseStatusText = error.statusText;
-
-    coreCaptureException(
-      new Error(`Response Error: ${error.status} ${error.statusText}`),
-      context
-    );
+    captureThrownResponse(error, context);
     return;
   }
 
@@ -232,6 +224,12 @@ export function wrapLoader<T extends DataFunction>(loader: T): T {
     try {
       return await loader(args);
     } catch (error) {
+      if (isResponseLike(error)) {
+        if (remixConfig.captureLoaderErrors) {
+          captureThrownResponse(error, withHint({}, crash("remix-loader", undefined, "none")));
+        }
+        throw error;
+      }
       if (remixConfig.captureLoaderErrors) {
         coreCaptureException(error, withHint({}, crash("remix-loader", undefined, "none")));
       }
@@ -275,6 +273,12 @@ export function wrapAction<T extends DataFunction>(action: T): T {
     try {
       return await action(args);
     } catch (error) {
+      if (isResponseLike(error)) {
+        if (remixConfig.captureActionErrors) {
+          captureThrownResponse(error, withHint({}, crash("remix-action", undefined, "none")));
+        }
+        throw error;
+      }
       if (remixConfig.captureActionErrors) {
         const context: Record<string, unknown> = withHint({}, crash("remix-action", undefined, "none"));
 
@@ -402,6 +406,24 @@ function safeParseUrl(url: string): string {
   } catch {
     return url;
   }
+}
+
+/** Thrown responses already sent, so a wrapper and `handleError` seeing the same object send it once. */
+const sentResponses = new WeakSet<object>();
+
+/**
+ * A thrown `Response` is control flow (a redirect, a 404) unless it is a server error: only a status of 500 or more is
+ * sent, once per object, and only with `captureResponseErrors` on.
+ */
+function captureThrownResponse(response: RemixResponse, context: Record<string, unknown>): void {
+  if (!remixConfig.captureResponseErrors || response.status < 500) return;
+  if (sentResponses.has(response)) return;
+  sentResponses.add(response);
+
+  context.responseStatus = response.status;
+  context.responseStatusText = response.statusText;
+
+  coreCaptureException(new Error(`Response Error: ${response.status} ${response.statusText}`), context);
 }
 
 function isResponseLike(value: unknown): value is RemixResponse {

@@ -945,14 +945,16 @@ inside the request, as in the Express, Next.js and Hono integrations; the transa
 
 | Function | Captures | On the event |
 | --- | --- | --- |
-| `handleError(error, { request })` | Server errors Remix reports. A thrown `Response` is captured as `Response Error: <status> <statusText>` unless `captureResponseErrors: false` | event mechanism `remix-handleError`, `responseStatus`, `responseStatusText` |
-| `wrapLoader(fn)` | Errors thrown by the loader (`captureLoaderErrors`), plus a `loader` breadcrumb with method and path | event mechanism `remix-loader` |
-| `wrapAction(fn)` | Errors thrown by the action (`captureActionErrors`), plus an `action` breadcrumb | event mechanism `remix-action`, and `formDataKeys` (the form's field names, never their values) when the action threw before reading the body |
+| `handleError(error, { request })` | Server errors Remix reports. A thrown `Response` with a status of 500 or more is captured as `Response Error: <status> <statusText>` unless `captureResponseErrors: false`; a redirect or a 4xx is not an error | event mechanism `remix-handleError`, `responseStatus`, `responseStatusText` |
+| `wrapLoader(fn)` | Errors thrown by the loader (`captureLoaderErrors`); a thrown `Response` is rethrown and captured only as `handleError` would (5xx, `captureResponseErrors`), plus a `loader` breadcrumb with method and path | event mechanism `remix-loader` |
+| `wrapAction(fn)` | Errors thrown by the action (`captureActionErrors`); a thrown `Response` is handled as in `wrapLoader`, plus an `action` breadcrumb | event mechanism `remix-action`, and `formDataKeys` (the form's field names, never their values) when the action threw before reading the body |
 | `captureRemixServerError(error, request)` | Rendering errors from `entry.server.tsx`; returns the event id | event mechanism `remix-server-render` |
 | `setupBrowserTracking()` | `window` errors and unhandled rejections; click, `fetch`, XHR, navigation and console breadcrumbs, as `init()` was told (`trackNavigation: false` or `captureRouteChanges: false` turns the route ones off) | event mechanism `onerror` or `onunhandledrejection` |
 
-A thrown `Response` (`throw redirect()`, a 404) is classified by its status in a `remix/server` transaction and
-rethrown; it is not counted as an error.
+A thrown `Response` (`throw redirect()`, a 404) is rethrown unchanged by `wrapLoader`, `wrapAction` and `handleError`, and
+classified by its status in a `remix/server` transaction; a redirect (3xx) or a client error (4xx) is not an error.
+A status of 500 or more is captured as `Response Error: <status> <statusText>` when `captureResponseErrors` is on, once
+even when a wrapper and `handleError` both see the same object.
 
 </details>
 
@@ -1809,7 +1811,7 @@ Each framework's `init()` takes the core options plus its own:
 | `trackInputs` | `false` | Browser: `ui.input` breadcrumbs, never the value |
 | `trackRequests` | `true` | Browser: `fetch` and XHR breadcrumbs, `http.client` spans and `traceparent` |
 | `trackConsole` | `['error', 'warn']` | Browser: `console` breadcrumbs for these methods; `true` is the default list, `false` is off |
-| `captureResponseErrors` | `true` | Capture a thrown `Response` in `handleError` |
+| `captureResponseErrors` | `true` | Capture a thrown `Response` with a status of 500 or more, in `handleError`, `wrapLoader` and `wrapAction` |
 
 </details>
 
