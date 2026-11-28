@@ -203,6 +203,12 @@ describe.skipIf(!hasDist)("the @example blocks of the built type files", () => {
     expect(diagnostics.get(file)).toEqual([]);
   });
 
+  it("adds no error listener of its own beside init, which already captures uncaught errors", () => {
+    // `window.onerror = ...` or `addEventListener("error", ...)` next to `init(...)` would send each error twice.
+    const doubled = blocks.filter((b) => /\binit\(/.test(b.code) && /\bonerror\s*=|addEventListener\(\s*["']error["']/.test(b.code));
+    expect(doubled.map((b) => b.label)).toEqual([]);
+  });
+
   it("names a clientKey in every init, verify and quickVerify, and a dsn in none", () => {
     const wrong: string[] = [];
     let calls = 0;
