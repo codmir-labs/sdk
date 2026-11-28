@@ -33,7 +33,7 @@ export interface RequestScope {
   conversationId?: string | null;
   /** The request's session id, set by `setSessionId` inside it, read as `conversationId` is. A batch never carries it. */
   sessionId?: string | null;
-  /** Set on a scope a setter opened on its own (see `scopeForWrite`): the generation it belongs to, which `close` ends. */
+  /** Set on a scope the server gave a request on its own (see `withOwnRequestScope`): the generation it belongs to, which `close` ends. */
   openedAt?: number;
   /** Brings `user` up to date at the moment an event is built (Express: `req.user` may have been set since the scope opened). Must not throw. */
   refreshUser?: () => void;
@@ -52,7 +52,6 @@ export interface RequestScopeStrategy {
 interface RequestStore {
   getStore(): RequestScope | undefined;
   run<T>(scope: RequestScope, fn: () => T): T;
-  enterWith?(scope: RequestScope): void;
 }
 const STORE_SLOT = Symbol.for("codmir.request-scope.store");
 const slots = globalThis as Record<symbol, RequestStore | undefined>;
@@ -63,10 +62,10 @@ export function shareRequestScopeStore(create: () => RequestStore): void {
 }
 
 /**
- * Set by `@codmir/sdk/nextjs` on a server: a setter (`setUser`, `setTag`, `setTags`, `addBreadcrumb`, `setConversationId`,
- * `setSessionId`) that runs with no request scope then opens one for the rest of its async context instead of writing
- * the process-wide state. A Next.js route handler, server action or server component the app did not wrap has no scope,
- * and two of them in flight would otherwise hand each other's user to every later event.
+ * Set by `@codmir/sdk/nextjs` on a server: each request of the HTTP server then runs with a scope of its own (see
+ * {@link withOwnRequestScope}), so a setter (`setUser`, `setTag`, `setTags`, `addBreadcrumb`, `setConversationId`,
+ * `setSessionId`) inside a request the app did not wrap writes to that request, and two in flight never hand each
+ * other's user to a later event. Outside any request a setter stays process-wide.
  */
 const OPEN_ON_WRITE_SLOT = Symbol.for("codmir.request-scope.open-on-write");
 
@@ -79,35 +78,31 @@ export function retireOpenedScopes(): void {
   (globalThis as Record<symbol, unknown>)[GENERATION_SLOT] = generation() + 1;
 }
 
-/** From now on a setter with no request scope in effect opens its own (see {@link scopeForWrite}). */
+/** From now on `withOwnRequestScope` gives its callback a scope of its own. */
 export function openScopeOnWrite(): void {
   (globalThis as Record<symbol, unknown>)[OPEN_ON_WRITE_SLOT] = true;
 }
 
 /**
- * The scope a setter writes to: the request's, else, when `openScopeOnWrite` was called and the process has a request
- * store, a new one entered with `enterWith`, so the write and every later read in this async context and what it starts
- * see it and no other request does. Else undefined, and the setter writes the process-wide state, as it always did.
- * The scope it opens has no `url` and no `method`: it is not a request, so an event has no `request` for it.
+ * The scope a setter writes to: the request's, else undefined, and the setter writes the process-wide state, as it always
+ * did. A setter outside any request (module top level, `register()`, a startup script, a timer) is the process's, so
+ * every request that starts after it carries its value. Nothing here opens a scope with `enterWith`: that would run
+ * outside a request too and no request would ever see it.
  */
 export function scopeForWrite(): RequestScope | undefined {
-  const own = getRequestScope();
-  if (own) return own;
-  const store = slots[STORE_SLOT];
-  if (!store?.enterWith || !(globalThis as Record<symbol, unknown>)[OPEN_ON_WRITE_SLOT]) return undefined;
-  const fresh: RequestScope = { url: "", method: "", openedAt: generation() };
-  store.enterWith(fresh);
-  return fresh;
+  return getRequestScope();
 }
 
 /**
- * Runs `fn` with no request scope in effect, whatever the caller's async context held. An HTTP server runs each request's
- * handler in the async context of its connection, so a scope a setter opened in one request would otherwise be the next
- * request's on a keep-alive socket. Without a store, `fn` runs as it is.
+ * Runs `fn` as one request with an empty scope of its own, whatever the caller's async context held, when
+ * `openScopeOnWrite` was called and the process has a request store; else `fn` runs as it is. A setter inside `fn` finds
+ * the scope and writes to it, so it never reaches another request, and `close` retires it (`openedAt`). The scope is not
+ * a request: it has no `url` and no `method`, so an event has no `request` for it.
  */
-export function withoutRequestScope<T>(fn: () => T): T {
+export function withOwnRequestScope<T>(fn: () => T): T {
   const store = slots[STORE_SLOT];
-  return store ? store.run(undefined as unknown as RequestScope, fn) : fn();
+  if (!store || !(globalThis as Record<symbol, unknown>)[OPEN_ON_WRITE_SLOT]) return fn();
+  return store.run({ url: "", method: "", openedAt: generation() }, fn);
 }
 
 let current: RequestScope | undefined;

@@ -674,18 +674,19 @@ module.exports = { serverExternalPackages: ['@codmir/sdk'] };
 Each server error carries `request.url` (origin from `Host` and `X-Forwarded-Proto`, path without its query),
 `request.method`, and the route as `routerKind`, `routePath`, `routeType` and `route`. No header is sent.
 
-A route handler, server action or server component you did not wrap has no request scope, and on a Node.js server it does
-not need one for `setUser`: the first `setUser`, `setTag`, `setTags`, `addBreadcrumb`, `setConversationId` or `setSessionId`
-that runs in it opens a scope of its own for the rest of that request, so two overlapping requests each report their own
-user, tags and breadcrumbs, and a request that sets none reports none. An opened scope lives for one request: `init` makes
-every `request` event of the `node:http` and `node:https` servers in the process start with no opened scope, so the next
-request on a keep-alive connection, and every request after a setter ran before the server listened, starts clean. A server
-that does not emit `request` through `node:http` or `node:https` (HTTP/2, a runtime with its own server) is not covered, and
-there the scope may reach what runs next in the same async context: wrap the handler with `withCodmirTracing`. The scope is not a request, so an event it carries
-has no `request` (wrap the handler with `withCodmirTracing` for that, and for a transaction). The same call in code that runs once,
-such as `register()` in `instrumentation.ts`, no longer sets a process-wide value: pass `initialUser` and `initialTags` to
-`init` for those. The scope needs `process.getBuiltinModule` (Node.js 20.16 and 22.3 and later); on the Edge runtime, and on an
-older Node.js with no wrapped handler yet, these setters stay process-wide, so wrap the handler there.
+A route handler, server action or server component you did not wrap has no request scope of its own, and on a Node.js
+server it does not need one for `setUser`: `init` makes every `request` event of the `node:http` and `node:https` servers
+in the process (Next.js's own server included) run with a fresh, empty scope. A `setUser`, `setTag`, `setTags`,
+`addBreadcrumb`, `setConversationId` or `setSessionId` inside a request writes to that scope, so two overlapping requests
+each report their own user, tags and breadcrumbs, a request that sets none reports none, and the next request on a
+keep-alive connection starts clean. The same call outside any request writes the process-wide state, exactly as on a plain
+Node.js script: a tag, user or breadcrumb set at module top level, in `register()` in `instrumentation.ts`, in a startup
+script or from a timer reaches every request that starts after it. Nothing is opened with `enterWith`, so no setter ever
+leaves a scope behind outside a request. A server that does not emit `request` through `node:http` or `node:https`
+(HTTP/2, a runtime with its own server) is not covered: there these setters are process-wide, so wrap the handler with
+`withCodmirTracing`. The scope is not a request, so an event it carries has no `request` (wrap the handler with
+`withCodmirTracing` for that, and for a transaction). The scope needs `process.getBuiltinModule` (Node.js 20.16 and 22.3
+and later); on the Edge runtime, and on an older Node.js with no wrapped handler yet, these setters stay process-wide.
 
 Route handler transactions come from `@codmir/sdk/nextjs/server`. Next.js does not tell a handler its own route
 pattern, so pass it to group by route rather than by URL:

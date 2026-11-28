@@ -1,7 +1,7 @@
 /**
  * A Next.js route handler, server action or server component the app did not wrap with `withCodmirTracing` has no
- * request scope. On a server `@codmir/sdk/nextjs` still gives each one its own: the first setter that runs opens a scope
- * for the rest of that async context, so two overlapping requests each report their own user, tags and breadcrumbs, and
+ * request scope. On a server `@codmir/sdk/nextjs` still gives each one its own: the server's `request` event runs it in a
+ * scope of its own, and a setter inside writes there, so two overlapping requests each report their own user, tags and breadcrumbs, and
  * a request that sets none reports none. Plain Node, with the core `init`, keeps the process-wide user.
  */
 import { Agent, createServer, get, type Server } from "node:http";
@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Nextjs from "../index";
 import * as overseer from "../../overseer/index";
+import { withOwnRequestScope } from "../../overseer/request-scope";
 
 type Sent = {
   message: string;
@@ -47,8 +48,9 @@ afterEach(() => {
 const config = { dsn: "https://ingest.example.test/api/overseer", clientKey: "osk_test" };
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** `fn` in an async context of its own, as Node's HTTP server gives each request: a setter inside it never reaches the caller. */
-const request = <T>(fn: () => Promise<T>): Promise<T> => new Promise((resolve, reject) => setTimeout(() => fn().then(resolve, reject), 0));
+/** `fn` as one request, with the scope of its own that the server's `request` event gives it: a setter inside it never reaches the caller. */
+const request = <T>(fn: () => Promise<T>): Promise<T> =>
+  new Promise((resolve, reject) => setTimeout(() => withOwnRequestScope(fn).then(resolve, reject), 0));
 
 const eventFor = (message: string): Sent => {
   const found = sent.filter((e) => e.message === message);
@@ -200,6 +202,92 @@ describe("a node:http server", () => {
     expect(nobody.user).toBeUndefined();
     expect(nobody.tags?.who).toBeUndefined();
     expect(nobody.breadcrumbs ?? []).toEqual([]);
+  });
+});
+
+describe("a setter outside any request, on a node:http server", () => {
+  let server: Server;
+  let agent: Agent;
+  afterEach(async () => {
+    agent?.destroy();
+    await new Promise((resolve) => server?.close(resolve));
+  });
+
+  /** Two requests, one after the other, on one keep-alive socket; each reports and answers. */
+  async function twoRequests(before: () => void, handle: (who: string | null) => void = () => undefined): Promise<void> {
+    Nextjs.init(config);
+    before();
+    server = createServer(async (req, res) => {
+      const who = new URL(req.url ?? "/", "http://x").searchParams.get("who");
+      handle(who);
+      await sleep(10);
+      Nextjs.captureException(new Error(`report ${who ?? "nobody"}`));
+      res.end("ok");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    agent = new Agent({ keepAlive: true, maxSockets: 1 });
+    const call = (query: string): Promise<void> =>
+      new Promise((resolve, reject) => {
+        get({ host: "127.0.0.1", port, path: `/${query}`, agent }, (res) => {
+          res.resume();
+          res.on("end", resolve);
+        }).on("error", reject);
+      });
+    await call("?who=carol");
+    await call("");
+    await Nextjs.flush();
+  }
+
+  it("reaches every request: a tag and a user set before the server listens are on both events of a keep-alive socket", async () => {
+    await twoRequests(() => {
+      Nextjs.setTag("region", "us");
+      Nextjs.setUser({ id: "boot" });
+    });
+    for (const who of ["carol", "nobody"]) {
+      const event = eventFor(`report ${who}`);
+      expect(event.tags?.region, who).toBe("us");
+      expect(event.user?.id, who).toBe("boot");
+    }
+  });
+
+  it("carries a breadcrumb added before the server listens", async () => {
+    await twoRequests(() => Nextjs.addBreadcrumb({ category: "t", message: "booted" }));
+    expect(eventFor("report carol").breadcrumbs?.map((b) => b.message)).toEqual(["booted"]);
+    expect(eventFor("report nobody").breadcrumbs?.map((b) => b.message)).toEqual(["booted"]);
+  });
+
+  it("reaches the requests that start after a later top-level write, such as a timer's", async () => {
+    Nextjs.init(config);
+    server = createServer((req, res) => {
+      Nextjs.captureException(new Error(`report ${req.url}`));
+      res.end("ok");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    agent = new Agent({ keepAlive: true, maxSockets: 1 });
+    const call = (path: string): Promise<void> =>
+      new Promise((resolve, reject) => {
+        get({ host: "127.0.0.1", port, path, agent }, (res) => {
+          res.resume();
+          res.on("end", resolve);
+        }).on("error", reject);
+      });
+    await call("/first");
+    await new Promise<void>((resolve) => setTimeout(() => (Nextjs.setTag("late", "yes"), resolve()), 0));
+    await call("/second");
+    await Nextjs.flush();
+    expect(eventFor("report /first").tags?.late).toBeUndefined();
+    expect(eventFor("report /second").tags?.late).toBe("yes");
+  });
+
+  it("still keeps a user set inside one request from the next one, beside a user set at startup", async () => {
+    await twoRequests(
+      () => Nextjs.setUser({ id: "boot" }),
+      (who) => who && Nextjs.setUser({ id: who }),
+    );
+    expect(eventFor("report carol").user?.id).toBe("carol");
+    expect(eventFor("report nobody").user?.id).toBe("boot");
   });
 });
 
