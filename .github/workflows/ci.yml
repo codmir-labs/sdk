@@ -53,6 +53,12 @@ jobs:
       # Every entry type-checks under module commonjs (node10), nodenext as ESM and as CJS, and bundler; skips
       # without a build too.
       - run: npx vitest run src/__tests__/types-resolution.test.ts
+      # The feedback client against a server that keeps the door's contract, from the built files; skips without a
+      # build too, so it never ran in npm test.
+      - run: npx vitest run src/feedback/__tests__/built.test.ts
+      # Every @example of the built type files typechecks against dist and names a client key, and the Remix server
+      # example answers a request; both skip without a build too.
+      - run: npx vitest run src/__tests__/doc-examples.test.ts src/remix/__tests__/doc-example-server.test.ts
       # The sample app against a local capture server: an error, a 3-span trace and a masked replay.
       # Headed Chrome under Xvfb, never headless. The runner image has google-chrome and xvfb-run; Node 20 only.
       - name: Example smoke (examples/fullstack-basic)
