@@ -44,6 +44,7 @@ import { userForWire } from "./user-pii";
 import { claimKeepalive, KEEPALIVE_MAX_BYTES, onHideFlush } from "./keepalive";
 import { setAppRoot } from "./frame-file";
 import { detectEnvironment, detectRelease } from "./detect";
+import { stopPageErrors } from "./page-flags";
 import {
   DEFAULT_DSN,
   MAX_BATCH_BYTES,
@@ -1903,12 +1904,13 @@ export function flush(timeout?: number): Promise<boolean> {
 
 /**
  * Closes this copy's own client and empties the slot when it holds that client; another copy's client is left alone.
- * Removes the hooks `captureProcessErrors` installed. Resolves `true` when the queue was sent within `timeoutMs`
+ * Removes the hooks `captureProcessErrors` installed and the page listeners any entry installed. Resolves `true` when the queue was sent within `timeoutMs`
  * (default 2000), `false` otherwise, so a shutdown hook can wait for it; a caller that ignores the result is unaffected.
  */
 export function close(timeoutMs?: number): Promise<boolean> {
   stopProcessErrors?.();
   stopProcessErrors = null;
+  stopPageErrors();
   const sent = client ? client.close(timeoutMs) : Promise.resolve(true);
   if (client && slots[CLIENT_SLOT] === client) delete slots[CLIENT_SLOT];
   return sent;

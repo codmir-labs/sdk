@@ -47,8 +47,9 @@ import {
   getClient,
   type OverseerConfig,
 } from "../overseer/index";
-import { listen, Stops } from "../overseer/lifecycle";
-import { withHint, crash, eventFrame } from "../overseer/capture-hint";
+import { Stops } from "../overseer/lifecycle";
+import { withHint, crash } from "../overseer/capture-hint";
+import { installPageErrors } from "../overseer/page-errors";
 import { installBrowserBreadcrumbs, type BrowserBreadcrumbOptions, type ConsoleMethod } from "../overseer/browser-breadcrumbs";
 import { getRequestScope, installRequestScopeStore, requestScopeFrom, withRequestScope } from "../overseer/request-scope";
 
@@ -402,19 +403,9 @@ export function setupBrowserTracking(): void {
   if (typeof window === "undefined" || tracking) return;
   tracking = true;
 
-  // Global error handler
-  stops.add(
-    listen(window, "error", (event: ErrorEvent) => {
-      coreCaptureException(event.error || event.message, withHint({}, crash("onerror", undefined, eventFrame(event))));
-    }),
-  );
-
-  // Unhandled rejection handler
-  stops.add(
-    listen(window, "unhandledrejection", (event: PromiseRejectionEvent) => {
-      coreCaptureException(event.reason, withHint({}, crash("onunhandledrejection", undefined, "none")));
-    }),
-  );
+  // Uncaught errors and unhandled rejections: shared with the other entries, so a page that also called the root or
+  // `/browser` `init` still captures each once.
+  installPageErrors(stops);
 
   // Clicks, inputs, requests, route changes and console output: the set every browser entry records.
   stops.add(installBrowserBreadcrumbs(browserBreadcrumbs));
