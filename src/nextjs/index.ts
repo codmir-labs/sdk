@@ -38,7 +38,7 @@ import { listen, Stops } from "../overseer/lifecycle";
 import { withHint, crash, eventFrame } from "../overseer/capture-hint";
 import { installBrowserBreadcrumbs, type ConsoleMethod } from "../overseer/browser-breadcrumbs";
 import { scrubUrl } from "../overseer/url-scrub";
-import { getRequestScope, requestScopeFrom, withRequestScope, type RequestScope } from "../overseer/request-scope";
+import { getRequestScope, openScopeOnWrite, requestScopeFrom, shareRequestScopeStore, withRequestScope, type RequestScope } from "../overseer/request-scope";
 import { flushInBackground, isServerlessRuntime } from "../overseer/flush-in-background";
 
 // =============================================================================
@@ -111,6 +111,25 @@ function withDigest(scope: RequestScope, error: unknown): RequestScope {
   const digest = digestOf(error);
   return digest ? { ...scope, tags: { ...scope.tags, digest } } : scope;
 }
+/**
+ * On a server: a setter that runs outside a request scope (a route handler, server action or server component the app
+ * did not wrap with `withCodmirTracing`) opens a scope of its own instead of writing the process-wide state, which
+ * every later event of every request would carry. Needs `AsyncLocalStorage`: Node 20.16+ and 22.3+ hand it over with
+ * `process.getBuiltinModule`; elsewhere (the Edge runtime throws on it) the store is the one a wrapper installed, if any,
+ * and without one the setters stay process-wide.
+ */
+function startServerScopes(): void {
+  try {
+    const getBuiltinModule = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } }).process?.getBuiltinModule;
+    const hooks = getBuiltinModule?.("node:async_hooks") as { AsyncLocalStorage?: new () => never } | undefined;
+    const Store = hooks?.AsyncLocalStorage;
+    if (Store) shareRequestScopeStore(() => new Store());
+  } catch {
+    // no process.getBuiltinModule here
+  }
+  openScopeOnWrite();
+}
+
 /** What `init` started in a browser, ended by `close`. */
 const stops = new Stops();
 
@@ -144,6 +163,7 @@ export function init(config: NextjsConfig = {}): void {
     ...(environment?.trim() ? { environment: environment.trim() } : {}),
   });
   isInitialized = true;
+  if (typeof window === "undefined") startServerScopes();
 
   // Browser-only setup
   if (typeof window !== "undefined") {

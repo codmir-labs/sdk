@@ -674,6 +674,15 @@ module.exports = { serverExternalPackages: ['@codmir/sdk'] };
 Each server error carries `request.url` (origin from `Host` and `X-Forwarded-Proto`, path without its query),
 `request.method`, and the route as `routerKind`, `routePath`, `routeType` and `route`. No header is sent.
 
+A route handler, server action or server component you did not wrap has no request scope, and on a Node.js server it does
+not need one for `setUser`: the first `setUser`, `setTag`, `setTags`, `addBreadcrumb`, `setConversationId` or `setSessionId`
+that runs in it opens a scope of its own for the rest of that request, so two overlapping requests each report their own
+user, tags and breadcrumbs, and a request that sets none reports none. The scope is not a request, so an event it carries
+has no `request` (wrap the handler with `withCodmirTracing` for that, and for a transaction). The same call in code that runs once,
+such as `register()` in `instrumentation.ts`, no longer sets a process-wide value: pass `initialUser` and `initialTags` to
+`init` for those. The scope needs `process.getBuiltinModule` (Node.js 20.16 and 22.3 and later); on the Edge runtime, and on an
+older Node.js with no wrapped handler yet, these setters stay process-wide, so wrap the handler there.
+
 Route handler transactions come from `@codmir/sdk/nextjs/server`. Next.js does not tell a handler its own route
 pattern, so pass it to group by route rather than by URL:
 
@@ -897,7 +906,8 @@ Which handlers run in a request scope that survives `await` without you doing an
 | Next.js `withCodmirTracing`, `withCodmirMiddleware` from `/nextjs/server` | yes | yes |
 | Remix `withCodmirTracing`, `withCodmirRequestHandler` from `/remix/server` | yes | yes |
 | Next.js `captureRequestError`, `captureRouterError` | only around the capture itself | no: there is no user of the request |
-| A handler you did not wrap, or code that runs before Express's `requestHandler()` | none | `setUser`, `setTag`, `setTags` and `addBreadcrumb` there are process-wide, so two requests that overlap can see each other's user, tags and breadcrumbs: wrap the handler, or call them inside a wrapped one |
+| Next.js: a route handler, server action or server component you did not wrap, on a Node.js server | its own, opened by the first `setUser`, `setTag`, `setTags`, `addBreadcrumb`, `setConversationId` or `setSessionId` in it | yes, for what that call starts (see [Next.js](#nextjs)) |
+| A handler you did not wrap, or code that runs before Express's `requestHandler()`, anywhere else | none | `setUser`, `setTag`, `setTags` and `addBreadcrumb` there are process-wide, so two requests that overlap can see each other's user, tags and breadcrumbs: wrap the handler, or call them inside a wrapped one |
 
 The scope is AsyncLocalStorage, installed by the first request that goes through one of these wrappers.
 

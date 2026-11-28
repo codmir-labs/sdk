@@ -50,6 +50,7 @@ export interface RequestScopeStrategy {
 interface RequestStore {
   getStore(): RequestScope | undefined;
   run<T>(scope: RequestScope, fn: () => T): T;
+  enterWith?(scope: RequestScope): void;
 }
 const STORE_SLOT = Symbol.for("codmir.request-scope.store");
 const slots = globalThis as Record<symbol, RequestStore | undefined>;
@@ -57,6 +58,35 @@ const slots = globalThis as Record<symbol, RequestStore | undefined>;
 /** Creates the process's request store on first use; every later call, from any copy of the module, keeps it. */
 export function shareRequestScopeStore(create: () => RequestStore): void {
   if (!slots[STORE_SLOT]) slots[STORE_SLOT] = create();
+}
+
+/**
+ * Set by `@codmir/sdk/nextjs` on a server: a setter (`setUser`, `setTag`, `setTags`, `addBreadcrumb`, `setConversationId`,
+ * `setSessionId`) that runs with no request scope then opens one for the rest of its async context instead of writing
+ * the process-wide state. A Next.js route handler, server action or server component the app did not wrap has no scope,
+ * and two of them in flight would otherwise hand each other's user to every later event.
+ */
+const OPEN_ON_WRITE_SLOT = Symbol.for("codmir.request-scope.open-on-write");
+
+/** From now on a setter with no request scope in effect opens its own (see {@link scopeForWrite}). */
+export function openScopeOnWrite(): void {
+  (globalThis as Record<symbol, unknown>)[OPEN_ON_WRITE_SLOT] = true;
+}
+
+/**
+ * The scope a setter writes to: the request's, else, when `openScopeOnWrite` was called and the process has a request
+ * store, a new one entered with `enterWith`, so the write and every later read in this async context and what it starts
+ * see it and no other request does. Else undefined, and the setter writes the process-wide state, as it always did.
+ * The scope it opens has no `url` and no `method`: it is not a request, so an event has no `request` for it.
+ */
+export function scopeForWrite(): RequestScope | undefined {
+  const own = getRequestScope();
+  if (own) return own;
+  const store = slots[STORE_SLOT];
+  if (!store?.enterWith || !(globalThis as Record<symbol, unknown>)[OPEN_ON_WRITE_SLOT]) return undefined;
+  const fresh: RequestScope = { url: "", method: "" };
+  store.enterWith(fresh);
+  return fresh;
 }
 
 let current: RequestScope | undefined;

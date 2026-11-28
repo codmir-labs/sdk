@@ -1,11 +1,13 @@
 /**
  * Runs after `next build` (`npm run send-check`): proves that a server error reaches the server. It starts a stub ingest
  * server, starts `next start` with the SDK pointed at the stub, requests /boom (a server component that throws a known
- * message) and waits up to 30 s for the stub to receive the error event. Exit 0 when exactly one error event carries
- * that message; otherwise exit 1, with what arrived. Both servers are stopped by PID on every path.
+ * message) and waits up to 30 s for the stub to receive the error event. Then it calls /api/who, a route handler the app
+ * does not wrap, with ?who=carol and ?who=dave at once, and again with no `who` over the same keep-alive connections: each
+ * error must carry its own user, and the last one none. Exit 0 when exactly one error event carries the /boom message and
+ * the /api/who errors have the right users; otherwise exit 1, with what arrived. Both servers are stopped by PID on every path.
  */
 import { spawn } from "node:child_process";
-import { createServer } from "node:http";
+import { Agent, createServer, get } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,7 +25,7 @@ const stub = createServer((req, res) => {
     let events = [];
     try {
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      events = (body.events ?? []).map((e) => ({ type: e?.type, message: e?.event?.message ?? e?.message }));
+      events = (body.events ?? []).map((e) => ({ type: e?.type, message: e?.event?.message ?? e?.message, user: e?.event?.user?.id ?? e?.user?.id }));
     } catch {
       // not JSON: recorded with no events
     }
@@ -32,6 +34,21 @@ const stub = createServer((req, res) => {
     res.end("{}");
   });
 });
+
+const WHO = "codmir send-check: who ";
+const errorsOfWho = () => received.flatMap((r) => r.events).filter((e) => e.type === "error" && e.message?.includes(WHO));
+
+// GET over a shared keep-alive agent, so a later request reuses a connection an earlier one used.
+const keepAlive = new Agent({ keepAlive: true, maxSockets: 2 });
+const getKeepAlive = (url) =>
+  new Promise((resolve, reject) => {
+    const req = get(url, { agent: keepAlive, timeout: 15_000 }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode));
+    });
+    req.on("timeout", () => req.destroy(new Error(`GET ${url} timed out`)));
+    req.on("error", reject);
+  });
 
 const errorsWithMessage = () => received.flatMap((r) => r.events).filter((e) => e.type === "error" && e.message?.includes(MESSAGE));
 
@@ -108,7 +125,26 @@ async function run() {
   while (errorsWithMessage().length === 0 && Date.now() < deadline) await sleep(250);
   // Once it is there, give a duplicate a moment to arrive: the check is for exactly one.
   if (errorsWithMessage().length > 0) await sleep(2000);
-  return { ok: errorsWithMessage().length === 1, why: `${errorsWithMessage().length} error event(s) with the message, expected 1`, output };
+  if (errorsWithMessage().length !== 1) return { ok: false, why: `${errorsWithMessage().length} error event(s) with the message, expected 1`, output };
+
+  // Two overlapping requests of an unwrapped handler, each of which sets its own user and waits before it reports.
+  const statuses = await Promise.all(["carol", "dave"].map((who) => getKeepAlive(`${base}/api/who?who=${who}`)));
+  console.log(`GET /api/who?who=carol and ?who=dave, overlapping, answered ${statuses.join(" and ")}`);
+  // Then, on the same connections, requests that set no user.
+  const later = await Promise.all([getKeepAlive(`${base}/api/who`), getKeepAlive(`${base}/api/who`)]);
+  console.log(`GET /api/who twice with no who, on the same keep-alive connections, answered ${later.join(" and ")}`);
+  const whoDeadline = Date.now() + WAIT_MS;
+  while (errorsOfWho().length < 4 && Date.now() < whoDeadline) await sleep(250);
+  await sleep(500);
+
+  const users = (name) => errorsOfWho().filter((e) => e.message.endsWith(` ${name}`)).map((e) => e.user ?? null);
+  const expected = { carol: ["carol"], dave: ["dave"], nobody: [null, null] };
+  const actual = { carol: users("carol"), dave: users("dave"), nobody: users("nobody") };
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    return { ok: false, why: `/api/who errors carry the wrong user: ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`, output };
+  }
+  console.log(`PASS  each /api/who error carries its own user: ${JSON.stringify(actual)}`);
+  return { ok: true, why: "", output };
 }
 
 async function nextVersion() {
@@ -122,6 +158,7 @@ try {
 } catch (error) {
   result = { ok: false, why: `the check itself failed: ${error?.stack ?? error}`, output: "" };
 }
+keepAlive.destroy();
 await stopAll();
 
 if (result.ok) {
