@@ -1386,6 +1386,11 @@ when `upload.debug` is on), and the rest of its list still applies.
 - A replay has at most two uploads in flight at a time: the chunks of an error's history, and segments emitted while
   others are out, go in sequence order and the next starts when one answers, so an error sends no more than about
   4 MiB, two requests at a time, not everything at once. At page hide what still waits goes out like the retry queue.
+- An upload request that has not answered in 30 s (`UPLOAD_TIMEOUT_MS`) is aborted and handled as a network error: its
+  slot is freed and its segment goes to the retry queue, so two requests that never answer cannot stall the rest. It is not
+  tried again at once. A `keepalive` request sent at page hide has no timeout. The segments waiting for a slot hold at most
+  5 MiB of request bodies; past that the oldest of a replay are lost with the later ones of it, which could not play
+  without them, and `upload.debug` prints one line.
 - `ReplaySession` (what `stop()` returns) keeps the ids of the newest 500 errors and the metadata of the newest 500
   segments; a page that lives for days does not grow it.
 - Sizes are counted in UTF-8 bytes, the unit the server limits, so a page in Chinese, Japanese, Korean or Cyrillic is cut

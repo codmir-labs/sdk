@@ -264,6 +264,9 @@ const MAX_SESSION_SEGMENTS = 500;
 /** At most this many requests of one recorder are in flight at once (the retry queue's one request counts); the rest wait their turn. */
 const MAX_UPLOADS_IN_FLIGHT = 2;
 
+/** Segments waiting for a free slot hold at most this many bytes of request bodies; past it the oldest of a replay are lost, as in the retry queue. */
+const MAX_WAITING_BYTES = 5 * 1024 * 1024;
+
 /** An early checkout is requested when the current generation reaches this, so the two generations stay within the cap... */
 const CHECKOUT_AT_BYTES = MAX_BUFFER_BYTES / 2;
 /** ...and only when it has grown this far past its snapshot, so a large snapshot cannot loop. */
@@ -871,6 +874,20 @@ export class ReplayRecorder {
     while (at > 0 && this.waiting[at - 1].replayId === replayId && this.waiting[at - 1].sequenceNumber > sequenceNumber) at--;
     this.waiting.splice(at, 0, segment);
     this.pump();
+    if (this.waiting.includes(segment)) this.enforceWaitingBudget(segment);
+  }
+
+  /**
+   * A segment that still waits for a slot is sized; while the waiting ones hold more than {@link MAX_WAITING_BYTES}, the
+   * oldest is lost with everything of its replay behind it, so nothing that cannot play is sent later.
+   */
+  private enforceWaitingBudget(segment: QueuedSegment): void {
+    segment.bytes = utf8Bytes(JSON.stringify(this.bodyOf(segment)));
+    while (this.waiting.reduce((sum, waiting) => sum + waiting.bytes, 0) > MAX_WAITING_BYTES) {
+      const oldest = this.waiting[0];
+      if (this.config.upload?.debug) console.log("[Overseer replay] too many segments are waiting to be sent; dropping the oldest");
+      this.lose(oldest.replayId, oldest.epoch);
+    }
   }
 
   /** Starts waiting segments while a slot is free. The retry queue's request takes a slot while it is out. */
