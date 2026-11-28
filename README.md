@@ -678,7 +678,7 @@ A route handler, server action or server component you did not wrap has no reque
 server it does not need one for `setUser`: `init` makes every `request` event of the `node:http` and `node:https` servers
 in the process (Next.js's own server included) run with a fresh, empty scope. A `setUser`, `setTag`, `setTags`,
 `addBreadcrumb`, `setConversationId` or `setSessionId` inside a request writes to that scope, so two overlapping requests
-each report their own user, tags and breadcrumbs, a request that sets none reports none, and the next request on a
+each report their own user, tags and breadcrumbs, a request that sets none reports only the process-wide values, and the next request on a
 keep-alive connection starts clean. The same call outside any request writes the process-wide state, exactly as on a plain
 Node.js script: a tag, user or breadcrumb set at module top level, in `register()` in `instrumentation.ts`, in a startup
 script or from a timer reaches every request that starts after it. Nothing is opened with `enterWith`, so no setter ever
@@ -911,7 +911,7 @@ Which handlers run in a request scope that survives `await` without you doing an
 | Next.js `withCodmirTracing`, `withCodmirMiddleware` from `/nextjs/server` | yes | yes |
 | Remix `withCodmirTracing`, `withCodmirRequestHandler` from `/remix/server` | yes | yes |
 | Next.js `captureRequestError`, `captureRouterError` | only around the capture itself | no: there is no user of the request |
-| Next.js: a route handler, server action or server component you did not wrap, on a Node.js server | its own, opened by the first `setUser`, `setTag`, `setTags`, `addBreadcrumb`, `setConversationId` or `setSessionId` in it | yes, for what that call starts; it ends with the request, since `init` starts each `node:http` and `node:https` request with none (see [Next.js](#nextjs)) |
+| Next.js: a route handler, server action or server component you did not wrap, on a Node.js server | its own: `init` gives one to every `node:http` and `node:https` request | yes, for the whole request; a setter outside any request stays process-wide (see [Next.js](#nextjs)) |
 | A handler you did not wrap, or code that runs before Express's `requestHandler()`, anywhere else | none | `setUser`, `setTag`, `setTags` and `addBreadcrumb` there are process-wide, so two requests that overlap can see each other's user, tags and breadcrumbs: wrap the handler, or call them inside a wrapped one |
 
 The scope is AsyncLocalStorage, installed by the first request that goes through one of these wrappers.
