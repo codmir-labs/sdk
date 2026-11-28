@@ -45,4 +45,26 @@ describe("browser init, browserTracing", () => {
     init({ dsn: INGEST, clientKey: "osk_test", browserTracing: { routeName: () => "/home" } });
     expect(getActiveSpan()?.name).toBe("/home");
   });
+
+  it("starts a pageload root when tracesSampler is set and tracesSampleRate is not", async () => {
+    const { init, getActiveSpan } = await load();
+    const seen: unknown[] = [];
+    init({
+      dsn: INGEST,
+      clientKey: "osk_test",
+      tracesSampler: (context) => {
+        seen.push(context);
+        return true;
+      },
+    });
+    expect(getActiveSpan()?.op).toBe("pageload");
+    expect(getActiveSpan()?.sampled).toBe(true);
+    expect(seen).toEqual([{ name: "/", op: "pageload" }]);
+  });
+
+  it("starts nothing with tracesSampler and browserTracing: false", async () => {
+    const { init, getActiveSpan } = await load();
+    init({ dsn: INGEST, clientKey: "osk_test", tracesSampler: () => 1, browserTracing: false });
+    expect(getActiveSpan()).toBeUndefined();
+  });
 });

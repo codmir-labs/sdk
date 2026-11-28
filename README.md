@@ -429,7 +429,7 @@ const err = new TypeError('Card 4242 declined for order 1234');
 captureException(err, { orderId: 'ord_123', password: 'hunter2', req: { headers: { cookie: 'sid=1' }, method: 'POST' } });
 ```
 
-1. **Sampling and id.** `enabled` and `sampleRate` decide whether the error is kept; if it is, it gets a 21-character id,
+1. **Sampling and id.** `enabled` and `sampleRate` decide whether the error is kept (a message uses `messageSampleRate` when it is set); if it is, it gets a 21-character id,
    which `captureException` returns at once.
 2. **Stack.** `parseStackTrace` reads every frame and marks `in_app` false for `node_modules`, Node internals, the
    SDK's own files, a frame with no `file:line` (`Promise.all (index 0)`, `<anonymous>`, `native`), a browser extension
@@ -1148,7 +1148,7 @@ three in-app frames carry source lines. The retry timer is `unref`'d, so a pendi
 
 ## Tracing
 
-Tracing is off until `tracesSampleRate` is above 0. The decision is made once per trace, at its root, and travels to
+Tracing is off until `tracesSampleRate` is above 0 or a `tracesSampler` is set. The decision is made once per trace, at its root, and travels to
 other services in the `traceparent` sampled flag.
 
 ```ts
@@ -1224,11 +1224,36 @@ export async function handleJob(job: { traceparent?: string; run(): Promise<void
 <details>
 <summary><b>Sampling, propagation and outgoing requests</b></summary>
 
+`tracesSampler` decides per trace root, so an app can keep every checkout trace and drop its health checks:
+
+```ts
+init({
+  clientKey: process.env.CODMIR_CLIENT_KEY,
+  tracesSampler: ({ name, op, parentSampled, request }) => {
+    if (request?.url.endsWith('/health')) return 0;
+    if (name.includes('/checkout')) return 1;
+    return parentSampled ?? 0.1; // follow the caller, else one trace in ten
+  },
+});
+```
+
+The context holds the root's `name` and `op`; `parentSampled`, the incoming `traceparent`'s flag (`undefined` when
+there is none); and `request` (`method` and `url` without its query string) when a server integration (Express,
+Next.js, Hono, Remix) starts the root. Browser pageload and navigation roots give `name` and `op` only. Return a
+probability from 0 to 1, or a boolean. NaN, a negative number or a non-number counts as 0, a number above 1 as 1. A
+sampler that throws counts as 0 for that root, is reported once with `debug` on, and never breaks the request. It is
+called once per trace root and never for a child span; the answer travels downstream in the `traceparent` sampled flag.
+Without a sampler, the rules below hold unchanged.
+
+`messageSampleRate` does the same for messages: `init({ sampleRate: 1, messageSampleRate: 0.1 })` keeps every error and
+one message in ten. Unset, messages follow `sampleRate`.
+
 | Rule | Behaviour |
 | --- | --- |
-| `tracesSampleRate: 0` (default) | Nothing is recorded, even when the caller sent a sampled `traceparent` |
-| Incoming `traceparent` | Its sampled flag wins over your rate, and its trace id is kept |
-| No incoming `traceparent` | Sampled with probability `tracesSampleRate` |
+| `tracesSampler` set | It decides every trace root and wins over `tracesSampleRate`; see below |
+| `tracesSampleRate: 0` (default, no sampler) | Nothing is recorded, even when the caller sent a sampled `traceparent` |
+| Incoming `traceparent` (no sampler) | Its sampled flag wins over your rate, and its trace id is kept |
+| No incoming `traceparent` (no sampler) | Sampled with probability `tracesSampleRate` |
 | `traceparent` format | W3C version 00: `00-<32 hex trace id>-<16 hex span id>-<01 or 00>` (`formatTraceparent`, `parseTraceparent`) |
 | Outgoing `traceparent` | Added to same-origin requests and to URLs matching `tracePropagationTargets` (a string matches when the full URL contains it, a RegExp when it tests true), never to the Codmir ingest URL, never over an existing header |
 | `fetch` spans | `@codmir/sdk/browser` and `@codmir/sdk/express` wrap `fetch` for you. Elsewhere call `instrumentFetch()` (and `instrumentXhr()` in a browser) from `@codmir/sdk/tracing`; both are idempotent and return a function that undoes them |
@@ -1242,7 +1267,7 @@ browser, the active span is a stack: two flows running at once can see each othe
 <details>
 <summary><b>Browser pageload, navigation and web vitals</b></summary>
 
-`@codmir/sdk/browser` starts browser tracing when `tracesSampleRate` is above 0 (or when you pass `browserTracing:
+`@codmir/sdk/browser` starts browser tracing when `tracesSampleRate` is above 0 or a `tracesSampler` is set (or when you pass `browserTracing:
 true` or an options object). You can also call `startBrowserTracing(options)` yourself.
 
 - A `pageload` transaction starts at `performance.timeOrigin`; each client-side route change (`pushState`,
@@ -1907,8 +1932,10 @@ Leave it off unless you serve that manifest.
 | `service` | none | Service name on each request (cut to 64 characters) |
 | `enabled` | `true` | `false` makes every capture a no-op that returns `''` |
 | `debug` | `false` | Logs `[Overseer]` lines: init, failed sends, retries, events the server dropped |
-| `sampleRate` | `1` | Share of errors and messages kept (0 to 1) |
+| `sampleRate` | `1` | Share of errors kept (0 to 1), and of messages too unless `messageSampleRate` is set |
+| `messageSampleRate` | none | Share of message events kept (0 to 1). When set it replaces `sampleRate` for messages; errors keep `sampleRate` |
 | `tracesSampleRate` | `0` | Share of traces recorded, decided once at the root |
+| `tracesSampler` | none | `(context) => number \| boolean`: decides every trace root and wins over `tracesSampleRate`. See [Tracing](#tracing) |
 | `tracePropagationTargets` | `[]` | URLs, besides same-origin ones, that get a `traceparent` header |
 | `replaysSessionSampleRate` | `0` | Read by `startReplay()` |
 | `replaysOnErrorSampleRate` | `1` | Read by `startReplay()` |
@@ -1995,7 +2022,7 @@ Each framework's `init()` takes the core options plus its own:
 | `trackRequests` | `true` | `fetch` and XHR breadcrumbs, `http.client` spans and `traceparent` |
 | `trackNavigation` | `true` | `navigation` breadcrumbs: the first page, `pushState`, `replaceState`, `popstate` |
 | `trackConsole` | `['error', 'warn']` | `console` breadcrumbs for these methods (`'error'`, `'warn'`, `'info'`, `'log'`, `'debug'`); `true` is the default list, `false` is off. Messages are masked, cut to 200 characters, and a repeat of the newest one raises its `data.count` |
-| `browserTracing` | on when `tracesSampleRate` > 0 | `true`, `false`, or `{ idleTimeout, finalTimeout, routeName, onPageloadEnd }` |
+| `browserTracing` | on when `tracesSampleRate` > 0 or `tracesSampler` is set | `true`, `false`, or `{ idleTimeout, finalTimeout, routeName, onPageloadEnd }` |
 
 </details>
 
