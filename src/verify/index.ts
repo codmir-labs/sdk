@@ -132,7 +132,8 @@ export async function verify(config: VerifyConfig): Promise<VerifyResult> {
 async function probe(client: OverseerClient, config: OverseerConfig, where: string, timeoutMs: number, sending: () => void): Promise<string | { id: string }> {
   const why = (what: string): string => `The event was not sent: ${what}.`;
   if (config.enabled === false) return why("enabled is false");
-  if (!((config.sampleRate ?? 1) > 0)) return why("sampleRate is 0");
+  const messageRate = config.messageSampleRate ?? config.sampleRate ?? 1;
+  if (!(messageRate > 0)) return why(`${config.messageSampleRate === undefined ? "sampleRate" : "messageSampleRate"} is 0`);
   const meta = { environment: client.getEnvironment(), release: client.getRelease() };
   const draft: OverseerEvent = {
     id: generateId(),

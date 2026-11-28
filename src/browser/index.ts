@@ -138,7 +138,7 @@ export function init(config: BrowserConfig = {}): void {
   stops.add(installBrowserBreadcrumbs({ trackClicks, trackInputs, trackRequests, trackNavigation, trackConsole }));
 
   // Pageload / navigation roots. Started after fetch is instrumented so early requests become child spans.
-  const tracingOn = browserTracing === undefined ? (getClient()?.getTracesSampleRate() ?? 0) > 0 : browserTracing !== false;
+  const tracingOn = browserTracing === undefined ? (getClient()?.hasTracesSampler() ?? false) || (getClient()?.getTracesSampleRate() ?? 0) > 0 : browserTracing !== false;
   if (tracingOn) {
     stops.add(startBrowserTracing(typeof browserTracing === "object" ? browserTracing : {}));
   }

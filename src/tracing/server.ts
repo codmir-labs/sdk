@@ -75,7 +75,7 @@ export function pathOf(url: string): string {
  * Opens an `http.server` transaction (continuing `info.traceparent`) named `METHOD route`, runs `fn` inside it,
  * and ends it with the result's status. A result or a thrown value that carries a `status` (a `Response`, as
  * Remix throws for redirects and 4xx) is classified by that status and, if thrown, rethrown. Any other throw
- * marks the transaction `error` and rethrows. Whether it is sent is `startTransaction`'s call (`tracesSampleRate`).
+ * marks the transaction `error` and rethrows. Whether it is sent is `startTransaction`'s call (`tracesSampler`, else `tracesSampleRate`).
  *
  * `resolveRoute` lets the caller refine the name once `fn` has run (Hono knows its matched route only then).
  */
@@ -91,6 +91,7 @@ export async function traceServerRequest<T>(
     name: `${method} ${info.route}`,
     traceparent: info.traceparent,
     data: { "http.request.method": method },
+    ...(info.url ? { request: { method, url: info.url.split(/[?#]/)[0] } } : {}),
   });
   const rename = (): void => {
     const route = resolveRoute?.();

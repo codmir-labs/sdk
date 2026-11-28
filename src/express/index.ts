@@ -461,6 +461,7 @@ export function tracingHandler(): RequestMiddleware {
       name: `${req.method} ${pathOnly(req)}`,
       traceparent: Array.isArray(header) ? header[0] : header,
       data: { "http.request.method": req.method },
+      request: { method: req.method, url: scopeOf(req).url },
     });
     if (req._codmir) req._codmir.span = tx;
 

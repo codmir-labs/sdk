@@ -67,6 +67,7 @@ export type {
   RequestData,
   SeverityLevel,
   CaptureContext,
+  TracesSamplerContext,
   SelfHealingConfig,
   PatchManifest,
   PatchEntry,

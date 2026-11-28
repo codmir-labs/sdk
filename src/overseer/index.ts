@@ -71,6 +71,22 @@ import {
 // Types
 // =============================================================================
 
+/** What `tracesSampler` is asked about a trace root: only what the path that starts the root has. */
+export interface TracesSamplerContext {
+  /** The root's name, such as `GET /users/:id` or a page path. */
+  name: string;
+  /** The root's op, such as `http.server`, `pageload` or `navigation`. */
+  op: string;
+  /** The incoming `traceparent`'s sampled flag, or `undefined` when the root continues no trace. */
+  parentSampled?: boolean;
+  /**
+   * The request a server integration is serving. From Express, `url` is origin (from `Host` and `X-Forwarded-Proto`) plus path.
+   * From Next.js, Hono and Remix it is the request's own `url` as the runtime gives it (absolute, on the host the runtime sees),
+   * cut at the first `?` or `#`. Neither carries a query string or fragment.
+   */
+  request?: { method: string; url: string };
+}
+
 export interface OverseerConfig {
   /** Data Source Name - your Codmir project endpoint (optional if clientKey is set) */
   dsn?: string;
@@ -96,13 +112,55 @@ export interface OverseerConfig {
   enabled?: boolean;
   /** Enable debug logging */
   debug?: boolean;
-  /** Sample rate for errors (0-1) */
+  /**
+   * Sample rate for errors (0-1). Also the rate for messages, unless `messageSampleRate` is set.
+   */
   sampleRate?: number;
+  /**
+   * Sample rate for message events (0-1): `captureMessage` and the browser's `captureConsoleErrors`. When set, it
+   * replaces `sampleRate` for messages and errors keep `sampleRate`; unset, messages follow `sampleRate`.
+   *
+   * @example
+   * ```typescript
+   * import { init } from "@codmir/sdk";
+   *
+   * // Keep every error, and one message in ten.
+   * init({
+   *   clientKey: process.env.CODMIR_CLIENT_KEY,
+   *   sampleRate: 1,
+   *   messageSampleRate: 0.1,
+   * });
+   * ```
+   */
+  messageSampleRate?: number;
   /**
    * Sample rate for traces/performance (0-1). Default 0: no transactions are sent. The decision is made once
    * per trace at its root and inherited downstream through the `traceparent` sampled flag.
    */
   tracesSampleRate?: number;
+  /**
+   * Decides every trace root, and wins over `tracesSampleRate`. It gets the root's `name` and `op`, `parentSampled`
+   * (the incoming `traceparent`'s flag, `undefined` when there is none) and, for a server integration, the
+   * `request`. Return a probability from 0 to 1 (NaN, a negative number or a non-number counts as 0; above 1 counts
+   * as 1) or a boolean. Return `parentSampled` to follow the caller. A sampler that throws counts as 0 for that root
+   * and is reported once with `debug` on. It is called once per trace, never for a child span, and its answer
+   * travels downstream in the `traceparent` sampled flag. Browser tracing turns on when it is set.
+   *
+   * @example
+   * ```typescript
+   * import { init } from "@codmir/sdk";
+   *
+   * init({
+   *   clientKey: process.env.CODMIR_CLIENT_KEY,
+   *   tracesSampler: ({ name, parentSampled }) => {
+   *     if (name.includes("/health")) return 0;
+   *     if (name.includes("/checkout")) return 1;
+   *     return parentSampled ?? 0.1;
+   *   },
+   * });
+   * ```
+   */
+  tracesSampler?: (context: TracesSamplerContext) => number | boolean;
   /**
    * Outgoing URLs that get a `traceparent` header, besides same-origin ones. A string matches when the full URL
    * contains it, a RegExp when it tests true against the full URL. The Codmir ingest URL never gets one.
@@ -344,10 +402,12 @@ function contextsOf(contexts: CaptureContext["contexts"]): Record<string, unknow
 /** The longest `dist` sent. */
 const MAX_DIST = 64;
 
-type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'ignoreErrors' | 'defaultIgnoreErrors' | 'denyUrls' | 'allowUrls' | 'maxBreadcrumbs' | 'beforeBreadcrumb' | 'beforeSendTransaction' | 'sendDefaultPii' | 'selfHealing' | 'apiKey' | 'includeSourceContext' | 'inAppOrigins' | 'captureProcessErrors' | 'onDropped' | 'rateLimit' | 'dist'> & {
+type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'ignoreErrors' | 'defaultIgnoreErrors' | 'denyUrls' | 'allowUrls' | 'maxBreadcrumbs' | 'beforeBreadcrumb' | 'beforeSendTransaction' | 'sendDefaultPii' | 'selfHealing' | 'apiKey' | 'includeSourceContext' | 'inAppOrigins' | 'captureProcessErrors' | 'onDropped' | 'rateLimit' | 'dist' | 'tracesSampler' | 'messageSampleRate'> & {
   initialUser?: UserContext;
   sendDefaultPii: boolean;
   onDropped?: OverseerConfig["onDropped"];
+  tracesSampler?: OverseerConfig["tracesSampler"];
+  messageSampleRate?: number;
   dist?: string;
   maxBreadcrumbs: number;
   beforeBreadcrumb?: OverseerConfig["beforeBreadcrumb"];
@@ -448,6 +508,7 @@ class OverseerClient {
   private lastError: { id: string; at: number } | null = null;
   private config: ResolvedConfig;
   private noise: NoiseFilter;
+  private samplerFailureLogged = false;
   private replayHook: ReplayHook | null = null;
   private user: UserContext | null = null;
   private tags: Record<string, string> = {};
@@ -508,6 +569,8 @@ class OverseerClient {
       debug: config.debug ?? false,
       sampleRate: config.sampleRate ?? 1.0,
       tracesSampleRate: config.tracesSampleRate ?? 0,
+      tracesSampler: typeof config.tracesSampler === "function" ? config.tracesSampler : undefined,
+      messageSampleRate: typeof config.messageSampleRate === "number" && !Number.isNaN(config.messageSampleRate) ? config.messageSampleRate : undefined,
       tracePropagationTargets: config.tracePropagationTargets ?? [],
       replaysSessionSampleRate: config.replaysSessionSampleRate ?? 0,
       replaysOnErrorSampleRate: config.replaysOnErrorSampleRate ?? 1.0,
@@ -680,7 +743,7 @@ class OverseerClient {
 
     const eventId = generateId();
     if (this.dropAsNoise(eventId, { texts: [message], message })) return eventId;
-    if (!this.shouldSample(this.config.sampleRate)) return "";
+    if (!this.shouldSample(this.messageRate())) return "";
 
     const event: OverseerEvent = {
       id: eventId,
@@ -888,6 +951,33 @@ class OverseerClient {
     return this.config.tracesSampleRate;
   }
 
+  /** True when `tracesSampler` is set: it decides every trace root. */
+  hasTracesSampler(): boolean {
+    return this.config.tracesSampler !== undefined;
+  }
+
+  /**
+   * The probability `tracesSampler` gives a trace root, 0 to 1, or undefined when none is set. A boolean is 1 or 0;
+   * NaN, a negative number or a non-number is 0. A throw is 0 for that root, logged once with `debug` on.
+   */
+  runTracesSampler(context: TracesSamplerContext): number | undefined {
+    const sampler = this.config.tracesSampler;
+    if (!sampler) return undefined;
+    let answer: unknown;
+    try {
+      answer = sampler(context);
+    } catch (err) {
+      if (!this.samplerFailureLogged) {
+        this.samplerFailureLogged = true;
+        this.log("tracesSampler threw, so its trace roots are not sampled:", err);
+      }
+      return 0;
+    }
+    if (answer === true) return 1;
+    if (typeof answer !== "number" || !(answer > 0)) return 0;
+    return Math.min(answer, 1);
+  }
+
   getTracePropagationTargets(): Array<string | RegExp> {
     return this.config.tracePropagationTargets;
   }
@@ -1071,6 +1161,11 @@ class OverseerClient {
   // Private methods
   private shouldSample(rate: number): boolean {
     return Math.random() < rate;
+  }
+
+  /** `messageSampleRate` when set, else `sampleRate`. */
+  private messageRate(): number {
+    return this.config.messageSampleRate ?? this.config.sampleRate;
   }
 
   /**

@@ -10,10 +10,10 @@
  *
  * The first span with no active parent is a root transaction; when it ends, it and its finished children are
  * queued as one `transaction` event on the Overseer transport. `tracesSampleRate` (default 0) is applied once
- * per trace at that root, and the answer travels downstream in the `traceparent` sampled flag.
+ * per trace at that root (by `tracesSampler` when set), and the answer travels downstream in the `traceparent` sampled flag.
  */
 
-import { getClient } from "../overseer/index";
+import { getClient, type TracesSamplerContext } from "../overseer/index";
 import { getActiveSpan, withActiveSpan, isThenable } from "./context";
 import { generateTraceId, parseTraceparent, type TraceparentData } from "./propagation";
 import { Span, Transaction, type SpanOptions, type TransactionContext } from "./span";
@@ -25,6 +25,7 @@ export { getActiveSpan, withActiveSpan, setContextStrategy } from "./context";
 export type { ContextStrategy } from "./context";
 export { Span, Transaction } from "./span";
 export type { SpanOptions } from "./span";
+export type { TracesSamplerContext } from "../overseer/index";
 export type { SpanEvent, SpanStatus, TransactionEvent } from "./types";
 export { instrumentFetch } from "./fetch";
 export type { InstrumentFetchOptions } from "./fetch";
@@ -48,18 +49,32 @@ function transactionContext(): TransactionContext {
 export interface StartTransactionOptions extends SpanOptions {
   /** An incoming `traceparent` header value: continue that trace, inheriting its sampling decision. */
   traceparent?: string | null;
+  /** The request a server integration is serving, given to `tracesSampler`: the method, and its URL without a query string or fragment. */
+  request?: { method: string; url: string };
 }
 
 /**
- * Starts a root transaction. The caller ends it with `end()`. Sampling: `tracesSampleRate` 0 (the default)
- * records nothing, even when the caller sent a sampled `traceparent`; otherwise an incoming `traceparent`'s
- * sampled flag wins, and with none the trace is sampled with probability `tracesSampleRate`.
+ * Starts a root transaction. The caller ends it with `end()`. With `tracesSampler` set it decides the root, and wins
+ * over `tracesSampleRate`. Without one: `tracesSampleRate` 0 (the default) records nothing, even when the caller sent
+ * a sampled `traceparent`; otherwise an incoming `traceparent`'s sampled flag wins, and with none the trace is
+ * sampled with probability `tracesSampleRate`.
  */
 export function startTransaction(options: StartTransactionOptions): Transaction {
   const incoming: TraceparentData | null = parseTraceparent(options.traceparent);
   const client = getClient();
-  const rate = client && client.isEnabled() ? client.getTracesSampleRate() : 0;
-  const sampled = rate > 0 && (incoming ? incoming.sampled : Math.random() < rate);
+  let sampled = false;
+  if (client && client.isEnabled()) {
+    const context: TracesSamplerContext = { name: options.name, op: options.op };
+    if (incoming) context.parentSampled = incoming.sampled;
+    if (options.request) context.request = { method: options.request.method, url: options.request.url };
+    const chance = client.runTracesSampler(context);
+    if (chance !== undefined) {
+      sampled = chance > 0 && Math.random() < chance;
+    } else {
+      const rate = client.getTracesSampleRate();
+      sampled = rate > 0 && (incoming ? incoming.sampled : Math.random() < rate);
+    }
+  }
 
   return new Transaction(
     options,
