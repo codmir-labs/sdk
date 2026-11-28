@@ -20,7 +20,7 @@ export function isOwnRequest(url: URL): boolean {
 }
 
 /**
- * Wraps `globalThis.fetch` (browser, and Node 18+): every request made while a span is active becomes an
+ * Wraps `globalThis.fetch` (browser, and Node 20+): every request made while a span is active becomes an
  * `http.client` child span and, for same-origin URLs and `tracePropagationTargets`, carries a `traceparent`
  * header naming that span. The SDK's own requests (ingest, replay, feedback) are left completely alone. Idempotent while its wrapper
  * works; returns a function that restores the previous fetch if the wrapper is on top, and otherwise leaves the wrapper

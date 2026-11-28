@@ -10,7 +10,7 @@
  * app.get("/users/:id", (c) => c.json({ id: c.req.param("id") }));
  * ```
  *
- * Node (and any runtime that provides `node:async_hooks`). Continues an incoming `traceparent`; nothing is
+ * Needs `AsyncLocalStorage`: Node, Bun, Deno, and Workers with `nodejs_als` or `nodejs_compat`. Continues an incoming `traceparent`; nothing is
  * sent unless `tracesSampleRate` is above 0 (default 0). `hono` itself is an optional peer dependency.
  */
 

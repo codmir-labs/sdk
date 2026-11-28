@@ -12,6 +12,8 @@ const cjsFiles = (dir: string): string[] =>
 
 // Entry points and formats come from the package.json scripts; this file injects the version and finishes the CJS files.
 export default defineConfig({
+  // Keep `node:async_hooks` as written: Edge bundlers (Next.js Edge, Vercel Edge, Workers) accept the prefix, not the bare name.
+  removeNodeProtocol: false,
   define: { __SDK_VERSION__: JSON.stringify(version) },
   // `splitting` makes the CJS entries share chunks (the same way the ESM ones do). It writes the `__esModule` marker as
   // a plain statement, which Node's export lexer reports as a named export of `import` from a `.cjs` file. The marker

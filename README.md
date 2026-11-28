@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/@codmir/sdk"><img alt="npm version" src="https://img.shields.io/npm/v/@codmir/sdk?style=for-the-badge&logo=npm&logoColor=white&label=npm&color=171717"></a>
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-171717?style=for-the-badge"></a>
-  <a href="#requirements"><img alt="Node.js 18 or later" src="https://img.shields.io/badge/node-%3E%3D18-171717?style=for-the-badge&logo=nodedotjs&logoColor=white"></a>
+  <a href="#requirements"><img alt="Node.js 20 or later" src="https://img.shields.io/badge/node-%3E%3D20-171717?style=for-the-badge&logo=nodedotjs&logoColor=white"></a>
   <a href="#typescript"><img alt="Types included" src="https://img.shields.io/badge/types-included-171717?style=for-the-badge&logo=typescript&logoColor=white"></a>
   <a href="#entry-points"><img alt="ESM and CommonJS" src="https://img.shields.io/badge/ESM%20%2B%20CJS-dual%20build-171717?style=for-the-badge"></a>
 </p>
@@ -302,15 +302,15 @@ Each import is its own bundle, so a page that only reports errors never loads th
 | `@codmir/sdk/logs/parse` | `parseLogLine`, `parseLogLines`: one line of JSON, Vercel, Railway, journald, pino, access-log or plain-text output as a record or a request | Anywhere |
 | `codmir-logs` (a command, `bin`) | `npx codmir-logs [files…]`: [findings from logs you already have](#read-logs-you-already-have), on your machine | Node.js |
 | `@codmir/sdk/nextjs` | Next.js `init`, `captureRouterError`, `captureRequestError`, `captureBoundaryError`, `captureUnderscoreErrorException`, click, request, route-change and console breadcrumbs | Browser and server |
-| `@codmir/sdk/nextjs/server` | `withCodmirTracing`, `withCodmirMiddleware` | Node.js runtime |
+| `@codmir/sdk/nextjs/server` | `withCodmirTracing`, `withCodmirMiddleware` | Needs `AsyncLocalStorage`: Node.js runtime, Next.js Edge, Workers with `nodejs_als` or `nodejs_compat` |
 | `@codmir/sdk/express` | `init`, `requestHandler`, `tracingHandler`, `errorHandler`, `bindToRequest` | Node.js |
-| `@codmir/sdk/hono` | `codmirTracing()` middleware | Node.js (needs `node:async_hooks`) |
+| `@codmir/sdk/hono` | `codmirTracing()` middleware | Needs `AsyncLocalStorage`: Node, Bun, Deno, Workers with `nodejs_als` or `nodejs_compat` |
 | `@codmir/sdk/remix` | `init`, `handleError`, `wrapLoader`, `wrapAction`, `captureRemixServerError`, `setupBrowserTracking` | Server and browser |
-| `@codmir/sdk/remix/server` | `withCodmirTracing`, `withCodmirRequestHandler` | Node.js |
+| `@codmir/sdk/remix/server` | `withCodmirTracing`, `withCodmirRequestHandler` | Needs `AsyncLocalStorage`: Node, Bun, Deno, Workers with `nodejs_als` or `nodejs_compat` |
 | `@codmir/sdk/react-native` | `init` with a global JS error handler, `createErrorBoundary`, screen and app-state breadcrumbs | React Native |
 | `@codmir/sdk/verify` | `verify`, `quickVerify`, `printVerifyResult` | Anywhere |
 | `@codmir/sdk/report` | `Codmir.reportBug`, `searchBugs`, `upvote`, `captureException` | Anywhere |
-| `@codmir/sdk/feedback` | `sendFeedback`, `deleteFeedback`, `listFeedback`, `feedbackStatus`, `answerFeedback`: what a visitor says, what became of it, sent with the replay, the error and the failed request of their session | Anywhere (a browser, React Native, a worker, Node 18+) |
+| `@codmir/sdk/feedback` | `sendFeedback`, `deleteFeedback`, `listFeedback`, `feedbackStatus`, `answerFeedback`: what a visitor says, what became of it, sent with the replay, the error and the failed request of their session | Anywhere (a browser, React Native, a worker, Node 20+) |
 | `@codmir/sdk/client` | `CodmirClient` | Server side (it holds an API key) |
 | `@codmir/sdk/types` | API types, `CodmirApiError`, `CreateTicketSchema`, `CreateAgentTaskSchema` | Anywhere |
 
@@ -696,9 +696,9 @@ export const middleware = withCodmirMiddleware(() => NextResponse.next());
 ```
 
 > [!WARNING]
-> `@codmir/sdk/nextjs/server` needs `node:async_hooks`. Never import it from an Edge route (`export const runtime =
-> "edge"`) or from Edge middleware; Node.js middleware (Next.js 15.5 and later) is fine. `@codmir/sdk/nextjs` itself has
-> no Node import.
+> `@codmir/sdk/nextjs/server` needs `AsyncLocalStorage`, which Node.js and Next.js Edge (an Edge route with
+> `export const runtime = "edge"`, or Edge middleware) provide. It imports no other Node built-in, so it builds for Edge.
+> Never import it from client code. `@codmir/sdk/nextjs` itself has no Node import.
 
 To capture an error you handled yourself, with the request it belongs to:
 
@@ -924,8 +924,8 @@ export default app;
 ```
 
 `codmirTracing()` names each transaction after the matched route (`GET /users/:id`), continues an incoming
-`traceparent`, and marks the transaction `error` on a 5xx or a thrown handler. It needs `node:async_hooks`; `hono` is an
-optional peer dependency. When a handler throws and the runtime gives the request an execution context (Cloudflare
+`traceparent`, and marks the transaction `error` on a 5xx or a thrown handler. It needs `AsyncLocalStorage` (Node, Bun, Deno, and
+Workers with `nodejs_als` or `nodejs_compat`); `hono` is an optional peer dependency. When a handler throws and the runtime gives the request an execution context (Cloudflare
 Workers), the queued error and the transaction are handed to `c.executionCtx.waitUntil` (2 seconds at most) so the
 isolate stays alive until they are sent; a request without an error, and Node, are unchanged.
 
@@ -2414,7 +2414,7 @@ only when `cloud` is on.
 
 ## Requirements
 
-- Node.js 18 or later (`engines` in [`package.json`](package.json)); the CI workflow builds and tests on Node 18, 20
+- Node.js 20 or later (`engines` in [`package.json`](package.json)); the CI workflow builds and tests on Node 20
   and 22.
 - Source lines in Node from an ES module need `process.getBuiltinModule` (Node 20.16 or 22.3 and later); CommonJS
   works on any supported Node.
@@ -2475,9 +2475,9 @@ after the URL path, one per distinct id.
 </details>
 
 <details>
-<summary><b>Importing <code>@codmir/sdk/nextjs/server</code> breaks an Edge route</b></summary>
+<summary><b>Importing <code>@codmir/sdk/nextjs/server</code> breaks a client bundle</b></summary>
 
-It needs `node:async_hooks`. Use it only in the Node.js runtime; keep `@codmir/sdk/nextjs` in Edge code.
+It needs `AsyncLocalStorage`, so it works in the Node.js runtime and in Next.js Edge, but never in client code. Keep `@codmir/sdk/nextjs` in client components.
 
 </details>
 
@@ -2598,7 +2598,7 @@ To [`packages/agent-kit`](packages/agent-kit), a private workspace in this repo 
 | [`packages/agent-kit/`](packages/agent-kit) | `@codmir/agent-kit`: agent runtime, council, serverless, task-runner protocol, AI-call monitoring, MCP client and framework task helpers; private, never published |
 | [`scripts/`](scripts) | `check-dist-types.mjs`: every export target exists after a build |
 | [`docs/assets/`](docs/assets) | This page's hero and icons |
-| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Typecheck, lint, tests, build and dist checks on Node 18, 20 and 22, and the example smoke and the Next.js build smoke on Node 20, on every push and pull request to `main`; the release job, with semantic-release, runs only when a maintainer dispatches the workflow by hand ([Releasing](#releasing)) |
+| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Typecheck, lint, tests, build and dist checks on Node 20 and 22, and the example smoke and the Next.js build smoke on Node 20, on every push and pull request to `main`; the release job, with semantic-release, runs only when a maintainer dispatches the workflow by hand ([Releasing](#releasing)) |
 | [`.github/release/`](.github/release) | The semantic-release plugins: `no-downgrade.cjs` refuses a version not above npm `latest`, and `export-guard.cjs` makes a release a major when an export of the last release is gone; with their tests and those of the release job |
 | [CHANGELOG.md](CHANGELOG.md) | Released and unreleased changes |
 | [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) | The entries removed in 3.0, and migrating from the older agent SDK API |
