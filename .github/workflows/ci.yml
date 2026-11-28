@@ -56,6 +56,9 @@ jobs:
       # The feedback client against a server that keeps the door's contract, from the built files; skips without a
       # build too, so it never ran in npm test.
       - run: npx vitest run src/feedback/__tests__/built.test.ts
+      # The root and browser CommonJS builds loaded together in one page: one event per page error. Skips without a
+      # build too.
+      - run: npx vitest run src/feedback/__tests__/built-page-listeners.test.ts
       # Every @example of the built type files typechecks against dist and names a client key, and the Remix server
       # example answers a request; both skip without a build too.
       - run: npx vitest run src/__tests__/doc-examples.test.ts src/remix/__tests__/doc-example-server.test.ts
