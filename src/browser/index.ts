@@ -34,13 +34,9 @@ import {
   close as coreClose,
   getClient,
   type OverseerConfig,
-  type UserContext,
-  type Breadcrumb,
-  type SeverityLevel,
 } from "../overseer/index";
-import { listen, patch, Stops } from "../overseer/lifecycle";
-import { withHint, crash, eventFrame } from "../overseer/capture-hint";
-import { frameFilename } from "../overseer/stack";
+import { patch, Stops } from "../overseer/lifecycle";
+import { installPageErrors } from "../overseer/page-errors";
 import { installBrowserBreadcrumbs, consoleText, type BrowserBreadcrumbOptions } from "../overseer/browser-breadcrumbs";
 import { startBrowserTracing, type BrowserTracingOptions } from "../tracing/browser";
 
@@ -101,27 +97,8 @@ export function init(config: BrowserConfig = {}): void {
   coreInit(coreConfig);
   isInitialized = true;
 
-  // Global error handler
-  if (captureGlobalErrors) {
-    stops.add(
-      listen(window, "error", (event: ErrorEvent) => {
-        coreCaptureException(
-          event.error || event.message,
-          // With no error of its own, the event's place is the one frame: the SDK has none to give.
-          withHint({ filename: typeof event.filename === "string" ? frameFilename(event.filename) : event.filename, lineno: event.lineno, colno: event.colno }, crash("onerror", undefined, eventFrame(event))),
-        );
-      }),
-    );
-  }
-
-  // Unhandled rejection handler
-  if (captureUnhandledRejections) {
-    stops.add(
-      listen(window, "unhandledrejection", (event: PromiseRejectionEvent) => {
-        coreCaptureException(event.reason, withHint({}, crash("onunhandledrejection", undefined, "none")));
-      }),
-    );
-  }
+  // Global error and rejection handlers: shared with `@codmir/sdk`, and installed once when both entries init.
+  installPageErrors(stops, { errors: captureGlobalErrors, rejections: captureUnhandledRejections });
 
   // Console.error capture
   if (captureConsoleErrors) {

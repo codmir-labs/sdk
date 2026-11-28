@@ -26,6 +26,35 @@ needs one of these entries has two options: stay on `@codmir/sdk@2.0.1` (pin it 
 
 The sections below describe the agent API of the 2.0 line and its older versions; they do not apply to 3.0.
 
+## Root init in a browser captures page errors
+
+`init` from `@codmir/sdk`, called in a browser, now installs the `error` and `unhandledrejection` listeners that
+`@codmir/sdk/browser` installs. Before, it installed none. An app that imports the root `init` and added its own
+listeners that call `captureException` now sends every page error twice. Remove those listeners, or turn the SDK's off
+with the two switches `@codmir/sdk/browser` has (`captureGlobalErrors`, `captureUnhandledRejections`; both default to
+`true`). Node, workers and React Native are unchanged.
+
+```ts
+// Before
+import { init, captureException } from "@codmir/sdk";
+
+init({ clientKey: process.env.NEXT_PUBLIC_CODMIR_CLIENT_KEY });
+window.addEventListener("error", (e) => captureException(e.error ?? e.message));
+window.addEventListener("unhandledrejection", (e) => captureException(e.reason));
+
+// After: drop your listeners, the SDK captures both
+import { init } from "@codmir/sdk";
+
+init({ clientKey: process.env.NEXT_PUBLIC_CODMIR_CLIENT_KEY });
+
+// Or keep your listeners and switch the SDK's off
+init({
+  clientKey: process.env.NEXT_PUBLIC_CODMIR_CLIENT_KEY,
+  captureGlobalErrors: false,
+  captureUnhandledRejections: false,
+});
+```
+
 ## Breaking Changes
 
 ### 1. Package Structure Changes
