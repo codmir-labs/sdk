@@ -13,8 +13,8 @@
  *   clientKey: process.env.EXPO_PUBLIC_CODMIR_CLIENT_KEY,
  * });
  *
- * // createErrorBoundary takes your React and returns the class; a type says it is a component.
- * const ErrorBoundary = Codmir.createErrorBoundary(React) as unknown as React.ComponentType<Codmir.ErrorBoundaryProps>;
+ * // createErrorBoundary takes your React and returns the component class.
+ * const ErrorBoundary = Codmir.createErrorBoundary(React);
  *
  * export default function App() {
  *   return (
@@ -261,10 +261,11 @@ export interface ErrorBoundaryProps {
 }
 
 /**
- * Note: ErrorBoundary is a class component placeholder.
- * In actual usage, import React and implement properly.
+ * Builds the error boundary from the React you import: `const ErrorBoundary = createErrorBoundary(React);`. It is the class
+ * component itself, so `<ErrorBoundary fallback={...}>` needs no cast.
  */
-export function createErrorBoundary(React: any) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function createErrorBoundary(React: any): React.ComponentClass<ErrorBoundaryProps> {
   return class ErrorBoundary extends React.Component<
     ErrorBoundaryProps,
     { hasError: boolean; error: Error | null }
@@ -297,7 +298,8 @@ export function createErrorBoundary(React: any) {
       }
       return this.props.children;
     }
-  };
+    // The class extends the caller's React, which is `any` here: the type says what it is.
+  } as unknown as React.ComponentClass<ErrorBoundaryProps>;
 }
 
 // =============================================================================
