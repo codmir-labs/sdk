@@ -110,3 +110,54 @@ describe("formDataKeys of a failed action", () => {
     expect(event.extra).not.toHaveProperty("formDataKeys");
   });
 });
+
+describe("an open request scope is kept", () => {
+  const scoped = async (capture: (err: Error, request: Request) => void) => {
+    const events = setup();
+    const handle = withCodmirRequestHandler(async (request: Request) => {
+      Codmir.setUser({ id: "u-7" });
+      Codmir.setTag("plan", "pro");
+      Codmir.addBreadcrumb({ category: "cart", message: "opened cart" });
+      capture(new Error("stream failed"), request);
+      return new Response("ok");
+    });
+    await handle(new Request("https://shop.example/cart?session=secret", { method: "POST" }));
+    return (await events())[0];
+  };
+  const kept = (event: any) => {
+    expect(event.user).toMatchObject({ id: "u-7" });
+    expect(event.tags).toMatchObject({ plan: "pro" });
+    expect(JSON.stringify(event.breadcrumbs)).toContain("opened cart");
+    expect(event.request).toMatchObject({ method: "POST", url: "https://shop.example/cart" });
+    expect(event.request.url).not.toMatch(/secret|session/);
+  };
+
+  it("captureRemixServerError inside withCodmirRequestHandler keeps the request's user, tag and breadcrumb", async () => {
+    kept(await scoped((err, request) => void Codmir.captureRemixServerError(err, request)));
+  });
+
+  it("handleError({ request }) inside withCodmirRequestHandler keeps them too", async () => {
+    kept(await scoped((err, request) => Codmir.handleError(err, { request })));
+  });
+
+  it("handleError({ request }) with no scope open carries the request's method and URL, without the query", async () => {
+    const events = setup();
+    Codmir.handleError(new Error("loader failed"), { request: new Request("https://shop.example/cart?session=secret", { method: "put" }) });
+    const [event] = await events();
+    expect(event.request).toMatchObject({ method: "PUT", url: "https://shop.example/cart" });
+    expect(event.request.url).not.toMatch(/secret|session/);
+  });
+});
+
+describe("the form watch is put back after a normal return", () => {
+  it("an action that read request.formData() and returned leaves no own formData property", async () => {
+    setup();
+    const request = form({ email: "a@b.example" });
+    const action = Codmir.wrapAction(async ({ request }: ActionFunctionArgs) => {
+      await request.formData();
+      return new Response("saved");
+    });
+    await action({ request, params: {}, context: {} });
+    expect(Object.prototype.hasOwnProperty.call(request, "formData")).toBe(false);
+  });
+});

@@ -54,7 +54,7 @@ import { listen, Stops } from "../overseer/lifecycle";
 import { withHint, crash, eventFrame } from "../overseer/capture-hint";
 import { installBrowserBreadcrumbs, type BrowserBreadcrumbOptions, type ConsoleMethod } from "../overseer/browser-breadcrumbs";
 import { scrubUrl } from "../overseer/url-scrub";
-import { requestScopeFrom, withRequestScope } from "../overseer/request-scope";
+import { getRequestScope, requestScopeFrom, withRequestScope } from "../overseer/request-scope";
 
 // =============================================================================
 // Types
@@ -172,6 +172,10 @@ export function handleError(
   error: unknown,
   { request }: { request: Request }
 ): void {
+  inRequestScope(request, () => captureHandledError(error));
+}
+
+function captureHandledError(error: unknown): void {
   const context: Record<string, unknown> = withHint({}, crash("remix-handleError"));
 
   // Response errors carry status information
@@ -345,7 +349,16 @@ export function captureRemixServerError(error: unknown, request: Request): strin
     error instanceof Error
       ? coreCaptureException(error, context)
       : coreCaptureException(new Error(typeof error === "string" ? error : "Remix server rendering error"), { ...context, originalError: error });
-  return request ? withRequestScope(requestScopeFrom({ url: request.url, method: request.method }), capture) : capture();
+  return inRequestScope(request, capture);
+}
+
+/**
+ * Runs `fn` in the request scope that is already open, which has the request's user, tags and breadcrumbs; only when none is
+ * open is a scope made from `request`, since `withRequestScope` replaces the scope it finds instead of forking it.
+ */
+function inRequestScope<T>(request: Request | undefined, fn: () => T): T {
+  if (!request || getRequestScope()) return fn();
+  return withRequestScope(requestScopeFrom({ url: request.url, method: request.method }), fn);
 }
 
 // =============================================================================
