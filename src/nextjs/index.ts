@@ -267,22 +267,24 @@ export const flushRequestError = (): Promise<void> => flushInBackground(2000);
 /**
  * Handler for Next.js App Router errors
  * Use in instrumentation.ts: export const onRequestError = captureRouterError
+ * (Next's own `Instrumentation.onRequestError` type accepts it as it is: it takes the error as `unknown`, and a header may be a list.)
  *
  * Next awaits it and a serverless function is frozen right after, so there the event is sent before it returns (2 s at
  * most), or handed to Next's `waitUntil` when the request has one. A long-running server keeps its send timer, so its
  * error responses never wait for the network.
  */
 export async function captureRouterError(
-  error: RequestError,
-  request: { path: string; method: string; headers: Record<string, string> },
-  context: ErrorContext
+  error: unknown,
+  request: Readonly<{ path: string; method: string; headers: Record<string, string | string[] | undefined> }>,
+  context: Readonly<ErrorContext>
 ): Promise<void> {
   // For a Pages Router render error Next calls this first and then renders `_error` with the same object: this event,
   // which has the router kind, route and type, is the one that stays.
   if (alreadySent(error)) return;
   const header = (name: string): string | undefined => {
     const key = Object.keys(request.headers ?? {}).find((k) => k.toLowerCase() === name);
-    return key ? request.headers[key] : undefined;
+    const value = key ? request.headers[key] : undefined;
+    return Array.isArray(value) ? value[0] : value;
   };
   // Origin from Host and X-Forwarded-Proto, path without its query; no header is sent in the event's `request`.
   const scope = withDigest(

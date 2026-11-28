@@ -97,3 +97,12 @@ describe("digest", () => {
     expect(events()[0].tags?.digest).toBeUndefined();
   });
 });
+
+describe("a header Next hands over as a list", () => {
+  it("captureRouterError reads its first value", async () => {
+    const listed = { path: "/orders/42", method: "GET", headers: { host: ["shop.example.test", "other.example.test"], "x-forwarded-proto": ["https", "http"] } };
+    await captureRouterError(new Error("render failed"), listed, pagesContext);
+    await flush();
+    expect(events()[0].request.url).toBe("https://shop.example.test/orders/42");
+  });
+});

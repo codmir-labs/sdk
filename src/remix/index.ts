@@ -28,7 +28,7 @@
  * });
  *
  * export const action = wrapAction(async ({ request }) => {
- *   const form = await request.formData?.();
+ *   const form = await request.formData();
  *   return json({ ok: true });
  * });
  * ```
@@ -54,6 +54,7 @@ import { listen, Stops } from "../overseer/lifecycle";
 import { withHint, crash, eventFrame } from "../overseer/capture-hint";
 import { installBrowserBreadcrumbs, type BrowserBreadcrumbOptions, type ConsoleMethod } from "../overseer/browser-breadcrumbs";
 import { scrubUrl } from "../overseer/url-scrub";
+import { getRequestScope, requestScopeFrom, withRequestScope } from "../overseer/request-scope";
 
 // =============================================================================
 // Types
@@ -80,14 +81,6 @@ export interface RemixConfig extends OverseerConfig {
   captureResponseErrors?: boolean;
 }
 
-/** Minimal Request interface — no Remix imports needed */
-interface RemixRequest {
-  url: string;
-  method: string;
-  headers: { get(name: string): string | null; forEach(cb: (value: string, key: string) => void): void };
-  formData?(): Promise<{ keys(): IterableIterator<string> }>;
-}
-
 /** Minimal Response interface for error handling */
 interface RemixResponse {
   status: number;
@@ -96,13 +89,16 @@ interface RemixResponse {
 
 /** Remix loader/action function args */
 interface DataFunctionArgs {
-  request: RemixRequest;
-  params: Record<string, string | undefined>;
-  context?: unknown;
+  /** The fetch `Request` Remix gives every loader and action. */
+  request: Request;
+  params: { readonly [name: string]: string | undefined };
+  /** `any`, so a function typed with Remix's own `LoaderFunctionArgs` or `ActionFunctionArgs` (whose `context` is required) is accepted. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  context: any;
 }
 
-/** Remix loader/action function signature */
-type DataFunction = (args: DataFunctionArgs) => Promise<unknown> | unknown;
+/** Remix loader/action function signature: any function the framework's own args type fits, kept as the caller typed it. */
+type DataFunction = (args: DataFunctionArgs) => unknown;
 
 /** Headers that should never be captured */
 // =============================================================================
@@ -174,8 +170,12 @@ export function init(config: RemixConfig = {}): void {
  */
 export function handleError(
   error: unknown,
-  { request }: { request: RemixRequest }
+  { request }: { request: Request }
 ): void {
+  inRequestScope(request, () => captureHandledError(error));
+}
+
+function captureHandledError(error: unknown): void {
   const context: Record<string, unknown> = withHint({}, crash("remix-handleError"));
 
   // Response errors carry status information
@@ -248,7 +248,7 @@ export function wrapLoader<T extends DataFunction>(loader: T): T {
     }
   };
 
-  return wrapped as T;
+  return wrapped as unknown as T;
 }
 
 // =============================================================================
@@ -265,7 +265,7 @@ export function wrapLoader<T extends DataFunction>(loader: T): T {
  * import { wrapAction } from '@codmir/sdk/remix';
  *
  * export const action = wrapAction(async ({ request }) => {
- *   const form = await request.formData?.();
+ *   const form = await request.formData();
  *   await updateUser(form);
  *   return json({ ok: true });
  * });
@@ -284,27 +284,32 @@ export function wrapAction<T extends DataFunction>(action: T): T {
       },
     });
 
+    // What the action's own `request.formData()` parses is kept here, so its keys survive the body being consumed.
+    const form = watchFormData(args.request);
     try {
       return await action(args);
     } catch (error) {
+      form.stop();
       if (isResponseLike(error)) {
         if (remixConfig.captureActionErrors) {
           const context: Record<string, unknown> = withHint({}, crash("remix-action", undefined, "none"));
-          if (remixConfig.captureResponseErrors && error.status >= 500) await addFormDataKeys(context, args.request);
+          if (remixConfig.captureResponseErrors && error.status >= 500) await addFormDataKeys(context, args.request, form.keys);
           captureThrownResponse(error, context);
         }
         throw error;
       }
       if (remixConfig.captureActionErrors && !alreadySent(error)) {
         const context: Record<string, unknown> = withHint({}, crash("remix-action", undefined, "none"));
-        await addFormDataKeys(context, args.request);
+        await addFormDataKeys(context, args.request, form.keys);
         coreCaptureException(error, context);
       }
       throw error;
+    } finally {
+      form.stop();
     }
   };
 
-  return wrapped as T;
+  return wrapped as unknown as T;
 }
 
 // =============================================================================
@@ -337,17 +342,23 @@ export function wrapAction<T extends DataFunction>(action: T): T {
  * }
  * ```
  */
-export function captureRemixServerError(error: unknown, request: RemixRequest): string {
+export function captureRemixServerError(error: unknown, request: Request): string {
   const context: Record<string, unknown> = withHint({}, crash("remix-server-render"));
+  // The event's `request` is the method and the URL without its query, the way the Express and Next.js captures give it.
+  const capture = (): string =>
+    error instanceof Error
+      ? coreCaptureException(error, context)
+      : coreCaptureException(new Error(typeof error === "string" ? error : "Remix server rendering error"), { ...context, originalError: error });
+  return inRequestScope(request, capture);
+}
 
-  if (error instanceof Error) {
-    return coreCaptureException(error, context);
-  }
-
-  return coreCaptureException(
-    new Error(typeof error === "string" ? error : "Remix server rendering error"),
-    { ...context, originalError: error }
-  );
+/**
+ * Runs `fn` in the request scope that is already open, which has the request's user, tags and breadcrumbs; only when none is
+ * open is a scope made from `request`, since `withRequestScope` replaces the scope it finds instead of forking it.
+ */
+function inRequestScope<T>(request: Request | undefined, fn: () => T): T {
+  if (!request || getRequestScope()) return fn();
+  return withRequestScope(requestScopeFrom({ url: request.url, method: request.method }), fn);
 }
 
 // =============================================================================
@@ -437,13 +448,62 @@ function alreadySent(value: unknown): boolean {
   return false;
 }
 
-/** Adds the form's field names (never values) to `context`; a body already consumed adds nothing. */
-async function addFormDataKeys(context: Record<string, unknown>, request: RemixRequest): Promise<void> {
+/**
+ * Watches the `request.formData()` of one action call, on the request itself and without a clone (a clone whose body is never read
+ * is buffered whole, so every upload would cost its size again): the field names it parses are kept in `keys`, and `stop` puts the
+ * method back. A request whose method cannot be replaced (a frozen object) is left as it is, and `keys` stays undefined.
+ */
+function watchFormData(request: Request): { readonly keys: string[] | undefined; stop(): void } {
+  const watch: { keys: string[] | undefined; stop(): void } = { keys: undefined, stop() {} };
   try {
-    if (request.formData) {
-      const formData = await request.formData();
-      context.formDataKeys = Array.from(formData.keys());
-    }
+    const original = request.formData;
+    if (typeof original !== "function") return watch;
+    const own = Object.getOwnPropertyDescriptor(request, "formData");
+    Object.defineProperty(request, "formData", {
+      configurable: true,
+      writable: true,
+      value: function formData(this: unknown, ...rest: []): Promise<FormData> {
+        const parsed = original.apply(this ?? request, rest);
+        parsed.then(
+          (form) => {
+            try {
+              watch.keys ??= Array.from(form.keys());
+            } catch {
+              // not a form we can list: nothing is kept
+            }
+          },
+          () => {},
+        );
+        return parsed;
+      },
+    });
+    watch.stop = () => {
+      watch.stop = () => {};
+      try {
+        if (own) Object.defineProperty(request, "formData", own);
+        else delete (request as { formData?: unknown }).formData;
+      } catch {
+        // left in place: it only passes the call on
+      }
+    };
+  } catch {
+    // a frozen request: today's behaviour
+  }
+  return watch;
+}
+
+/**
+ * Adds the form's field names (never values) to `context`: the `keys` the action's own read parsed, else a read of the body here,
+ * which adds nothing when the body is already consumed.
+ */
+async function addFormDataKeys(context: Record<string, unknown>, request: Request, keys?: string[]): Promise<void> {
+  if (keys) {
+    context.formDataKeys = keys;
+    return;
+  }
+  try {
+    const formData = await request.formData();
+    context.formDataKeys = Array.from(formData.keys());
   } catch {
     // formData() may fail if body was already consumed — that's fine
   }

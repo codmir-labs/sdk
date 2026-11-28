@@ -648,6 +648,7 @@ the shape it expects:
 
 ```ts
 // instrumentation.ts
+import type { Instrumentation } from 'next';
 import * as Codmir from '@codmir/sdk/nextjs';
 
 export function register() {
@@ -658,7 +659,7 @@ export function register() {
   });
 }
 
-export const onRequestError = Codmir.captureRouterError;
+export const onRequestError: Instrumentation.onRequestError = Codmir.captureRouterError;
 ```
 
 Next.js bundles the SDK once for `instrumentation.ts` and again for each route, and only the copy that ran `init` has a
@@ -959,16 +960,16 @@ export const handleError = Codmir.handleError;
 In a route module, wrap loaders and actions. Errors are captured and rethrown, so your error boundaries still run:
 
 ```ts
+import type { ActionFunctionArgs, LoaderFunctionArgs } from '@remix-run/node';
 import { wrapLoader, wrapAction } from '@codmir/sdk/remix';
 
-export const loader = wrapLoader(async ({ params }) => {
+export const loader = wrapLoader(async ({ params }: LoaderFunctionArgs) => {
   return { id: params.id };
 });
 
-export const action = wrapAction(async ({ request }) => {
-  // The SDK types `request` minimally, so formData() is optional here.
-  const form = await request.formData?.();
-  return { fields: form ? Array.from(form.keys()) : [] };
+export const action = wrapAction(async ({ request }: ActionFunctionArgs) => {
+  const form = await request.formData();
+  return { fields: Array.from(form.keys()) };
 });
 ```
 
@@ -1022,7 +1023,11 @@ even when a wrapper and `handleError` both see the same object.
 An error a wrapper sent is not sent again by `handleError`: Remix hands the object `wrapLoader` or `wrapAction` rethrew to
 `handleError`, which skips it, so an app that uses both gets one event per error, with the wrapper's mechanism. The check
 is by object identity; a thrown string or other non-object cannot be marked and is sent by each that sees it. A `Response`
-with a status of 500 or more carries `formDataKeys` from `wrapAction` like any other error.
+with a status of 500 or more carries `formDataKeys` from `wrapAction` like any other error. `formDataKeys` lists the form's
+field names, never the values: when the action reads `request.formData()` itself, `wrapAction` keeps the names that read
+parsed (the request is never cloned, so an upload is not buffered twice), and when the action never reads its body the
+names are read when it throws. An error from `captureRemixServerError(error, request)` and one captured inside
+`withCodmirRequestHandler` carry the request's method and URL, without the query string.
 
 </details>
 
@@ -1037,8 +1042,7 @@ import * as Codmir from '@codmir/sdk/react-native';
 
 Codmir.init({ clientKey: 'osk_your_client_key', environment: 'production' });
 
-// The cast gives TypeScript a component type: createErrorBoundary's own return type is not one at this version.
-const ErrorBoundary = Codmir.createErrorBoundary(React) as unknown as React.ComponentType<Codmir.ErrorBoundaryProps>;
+const ErrorBoundary = Codmir.createErrorBoundary(React);
 
 export default function App() {
   return (
