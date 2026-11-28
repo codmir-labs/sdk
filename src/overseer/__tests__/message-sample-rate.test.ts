@@ -62,3 +62,11 @@ describe("messageSampleRate", () => {
     expect(JSON.stringify(result)).toContain("messageSampleRate is 0");
   });
 });
+
+describe("messageSampleRate that is not a number", () => {
+  it("NaN is ignored, so messages follow sampleRate", async () => {
+    start({ sampleRate: 1, messageSampleRate: Number.NaN });
+    expect(captureMessage("kept")).not.toBe("");
+    expect(await sentTypes()).toEqual(["message"]);
+  });
+});

@@ -213,3 +213,22 @@ describe("tracesSampler: answers that are not a probability", () => {
     expect(startTransaction({ op: "x", name: "a" }).sampled).toBe(false);
   });
 });
+
+describe("tracesSampler: the request a Next.js route handler is serving", () => {
+  it("gets the method and the URL without its query string and fragment", async () => {
+    const { withCodmirTracing } = await import("../../nextjs/server");
+    const seen: TracesSamplerContext[] = [];
+    start({ tracesSampler: (context) => { seen.push(context); return 1; } });
+    const handler = withCodmirTracing(async (_request: Request) => new Response("ok"));
+    await handler(new Request("https://shop.example.test/api/orders?token=secret#top", { method: "POST" }));
+    expect(seen).toHaveLength(1);
+    expect(seen[0].request).toEqual({ method: "POST", url: "https://shop.example.test/api/orders" });
+  });
+});
+
+describe("tracesSampler: a value that is not a function", () => {
+  it("is ignored, so tracesSampleRate decides", () => {
+    start({ tracesSampler: 5 as unknown as OverseerConfig["tracesSampler"], tracesSampleRate: 1 });
+    for (let i = 0; i < 20; i++) expect(startTransaction({ op: "x", name: "a" }).sampled).toBe(true);
+  });
+});

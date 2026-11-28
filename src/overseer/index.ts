@@ -79,7 +79,11 @@ export interface TracesSamplerContext {
   op: string;
   /** The incoming `traceparent`'s sampled flag, or `undefined` when the root continues no trace. */
   parentSampled?: boolean;
-  /** The request a server integration is serving: the method, and the URL without its query string. */
+  /**
+   * The request a server integration is serving. From Express, `url` is origin (from `Host` and `X-Forwarded-Proto`) plus path.
+   * From Next.js, Hono and Remix it is the request's own `url` as the runtime gives it (absolute, on the host the runtime sees),
+   * cut at the first `?` or `#`. Neither carries a query string or fragment.
+   */
   request?: { method: string; url: string };
 }
 

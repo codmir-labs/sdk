@@ -49,7 +49,7 @@ function transactionContext(): TransactionContext {
 export interface StartTransactionOptions extends SpanOptions {
   /** An incoming `traceparent` header value: continue that trace, inheriting its sampling decision. */
   traceparent?: string | null;
-  /** The request a server integration is serving, given to `tracesSampler`: the method, and the URL without its query string. */
+  /** The request a server integration is serving, given to `tracesSampler`: the method, and its URL without a query string or fragment. */
   request?: { method: string; url: string };
 }
 

@@ -1238,8 +1238,8 @@ init({
 ```
 
 The context holds the root's `name` and `op`; `parentSampled`, the incoming `traceparent`'s flag (`undefined` when
-there is none); and `request` (`method` and `url` without its query string) when a server integration (Express,
-Next.js, Hono, Remix) starts the root. Browser pageload and navigation roots give `name` and `op` only. Return a
+there is none); and `request` (`method` and `url`) when a server integration (Express,
+Next.js, Hono, Remix) starts the root. From Express, `request.url` is origin (from `Host` and `X-Forwarded-Proto`) plus path; from Next.js, Hono and Remix it is the request's own `url` as the runtime gives it, cut at the first `?` or `#`. Neither has a query string or fragment. Browser pageload and navigation roots give `name` and `op` only. Return a
 probability from 0 to 1, or a boolean. NaN, a negative number or a non-number counts as 0, a number above 1 as 1. A
 sampler that throws counts as 0 for that root, is reported once with `debug` on, and never breaks the request. It is
 called once per trace root and never for a child span; the answer travels downstream in the `traceparent` sampled flag.
