@@ -38,7 +38,7 @@ import { listen, Stops } from "../overseer/lifecycle";
 import { withHint, crash, eventFrame } from "../overseer/capture-hint";
 import { installBrowserBreadcrumbs, type ConsoleMethod } from "../overseer/browser-breadcrumbs";
 import { scrubUrl } from "../overseer/url-scrub";
-import { getRequestScope, requestScopeFrom, withRequestScope, type RequestScope } from "../overseer/request-scope";
+import { getRequestScope, openScopeOnWrite, requestScopeFrom, shareRequestScopeStore, withRequestScope, withOwnRequestScope, type RequestScope } from "../overseer/request-scope";
 import { flushInBackground, isServerlessRuntime } from "../overseer/flush-in-background";
 
 // =============================================================================
@@ -111,6 +111,47 @@ function withDigest(scope: RequestScope, error: unknown): RequestScope {
   const digest = digestOf(error);
   return digest ? { ...scope, tags: { ...scope.tags, digest } } : scope;
 }
+/**
+ * On a server: a setter that runs inside a request the app did not wrap with `withCodmirTracing` (a route handler,
+ * server action or server component) writes to a scope of that request instead of the process-wide state, which every
+ * later event of every request would carry. A setter outside any request stays process-wide. Needs `AsyncLocalStorage`: Node 20.16+ and 22.3+ hand it over with
+ * `process.getBuiltinModule`; elsewhere (the Edge runtime throws on it) the store is the one a wrapper installed, if any,
+ * and without one the setters stay process-wide.
+ */
+function startServerScopes(): void {
+  try {
+    const getBuiltinModule = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } }).process?.getBuiltinModule;
+    const hooks = getBuiltinModule?.("node:async_hooks") as { AsyncLocalStorage?: new () => never } | undefined;
+    const Store = hooks?.AsyncLocalStorage;
+    if (Store) {
+      shareRequestScopeStore(() => new Store());
+      for (const id of ["node:http", "node:https"]) startEachRequestClean(getBuiltinModule?.(id) as { Server?: { prototype: HttpEmitter } } | undefined);
+    }
+  } catch {
+    // no process.getBuiltinModule here
+  }
+  openScopeOnWrite();
+}
+
+type HttpEmitter = { emit: (event: string | symbol, ...args: unknown[]) => boolean };
+const CLEAN_REQUESTS = Symbol.for("codmir.request-scope.clean-requests");
+/**
+ * A server runs a request's handler in the async context of its connection, which is shared by the requests of a
+ * keep-alive socket and by what ran before the server listened. Each `request` event of the server therefore runs with a
+ * fresh, empty scope of its own: a setter inside the request writes to it and no other request sees it, and a setter
+ * outside any request writes the process-wide state, which every request's event carries. Installed once per process,
+ * whatever the number of copies of this module.
+ */
+function startEachRequestClean(http: { Server?: { prototype: HttpEmitter } } | undefined): void {
+  const proto = http?.Server?.prototype;
+  if (!proto || (proto as unknown as Record<symbol, unknown>)[CLEAN_REQUESTS]) return;
+  const emit = proto.emit;
+  proto.emit = function (this: unknown, event, ...args) {
+    return event === "request" ? withOwnRequestScope(() => emit.call(this, event, ...args)) : emit.call(this, event, ...args);
+  };
+  Object.defineProperty(proto, CLEAN_REQUESTS, { value: true });
+}
+
 /** What `init` started in a browser, ended by `close`. */
 const stops = new Stops();
 
@@ -144,6 +185,7 @@ export function init(config: NextjsConfig = {}): void {
     ...(environment?.trim() ? { environment: environment.trim() } : {}),
   });
   isInitialized = true;
+  if (typeof window === "undefined") startServerScopes();
 
   // Browser-only setup
   if (typeof window !== "undefined") {

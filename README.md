@@ -674,6 +674,20 @@ module.exports = { serverExternalPackages: ['@codmir/sdk'] };
 Each server error carries `request.url` (origin from `Host` and `X-Forwarded-Proto`, path without its query),
 `request.method`, and the route as `routerKind`, `routePath`, `routeType` and `route`. No header is sent.
 
+A route handler, server action or server component you did not wrap has no request scope of its own, and on a Node.js
+server it does not need one for `setUser`: `init` makes every `request` event of the `node:http` and `node:https` servers
+in the process (Next.js's own server included) run with a fresh, empty scope. A `setUser`, `setTag`, `setTags`,
+`addBreadcrumb`, `setConversationId` or `setSessionId` inside a request writes to that scope, so two overlapping requests
+each report their own user, tags and breadcrumbs, a request that sets none reports only the process-wide values, and the next request on a
+keep-alive connection starts clean. The same call outside any request writes the process-wide state, exactly as on a plain
+Node.js script: a tag, user or breadcrumb set at module top level, in `register()` in `instrumentation.ts`, in a startup
+script or from a timer reaches every request that starts after it. Nothing is opened with `enterWith`, so no setter ever
+leaves a scope behind outside a request. A server that does not emit `request` through `node:http` or `node:https`
+(HTTP/2, a runtime with its own server) is not covered: there these setters are process-wide, so wrap the handler with
+`withCodmirTracing`. The scope is not a request, so an event it carries has no `request` (wrap the handler with
+`withCodmirTracing` for that, and for a transaction). The scope needs `process.getBuiltinModule` (Node.js 20.16 and 22.3
+and later); on the Edge runtime, and on an older Node.js with no wrapped handler yet, these setters stay process-wide.
+
 Route handler transactions come from `@codmir/sdk/nextjs/server`. Next.js does not tell a handler its own route
 pattern, so pass it to group by route rather than by URL:
 
@@ -897,7 +911,8 @@ Which handlers run in a request scope that survives `await` without you doing an
 | Next.js `withCodmirTracing`, `withCodmirMiddleware` from `/nextjs/server` | yes | yes |
 | Remix `withCodmirTracing`, `withCodmirRequestHandler` from `/remix/server` | yes | yes |
 | Next.js `captureRequestError`, `captureRouterError` | only around the capture itself | no: there is no user of the request |
-| A handler you did not wrap, or code that runs before Express's `requestHandler()` | none | `setUser`, `setTag`, `setTags` and `addBreadcrumb` there are process-wide, so two requests that overlap can see each other's user, tags and breadcrumbs: wrap the handler, or call them inside a wrapped one |
+| Next.js: a route handler, server action or server component you did not wrap, on a Node.js server | its own: `init` gives one to every `node:http` and `node:https` request | yes, for the whole request; a setter outside any request stays process-wide (see [Next.js](#nextjs)) |
+| A handler you did not wrap, or code that runs before Express's `requestHandler()`, anywhere else | none | `setUser`, `setTag`, `setTags` and `addBreadcrumb` there are process-wide, so two requests that overlap can see each other's user, tags and breadcrumbs: wrap the handler, or call them inside a wrapped one |
 
 The scope is AsyncLocalStorage, installed by the first request that goes through one of these wrappers.
 

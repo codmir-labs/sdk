@@ -26,7 +26,7 @@ import { ingestUrl } from "../endpoints";
 import type { TransactionEvent } from "../tracing/types";
 import { SDK_INFO } from "../version";
 import { PatchRuntime, type SelfHealingConfig } from "./patch-runtime";
-import { getRequestScope } from "./request-scope";
+import { getRequestScope, retireOpenedScopes, scopeForWrite } from "./request-scope";
 import { getActiveSpan } from "../tracing/context";
 import { sanitizeExtra } from "./sanitize-extra";
 import { redactSecrets } from "../logs/redact";
@@ -793,7 +793,7 @@ class OverseerClient {
 
   /** Inside a request the user is the request's own: `setUser` sets it and leaves the client's alone. */
   setUser(user: UserContext | null): void {
-    const scope = getRequestScope();
+    const scope = scopeForWrite();
     if (scope) scope.user = user;
     else this.user = user;
   }
@@ -823,13 +823,13 @@ class OverseerClient {
 
   /** Inside a request the tag is the request's: it never reaches another request or the process-wide tags. */
   setTag(key: string, value: string): void {
-    const scope = getRequestScope();
+    const scope = scopeForWrite();
     if (scope) scope.tags = { ...scope.tags, [key]: value };
     else this.tags[key] = value;
   }
 
   setTags(tags: Record<string, string>): void {
-    const scope = getRequestScope();
+    const scope = scopeForWrite();
     if (scope) scope.tags = { ...scope.tags, ...tags };
     else this.tags = { ...this.tags, ...tags };
   }
@@ -840,7 +840,7 @@ class OverseerClient {
 
   /** Inside a request the id is the request's own, and the client's is left alone. */
   setConversationId(conversationId: string | null): void {
-    const scope = getRequestScope();
+    const scope = scopeForWrite();
     if (scope) scope.conversationId = conversationId;
     else this.conversationId = conversationId;
   }
@@ -853,7 +853,7 @@ class OverseerClient {
 
   /** Inside a request the id is the request's own, and the client's (which a batch carries) is left alone. */
   setSessionId(sessionId: string | null): void {
-    const scope = getRequestScope();
+    const scope = scopeForWrite();
     if (scope) scope.sessionId = sessionId;
     else this.sessionId = sessionId;
   }
@@ -984,7 +984,7 @@ class OverseerClient {
 
   private keepBreadcrumb(crumb: Breadcrumb): void {
     const max = this.config.maxBreadcrumbs;
-    const scope = getRequestScope();
+    const scope = scopeForWrite();
     if (scope) scope.breadcrumbs = newest([...(scope.breadcrumbs ?? []), crumb], max);
     else this.breadcrumbs = newest([...this.breadcrumbs, crumb], max);
   }
@@ -997,7 +997,7 @@ class OverseerClient {
   addRepeatedBreadcrumb(breadcrumb: Breadcrumb, hint?: Record<string, unknown>): void {
     const crumb = this.prepareBreadcrumb(breadcrumb, hint);
     if (!crumb) return;
-    const scope = getRequestScope();
+    const scope = scopeForWrite();
     const trail = scope ? (scope.breadcrumbs ?? []) : this.breadcrumbs;
     const last = trail[trail.length - 1];
     if (!last || last.category !== crumb.category || last.level !== crumb.level || last.message !== crumb.message) {
@@ -1036,6 +1036,7 @@ class OverseerClient {
    */
   close(timeoutMs = 2000): Promise<boolean> {
     this.closed = true;
+    retireOpenedScopes();
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
@@ -1071,7 +1072,8 @@ class OverseerClient {
    */
   private requestOf(): { request?: RequestData } {
     const scope = getRequestScope();
-    const request = scope ? { url: scope.url, method: scope.method } : browserRequest();
+    // A scope a setter opened on its own (no url, no method) is no request.
+    const request = scope?.url || scope?.method ? { url: scope.url, method: scope.method } : browserRequest();
     return request ? { request } : {};
   }
 
