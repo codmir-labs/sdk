@@ -14,14 +14,14 @@
  * });
  *
  * // Error Tracking (Next.js)
- * import * as Codmir from '@codmir/sdk/nextjs';
+ * import * as CodmirNext from '@codmir/sdk/nextjs';
  *
- * Codmir.init({ clientKey: process.env.NEXT_PUBLIC_CODMIR_CLIENT_KEY });
+ * CodmirNext.init({ clientKey: process.env.NEXT_PUBLIC_CODMIR_CLIENT_KEY });
  *
  * // Error Tracking (React Native)
- * import * as Codmir from '@codmir/sdk/react-native';
+ * import * as CodmirNative from '@codmir/sdk/react-native';
  *
- * Codmir.init({ clientKey: process.env.EXPO_PUBLIC_CODMIR_CLIENT_KEY });
+ * CodmirNative.init({ clientKey: process.env.EXPO_PUBLIC_CODMIR_CLIENT_KEY });
  * ```
  *
  * @packageDocumentation
