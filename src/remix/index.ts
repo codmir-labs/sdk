@@ -10,7 +10,7 @@
  * import * as Codmir from '@codmir/sdk/remix';
  *
  * Codmir.init({
- *   dsn: process.env.CODMIR_DSN,
+ *   clientKey: process.env.CODMIR_CLIENT_KEY,
  *   environment: process.env.NODE_ENV,
  * });
  *
@@ -20,6 +20,7 @@
  * @example
  * ```typescript
  * // app/routes/dashboard.tsx
+ * import { json } from '@remix-run/node';
  * import { wrapLoader, wrapAction } from '@codmir/sdk/remix';
  *
  * export const loader = wrapLoader(async ({ request }) => {
@@ -27,7 +28,7 @@
  * });
  *
  * export const action = wrapAction(async ({ request }) => {
- *   const form = await request.formData();
+ *   const form = await request.formData?.();
  *   return json({ ok: true });
  * });
  * ```
@@ -111,6 +112,8 @@ type DataFunction = (args: DataFunctionArgs) => Promise<unknown> | unknown;
 let isInitialized = false;
 /** What `setupBrowserTracking` started, ended by `close`. */
 const stops = new Stops();
+/** True from `setupBrowserTracking` to `close`: a second call has nothing to add. */
+let tracking = false;
 let remixConfig: Required<Pick<RemixConfig, "captureLoaderErrors" | "captureActionErrors" | "captureRouteChanges" | "captureResponseErrors">> = {
   captureLoaderErrors: true,
   captureActionErrors: true,
@@ -164,6 +167,8 @@ export function init(config: RemixConfig = {}): void {
  * @example
  * ```typescript
  * // entry.server.tsx
+ * import * as Codmir from '@codmir/sdk/remix';
+ *
  * export const handleError = Codmir.handleError;
  * ```
  */
@@ -205,7 +210,10 @@ export function handleError(
  *
  * @example
  * ```typescript
- * export const loader = wrapLoader(async ({ request, params }) => {
+ * import { json } from '@remix-run/node';
+ * import { wrapLoader } from '@codmir/sdk/remix';
+ *
+ * export const loader = wrapLoader(async ({ params }) => {
  *   const user = await getUser(params.userId);
  *   return json({ user });
  * });
@@ -253,8 +261,11 @@ export function wrapLoader<T extends DataFunction>(loader: T): T {
  *
  * @example
  * ```typescript
+ * import { json } from '@remix-run/node';
+ * import { wrapAction } from '@codmir/sdk/remix';
+ *
  * export const action = wrapAction(async ({ request }) => {
- *   const form = await request.formData();
+ *   const form = await request.formData?.();
  *   await updateUser(form);
  *   return json({ ok: true });
  * });
@@ -307,12 +318,17 @@ export function wrapAction<T extends DataFunction>(action: T): T {
  * @example
  * ```typescript
  * // entry.server.tsx
- * export default function handleRequest(request, status, headers, remixContext) {
+ * import type { EntryContext } from '@remix-run/node';
+ * import { RemixServer } from '@remix-run/react';
+ * import { renderToPipeableStream } from 'react-dom/server';
+ * import * as Codmir from '@codmir/sdk/remix';
+ *
+ * export default function handleRequest(request: Request, status: number, headers: Headers, remixContext: EntryContext) {
  *   return new Promise((resolve, reject) => {
  *     const stream = renderToPipeableStream(
  *       <RemixServer context={remixContext} url={request.url} />,
  *       {
- *         onError(error) {
+ *         onError(error: unknown) {
  *           Codmir.captureRemixServerError(error, request);
  *         },
  *       }
@@ -341,14 +357,14 @@ export function captureRemixServerError(error: unknown, request: RemixRequest): 
 /**
  * Set up browser-side tracking for Remix client entry.
  * Records the browser breadcrumbs (clicks, inputs, `fetch` and XHR, route changes, console output; see `RemixConfig`)
- * and captures unhandled errors.
+ * and captures unhandled errors. A second call before `close` is ignored.
  *
  * @example
  * ```typescript
  * // entry.client.tsx
  * import * as Codmir from '@codmir/sdk/remix';
  *
- * Codmir.init({ dsn: window.ENV.CODMIR_DSN });
+ * Codmir.init({ clientKey: window.ENV.CODMIR_CLIENT_KEY });
  * Codmir.setupBrowserTracking();
  *
  * startTransition(() => {
@@ -357,7 +373,8 @@ export function captureRemixServerError(error: unknown, request: RemixRequest): 
  * ```
  */
 export function setupBrowserTracking(): void {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined" || tracking) return;
+  tracking = true;
 
   // Global error handler
   stops.add(
@@ -385,6 +402,7 @@ export function setupBrowserTracking(): void {
  */
 export function close(): void {
   stops.run();
+  tracking = false;
   isInitialized = false;
   remixConfig = { captureLoaderErrors: true, captureActionErrors: true, captureRouteChanges: true, captureResponseErrors: true };
   browserBreadcrumbs = {};

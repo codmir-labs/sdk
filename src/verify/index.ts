@@ -10,7 +10,7 @@
  * import { verify, printVerifyResult } from '@codmir/sdk/verify';
  *
  * const result = await verify({
- *   dsn: process.env.CODMIR_DSN,
+ *   clientKey: process.env.CODMIR_CLIENT_KEY,
  *   onProgress: (step) => console.log(step.message),
  * });
  *
@@ -78,6 +78,8 @@ export interface VerifyResult {
  *
  * @example
  * ```typescript
+ * import { verify } from '@codmir/sdk/verify';
+ *
  * const result = await verify({
  *   clientKey: process.env.CODMIR_CLIENT_KEY,
  *   timeout: 5000,
@@ -230,7 +232,10 @@ function refusal(where: string, status: number): string {
  *
  * @example
  * ```typescript
- * const ok = await quickVerify(process.env.NEXT_PUBLIC_CODMIR_CLIENT_KEY);
+ * import { quickVerify } from '@codmir/sdk/verify';
+ *
+ * const key = process.env.NEXT_PUBLIC_CODMIR_CLIENT_KEY;
+ * const ok = key ? await quickVerify(key) : false;
  * console.log(ok ? 'Connected!' : 'Failed to connect');
  * ```
  */
@@ -253,7 +258,9 @@ export async function quickVerify(clientKeyOrDsn: string, config: VerifyConfig =
  *
  * @example
  * ```typescript
- * const result = await verify({ dsn });
+ * import { verify, printVerifyResult } from '@codmir/sdk/verify';
+ *
+ * const result = await verify({ clientKey: process.env.CODMIR_CLIENT_KEY });
  * console.log(printVerifyResult(result));
  * ```
  */
