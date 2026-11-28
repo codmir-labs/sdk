@@ -10,9 +10,9 @@
  * import express from 'express';
  *
  * Codmir.init({
- *   dsn: process.env.CODMIR_DSN,
+ *   clientKey: process.env.CODMIR_CLIENT_KEY,
  *   environment: process.env.NODE_ENV,
- *   extractUser: (req) => (req.user ? { id: req.user.id } : null),
+ *   extractUser: (req) => (req.user ? { id: String(req.user.id) } : null),
  * });
  *
  * const app = express();
@@ -131,7 +131,10 @@ export interface ExpressConfig extends OverseerConfig {
    *
    * @example
    * ```typescript
-   * extractUser: (req) => (req.user ? { id: req.user.id } : null)
+   * Codmir.init({
+   *   clientKey: process.env.CODMIR_CLIENT_KEY,
+   *   extractUser: (req) => (req.user ? { id: String(req.user.id) } : null),
+   * });
    * ```
    *
    * An event sends the user's `id` and `username` only (the `email` when there is no `id`). Other keys, such as
@@ -286,6 +289,11 @@ export function requestHandler(): RequestMiddleware {
  *
  * @example
  * ```typescript
+ * import express from 'express';
+ * import busboy from 'busboy';
+ * import { bindToRequest } from '@codmir/sdk/express';
+ *
+ * const app = express();
  * app.use((req, res, next) => {
  *   const form = bindToRequest(busboy({ headers: req.headers }));
  *   form.on('close', next);

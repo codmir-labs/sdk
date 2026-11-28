@@ -1,15 +1,19 @@
 /**
  * @codmir/sdk/remix/server: `http.server` transactions for Remix. Needs `AsyncLocalStorage`: Node, Bun, Deno, and Workers with `nodejs_als` or `nodejs_compat`.
  *
+ * @example
  * ```ts
- * // server.ts: the whole request, loaders and actions included
- * import { createRequestHandler } from "@remix-run/express";
+ * // server.ts: the whole request, loaders and actions included. The handler takes a fetch `Request` and answers a
+ * // `Response`, as the one `createRequestHandler` of `@remix-run/node` returns. (The Express adapter's handler takes
+ * // an Express `req` and `res` instead: wrap its routes with `withCodmirTracing`.)
+ * import { createRequestHandler } from "@remix-run/node";
  * import { withCodmirRequestHandler } from "@codmir/sdk/remix/server";
- * const handle = withCodmirRequestHandler(createRequestHandler({ build }));
+ * const handle = withCodmirRequestHandler(createRequestHandler(build, process.env.NODE_ENV));
  *
  * // or per route
+ * import { json, type LoaderFunctionArgs } from "@remix-run/node";
  * import { withCodmirTracing } from "@codmir/sdk/remix/server";
- * export const loader = withCodmirTracing(async ({ params }) => json({ id: params.id }), {
+ * export const loader = withCodmirTracing(async ({ params }: LoaderFunctionArgs) => json({ id: params.id }), {
  *   route: "/users/:id",
  * });
  * ```
@@ -44,7 +48,10 @@ export function withCodmirTracing<A extends { request: Request }, R>(
   return (args: A) => traceServerRequest(describe(args.request, options), () => fn(args) as Promise<Awaited<R>>);
 }
 
-/** Wraps the request handler `createRequestHandler(...)` returns, so one transaction covers the whole request. */
+/**
+ * Wraps a fetch-style request handler (a `Request` in, a `Response` out, as `createRequestHandler(...)` of `@remix-run/node`
+ * returns), so one transaction covers the whole request.
+ */
 export function withCodmirRequestHandler<A extends [Request, ...any[]]>(
   handler: (...args: A) => Response | Promise<Response>,
   options?: WithCodmirTracingOptions,

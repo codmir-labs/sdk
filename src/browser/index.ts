@@ -9,13 +9,16 @@
  * <script type="module">
  *   import { init, captureException } from '@codmir/sdk/browser';
  *
+ *   // Uncaught errors and unhandled rejections are captured by init itself.
  *   init({
- *     dsn: 'https://www.codmir.com/api/v1/overseer',
+ *     clientKey: 'osk_...', // your project's client key
  *   });
  *
- *   window.onerror = (msg, url, line, col, error) => {
+ *   try {
+ *     riskyOperation();
+ *   } catch (error) {
  *     captureException(error);
- *   };
+ *   }
  * </script>
  * ```
  */

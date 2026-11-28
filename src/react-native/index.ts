@@ -6,17 +6,21 @@
  * @example
  * ```typescript
  * // App.tsx
+ * import React from 'react';
  * import * as Codmir from '@codmir/sdk/react-native';
  *
  * Codmir.init({
- *   dsn: 'https://www.codmir.com/api/v1/overseer',
+ *   clientKey: process.env.EXPO_PUBLIC_CODMIR_CLIENT_KEY,
  * });
+ *
+ * // createErrorBoundary takes your React and returns the class; a type says it is a component.
+ * const ErrorBoundary = Codmir.createErrorBoundary(React) as unknown as React.ComponentType<Codmir.ErrorBoundaryProps>;
  *
  * export default function App() {
  *   return (
- *     <Codmir.ErrorBoundary fallback={<ErrorScreen />}>
+ *     <ErrorBoundary fallback={<ErrorScreen />}>
  *       <YourApp />
- *     </Codmir.ErrorBoundary>
+ *     </ErrorBoundary>
  *   );
  * }
  * ```

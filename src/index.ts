@@ -16,12 +16,12 @@
  * // Error Tracking (Next.js)
  * import * as Codmir from '@codmir/sdk/nextjs';
  *
- * Codmir.init({ dsn: process.env.NEXT_PUBLIC_CODMIR_DSN });
+ * Codmir.init({ clientKey: process.env.NEXT_PUBLIC_CODMIR_CLIENT_KEY });
  *
  * // Error Tracking (React Native)
  * import * as Codmir from '@codmir/sdk/react-native';
  *
- * Codmir.init({ dsn: 'https://www.codmir.com/api/v1/overseer' });
+ * Codmir.init({ clientKey: process.env.EXPO_PUBLIC_CODMIR_CLIENT_KEY });
  * ```
  *
  * @packageDocumentation

@@ -10,7 +10,7 @@
  * import * as Codmir from '@codmir/sdk/nextjs';
  *
  * Codmir.init({
- *   dsn: process.env.NEXT_PUBLIC_CODMIR_DSN,
+ *   clientKey: process.env.NEXT_PUBLIC_CODMIR_CLIENT_KEY,
  *   environment: process.env.NODE_ENV,
  * });
  * ```
