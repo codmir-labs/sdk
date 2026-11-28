@@ -309,3 +309,147 @@ describe("storage that fails", () => {
     expect(replayCalls()[0].body.replay_id).toBe(id);
   });
 });
+
+describe("two pages never number one replay", () => {
+  type Recorder = InstanceType<(typeof import("../index"))["ReplayRecorder"]>;
+  let recorders: Recorder[] = [];
+  // A page that is frozen or gone uploads only what a hide flushes: its timers never cut a segment.
+  const FROZEN = { segmentDuration: 1e9, firstSegmentDelay: 1e9 };
+
+  /** Node's `BroadcastChannel` reaches every channel of one name in the process, so each recorder stands for a tab. */
+  async function page(config: Record<string, unknown> = {}) {
+    vi.resetModules();
+    const { ReplayRecorder } = await import("../index");
+    const recorder = new ReplayRecorder({
+      sessionSampleRate: 1,
+      upload: { url: REPLAY_URL, key: "osk_test", environment: "production" },
+      ...config,
+    });
+    recorders.push(recorder);
+    const id = recorder.start();
+    await vi.dynamicImportSettled();
+    await advance(0);
+    await settle();
+    return { recorder, id };
+  }
+  /** Lets a message cross the channel (it takes a turn of the real event loop, which the fake clock does not move). */
+  const settle = async () => {
+    for (let i = 0; i < 3; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    await advance(0);
+  };
+  const pagehide = async (persisted: boolean) => {
+    window.dispatchEvent(Object.assign(new Event("pagehide"), { persisted }));
+    await settle();
+  };
+  const pageshow = async (persisted: boolean) => {
+    window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted }));
+    await settle();
+  };
+  const numbers = (id: string) => replayCalls().filter((c) => c.body.replay_id === id).map((c) => c.body.segment as number);
+  const repeats = () => {
+    const seen = replayCalls().map((c) => `${c.body.replay_id}#${c.body.segment}`);
+    return seen.filter((k, i) => seen.indexOf(k) !== i);
+  };
+
+  afterEach(async () => {
+    for (const recorder of recorders) recorder.stop();
+    recorders = [];
+    await settle();
+  });
+
+  it("a duplicated tab: the page that asks begins its own replay, the other keeps its id", async () => {
+    const a = await page();
+    click();
+    await advance(5000);
+    const b = await page(); // the same stored session, as in a duplicated tab
+    expect(b.id).toBe(a.id);
+    expect(b.recorder.getReplayId()).not.toBe(a.id);
+    expect(a.recorder.getReplayId()).toBe(a.id);
+    expect(JSON.parse(window.sessionStorage.getItem(KEY) as string).id).toBe(b.recorder.getReplayId());
+    click();
+    await advance(35_000);
+    expect(numbers(b.recorder.getReplayId() as string)[0]).toBe(0);
+    expect(numbers(a.id as string).length).toBeGreaterThan(0);
+    expect(repeats()).toEqual([]);
+  });
+
+  it("a navigation: the page that left answers nobody, so the next page keeps the id and its numbers", async () => {
+    const a = await page(FROZEN);
+    await pagehide(false);
+    const before = numbers(a.id as string);
+    expect(before.length).toBeGreaterThan(0);
+    const b = await page();
+    expect(b.recorder.getReplayId()).toBe(a.id);
+    click();
+    await advance(5000);
+    const after = numbers(a.id as string).slice(before.length);
+    expect(after.length).toBeGreaterThan(0);
+    expect(Math.min(...after)).toBe(Math.max(...before) + 1);
+    expect(repeats()).toEqual([]);
+  });
+
+  describe("a page restored from the back-forward cache", () => {
+    it("with the same stored id goes on from the larger next number", async () => {
+      const a = await page(FROZEN);
+      await pagehide(true);
+      const b = await page();
+      expect(b.recorder.getReplayId()).toBe(a.id);
+      click();
+      await advance(5000);
+      await advance(30_000);
+      const lastOfB = Math.max(...numbers(a.id as string));
+      expect(lastOfB).toBeGreaterThan(0);
+      const seen = replayCalls().length;
+
+      await pageshow(true);
+      expect(a.recorder.getReplayId()).toBe(a.id);
+      click();
+      a.recorder.stop(); // flushes what A gathered
+      const fresh = replayCalls().slice(seen).filter((c) => c.body.replay_id === a.id);
+      expect(fresh.length).toBeGreaterThan(0);
+      expect(Math.min(...fresh.map((c) => c.body.segment as number))).toBeGreaterThan(lastOfB);
+      expect(repeats()).toEqual([]);
+    });
+
+    it("when the other page moved on to a new replay begins its own", async () => {
+      const a = await page(FROZEN);
+      await pagehide(true);
+      const b = await page({ maxSessionDuration: 10 * MIN });
+      expect(b.recorder.getReplayId()).toBe(a.id);
+      for (let i = 0; i < 11; i++) {
+        click();
+        await advance(MIN);
+      }
+      const moved = b.recorder.getReplayId() as string;
+      expect(moved).not.toBe(a.id);
+      // Both pages hear a `pageshow` on this one window: take B's listeners away and keep what B stored.
+      const kept = window.sessionStorage.getItem(KEY) as string;
+      b.recorder.stop();
+      window.sessionStorage.setItem(KEY, kept);
+      const seen = replayCalls().length;
+
+      await pageshow(true);
+      const own = a.recorder.getReplayId() as string;
+      expect(own).not.toBe(a.id);
+      expect(own).not.toBe(moved);
+      expect(JSON.parse(window.sessionStorage.getItem(KEY) as string).id).toBe(own);
+      a.recorder.stop();
+      const fresh = replayCalls().slice(seen).filter((c) => c.body.replay_id === own);
+      expect(fresh.length).toBeGreaterThan(0);
+      expect(fresh[0].body.segment).toBe(0);
+      expect(fresh[0].body.events.slice(0, 2).map((e: { type: number }) => e.type)).toEqual([4, 2]);
+      expect(repeats()).toEqual([]);
+    });
+  });
+
+  it("without BroadcastChannel the next page continues the id, and nothing throws", async () => {
+    vi.stubGlobal("BroadcastChannel", undefined);
+    const a = await page();
+    const b = await page();
+    expect(b.recorder.getReplayId()).toBe(a.id);
+    await pagehide(true);
+    await pageshow(true);
+    await advance(35_000);
+    expect(a.recorder.getReplayId()).toBe(a.id);
+  });
+});

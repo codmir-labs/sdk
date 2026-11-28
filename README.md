@@ -1275,6 +1275,15 @@ than that is not continued, so the next page load makes a new draw. After `maxSe
 the replay is split and recording goes on under a new id. A browser with no usable `sessionStorage` records page by
 page, as before. `stopReplay()` forgets the stored session.
 
+`sessionStorage` is copied into a duplicated tab and into a tab opened with `window.open`, and the server keeps one
+object per replay id and segment number, so two pages must not number one replay. A page that continues a stored replay
+asks on a `BroadcastChannel` (`codmir.replay.session`) whether a live page records that id; if one answers, the asking
+page begins its own replay (a new id, segments from 0, a full snapshot) and the answering page keeps the id. A page
+closes the channel when it goes away, so a page that left never answers and a navigation still continues the replay. A
+page restored from the back-forward cache reads the stored session: the same id carries on from the larger next segment
+number, another id or none begins its own replay. A runtime with no `BroadcastChannel` cannot ask, and a duplicated tab
+there shares the replay.
+
 A session takes a full snapshot every 5 minutes, and a segment that did not arrive (a failed upload, or one event the
 server refused as too large) is followed by a fresh snapshot, taken once the page is back online, so a replay is never
 lost for good to one segment. At most 3 such snapshots are taken with no segment stored in between; after that a loss

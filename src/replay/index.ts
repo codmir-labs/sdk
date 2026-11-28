@@ -256,6 +256,9 @@ export const SESSION_IDLE_MS = 15 * 60 * 1000;
 /** The key in `sessionStorage` that holds the session (ids, counters and times, never recorded content). */
 const SESSION_STORAGE_KEY = "codmir.replay.session";
 
+/** The `BroadcastChannel` on which a page that continues a stored replay asks whether a live page records it. */
+const SESSION_CHANNEL = "codmir.replay.session";
+
 /** Activity is written to storage at most this often. */
 const ACTIVITY_WRITE_MS = 5000;
 
@@ -458,7 +461,16 @@ export class ReplayRecorder {
     if (typeof document !== "undefined" && document.visibilityState === "visible") return;
     this.flushOnHide();
   };
-  private onPageHide = (): void => this.flushOnHide();
+  private onPageHide = (): void => {
+    this.flushOnHide();
+    this.closeChannel(); // a page that has left answers nobody
+  };
+  private onPageShow = (event: Event): void => {
+    if ((event as PageTransitionEvent).persisted === true) this.reconcileRestored();
+  };
+  /** Names this page on the channel, so an answer reaches only the page that asked. */
+  private pageToken = generateId();
+  private channel: BroadcastChannel | null = null;
   private onOnline = (): void => {
     this.recover();
     this.drain(true);
@@ -522,9 +534,13 @@ export class ReplayRecorder {
 
     const generation = ++this.generation;
     window.addEventListener("pagehide", this.onPageHide);
+    window.addEventListener("pageshow", this.onPageShow);
     window.addEventListener("online", this.onOnline);
     document.addEventListener("visibilitychange", this.onHide);
     if (mode === "session") {
+      this.openChannel();
+      // A duplicated tab copies `sessionStorage`: if a live page records this id, this one begins its own replay.
+      if (stored) this.postChannel({ kind: "ask", id: this.replayId, from: this.pageToken });
       this.segmentTimer = setInterval(() => this.tick(), this.config.segmentDuration);
       const first = Math.min(this.config.segmentDuration, Math.max(1000, this.config.firstSegmentDelay));
       if (first < this.config.segmentDuration) {
@@ -711,6 +727,85 @@ export class ReplayRecorder {
       this.session = null;
       this.replayId = "";
     }
+  }
+
+  private openChannel(): void {
+    if (this.channel || typeof BroadcastChannel === "undefined") return;
+    try {
+      const channel = new BroadcastChannel(SESSION_CHANNEL);
+      channel.onmessage = (event: MessageEvent): void => this.onChannelMessage(event.data);
+      this.channel = channel;
+    } catch {
+      // no channel: a duplicated tab shares the replay
+    }
+  }
+
+  private closeChannel(): void {
+    const channel = this.channel;
+    this.channel = null;
+    try {
+      channel?.close();
+    } catch {
+      // never into the page
+    }
+  }
+
+  private postChannel(message: { kind: "ask" | "here"; id: string; from?: string; to?: string }): void {
+    try {
+      this.channel?.postMessage(message);
+    } catch {
+      // never into the page
+    }
+  }
+
+  private onChannelMessage(data: unknown): void {
+    if (this.mode !== "session" || typeof data !== "object" || data === null) return;
+    const m = data as { kind?: unknown; id?: unknown; from?: unknown; to?: unknown };
+    if (typeof m.id !== "string" || m.id !== this.replayId) return;
+    if (m.kind === "ask" && typeof m.from === "string") {
+      this.postChannel({ kind: "here", id: m.id, to: m.from });
+    } else if (m.kind === "here" && m.to === this.pageToken) {
+      this.beginOwnReplay();
+    }
+  }
+
+  /**
+   * Another page records this replay id, so this page leaves it: what it gathered is dropped (it would take numbers of
+   * that id), and a new id, segments from 0 and a full snapshot begin. There is no new draw.
+   */
+  private beginOwnReplay(): void {
+    this.beginReplay();
+    this.sessionStartTime = Date.now();
+    if (this.session) {
+      this.session.id = this.replayId;
+      this.session.startedAt = new Date(this.sessionStartTime);
+      this.session.errorIds = [];
+      this.session.segments = [];
+      this.session.url = window.location.href;
+    }
+    this.persist();
+    this.armFirstSegment();
+    try {
+      this.record?.takeFullSnapshot(true);
+    } catch {
+      // never into the page
+    }
+  }
+
+  /**
+   * The page came back from the back-forward cache with a counter that is as old as its freeze. Same stored id: carry on
+   * from the larger next number. Another id or none: the numbers of this id taken since are unknown, so begin a replay.
+   */
+  private reconcileRestored(): void {
+    if (this.mode !== "session") return;
+    const stored = readStoredSession();
+    if (stored && stored.mode === "session" && stored.id === this.replayId) {
+      this.segments.next = Math.max(this.segments.next, stored.next);
+      this.persist();
+    } else {
+      this.beginOwnReplay();
+    }
+    this.openChannel();
   }
 
   /** Writes the session as it is now. Never throws. */
@@ -1311,7 +1406,9 @@ export class ReplayRecorder {
     this.recoveryPending = false;
     this.recoveries = 0;
     this.awaitingCheckout = false;
+    this.closeChannel();
     if (typeof window !== "undefined") window.removeEventListener("pagehide", this.onPageHide);
+    if (typeof window !== "undefined") window.removeEventListener("pageshow", this.onPageShow);
     if (typeof window !== "undefined") window.removeEventListener("online", this.onOnline);
     if (typeof document !== "undefined") document.removeEventListener("visibilitychange", this.onHide);
   }
