@@ -122,6 +122,15 @@ export interface OverseerConfig {
    */
   beforeSend?: (event: OverseerEvent) => OverseerEvent | null | PromiseLike<OverseerEvent | null>;
   /**
+   * Hook to rename, edit or drop a transaction before it is queued. `beforeSend` never sees transactions; this is their
+   * hook. It gets a copy of the whole transaction (name, tags, measurements and each span with its `data`), with
+   * secrets in the name already masked, so editing it never reaches the app's objects. Return it, changed if you like,
+   * or `null` to drop it. As with `beforeSend`, a throw, a rejected Promise or a result that is not a transaction
+   * drops it and reports `before_send` to `onDropped`; a Promise is awaited and `flush()` waits for it. It is not
+   * called for errors or messages.
+   */
+  beforeSendTransaction?: (transaction: TransactionEvent) => TransactionEvent | null | PromiseLike<TransactionEvent | null>;
+  /**
    * Errors and messages that are never sent. A string matches as a substring, a RegExp when it tests true. An error is
    * matched on both `<type>: <message>` and its bare message, a message event on its text. The browser's cross-origin
    * `Script error.` and any message that starts with `ResizeObserver loop` are always ignored too (see
@@ -158,7 +167,7 @@ export interface OverseerConfig {
   /**
    * Called when the server did not take events: a batch it refused (`status` 401 for a wrong key, say), or events it
    * dropped out of a batch it answered 200 to (`reason`, such as `payment_required`), or that the client gave up on
-   * (`status` 0: an error or message matched `ignoreErrors`, `denyUrls` or `allowUrls`, reason `filtered`, the queue was full, the client was closed before the last try went through, `beforeSend` threw, or `rateLimit` held the event back, reason `rate_limited`, or an event could not be written as JSON, reason `unserializable`, or an event was still unsent after 24 hours, reason `expired`, or the client has no `clientKey` and no `dsn`, so no event can be sent, reason `not_configured`), or an event the server kept answering with a 5xx while it took other requests, alone in its batch (its `status`, reason `retry_exhausted`; an outage drops nothing). They are not sent again.
+   * (`status` 0: an error or message matched `ignoreErrors`, `denyUrls` or `allowUrls`, reason `filtered`, the queue was full, the client was closed before the last try went through, `beforeSend` or `beforeSendTransaction` threw, or `rateLimit` held the event back, reason `rate_limited`, or an event could not be written as JSON, reason `unserializable`, or an event was still unsent after 24 hours, reason `expired`, or the client has no `clientKey` and no `dsn`, so no event can be sent, reason `not_configured`), or an event the server kept answering with a 5xx while it took other requests, alone in its batch (its `status`, reason `retry_exhausted`; an outage drops nothing). They are not sent again.
    * `eventIds` are the ids `captureEvent` returned for those events, when they are known.
    */
   onDropped?: (dropped: { events: number; status: number; reason?: string; eventIds?: string[] }) => void;
@@ -335,13 +344,14 @@ function contextsOf(contexts: CaptureContext["contexts"]): Record<string, unknow
 /** The longest `dist` sent. */
 const MAX_DIST = 64;
 
-type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'ignoreErrors' | 'defaultIgnoreErrors' | 'denyUrls' | 'allowUrls' | 'maxBreadcrumbs' | 'beforeBreadcrumb' | 'sendDefaultPii' | 'selfHealing' | 'apiKey' | 'includeSourceContext' | 'inAppOrigins' | 'captureProcessErrors' | 'onDropped' | 'rateLimit' | 'dist'> & {
+type ResolvedConfig = Omit<Required<OverseerConfig>, 'initialUser' | 'ignoreErrors' | 'defaultIgnoreErrors' | 'denyUrls' | 'allowUrls' | 'maxBreadcrumbs' | 'beforeBreadcrumb' | 'beforeSendTransaction' | 'sendDefaultPii' | 'selfHealing' | 'apiKey' | 'includeSourceContext' | 'inAppOrigins' | 'captureProcessErrors' | 'onDropped' | 'rateLimit' | 'dist'> & {
   initialUser?: UserContext;
   sendDefaultPii: boolean;
   onDropped?: OverseerConfig["onDropped"];
   dist?: string;
   maxBreadcrumbs: number;
   beforeBreadcrumb?: OverseerConfig["beforeBreadcrumb"];
+  beforeSendTransaction?: OverseerConfig["beforeSendTransaction"];
   selfHealing?: SelfHealingConfig;
   includeSourceContext: boolean;
   inAppOrigins: string[];
@@ -499,6 +509,7 @@ class OverseerClient {
       onDropped: config.onDropped,
       maxBreadcrumbs: breadcrumbLimit(config.maxBreadcrumbs),
       beforeBreadcrumb: typeof config.beforeBreadcrumb === "function" ? config.beforeBreadcrumb : undefined,
+      beforeSendTransaction: typeof config.beforeSendTransaction === "function" ? config.beforeSendTransaction : undefined,
       initialUser: config.initialUser,
       sendDefaultPii: config.sendDefaultPii === true,
       initialTags: config.initialTags || {},
@@ -884,15 +895,53 @@ class OverseerClient {
 
   /**
    * Queues a finished transaction on the same transport as errors (batching, retry, pagehide flush).
-   * `beforeSend` is an error-event hook and does not see transactions. Their name and tags are scrubbed like an error's.
+   * `beforeSend` is an error-event hook and does not see transactions; `beforeSendTransaction` does. Their name and tags are scrubbed like an error's.
    */
   captureTransaction(transaction: TransactionEvent): void {
     if (!this.config.enabled) return;
-    this.enqueue({
+    const scrubbed: TransactionEvent = {
       ...transaction,
       name: redactSecrets(transaction.name),
       ...(transaction.tags ? { tags: scrubTags(transaction.tags) } : {}),
-    });
+    };
+    const hook = this.config.beforeSendTransaction;
+    if (!hook) {
+      this.enqueue(scrubbed);
+      return;
+    }
+    let result: ReturnType<NonNullable<OverseerConfig["beforeSendTransaction"]>>;
+    try {
+      result = hook(copyTransactionForHook(scrubbed));
+    } catch (err) {
+      this.transactionHookFailed(scrubbed, err);
+      return;
+    }
+    if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+      const pending: Promise<void> = Promise.resolve(result as PromiseLike<TransactionEvent | null>)
+        .then(
+          (processed) => this.afterTransactionHook(scrubbed, processed),
+          (err) => this.transactionHookFailed(scrubbed, err),
+        )
+        .finally(() => this.pendingHooks.delete(pending));
+      this.pendingHooks.add(pending);
+      return;
+    }
+    this.afterTransactionHook(scrubbed, result as TransactionEvent | null);
+  }
+
+  /** As `afterHook`: `null` is the app dropping the transaction on purpose; anything else that is not a transaction is a failed hook. */
+  private afterTransactionHook(original: TransactionEvent, processed: TransactionEvent | null | undefined): void {
+    if (processed === null || processed === undefined) return;
+    if (typeof processed !== "object" || Array.isArray(processed)) {
+      this.transactionHookFailed(original, new Error("beforeSendTransaction returned something that is not a transaction"));
+      return;
+    }
+    this.enqueue(processed);
+  }
+
+  private transactionHookFailed(transaction: TransactionEvent, err: unknown): void {
+    this.log("beforeSendTransaction failed; dropping the transaction:", err);
+    this.tellDropped(1, 0, "before_send", [{ id: transaction.event_id }]);
   }
 
   getEnvironment(): string {
@@ -1801,6 +1850,17 @@ export function getOverseerKey(): string {
 export { OverseerClient };
 export { PatchRuntime } from "./patch-runtime";
 export type { SelfHealingConfig, PatchManifest, PatchEntry, PatchOp } from "./patch-runtime";
+
+/** The transaction as `beforeSendTransaction` sees it: its own copies of `tags`, `measurements` and each span with its `tags` and `data`. */
+function copyTransactionForHook(tx: TransactionEvent): TransactionEvent {
+  return {
+    ...tx,
+    ...(tx.tags ? { tags: { ...tx.tags } } : {}),
+    ...(tx.measurements ? { measurements: { ...tx.measurements } } : {}),
+    ...(tx.sdk ? { sdk: { ...tx.sdk } } : {}),
+    spans: tx.spans.map((s) => ({ ...s, ...(s.tags ? { tags: { ...s.tags } } : {}), ...(s.data ? { data: { ...s.data } } : {}) })),
+  };
+}
 
 /** The event as `beforeSend` sees it: its own copies of `user`, each breadcrumb and its `data`, and `contexts`, so edits never reach the app's objects or the shared breadcrumb buffer. */
 function copyForHook(event: OverseerEvent): OverseerEvent {

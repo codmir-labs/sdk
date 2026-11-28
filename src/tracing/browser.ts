@@ -15,6 +15,17 @@ import { startTransaction } from "./index";
 import type { Span, Transaction } from "./span";
 import { observeWebVitals, type WebVitals, type WebVitalsObserver } from "./web-vitals";
 
+/** The page's origin with a renamed route as its path: a rename never leaves the raw path in `data.url`. */
+function routeUrl(route: string): string {
+  const path = route.startsWith("/") ? route : `/${route}`;
+  try {
+    const u = new URL(window.location.href);
+    return `${u.origin === "null" ? `${u.protocol}//` : u.origin}${path}`;
+  } catch {
+    return path;
+  }
+}
+
 export type RootKind = "pageload" | "navigation";
 
 export interface BrowserTracingOptions {
@@ -76,11 +87,12 @@ export function startBrowserTracing(options: BrowserTracingOptions = {}): () => 
 
   function begin(kind: RootKind, ready: boolean): void {
     const pathname = window.location.pathname;
+    const route = options.routeName?.(pathname, kind) || undefined;
     const tx = startTransaction({
       op: kind,
-      name: options.routeName?.(pathname, kind) || pathname,
+      name: route || pathname,
       startTime: kind === "pageload" ? pageloadStart() : undefined,
-      data: { url: scrubUrl(window.location.href) },
+      data: { url: route ? routeUrl(route) : scrubUrl(window.location.href) },
     });
     const open = new Set<Span>();
     let lastActivity = Date.now();

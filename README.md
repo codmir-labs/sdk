@@ -1153,7 +1153,34 @@ const total = await startSpan({ name: 'checkout', op: 'function' }, async (span)
 - `startSpan(options, fn)` nests under the active span, or opens a root transaction when none is active. It ends the
   span when `fn` returns, throws or settles; a throw or rejection marks it `error` and propagates unchanged.
 - When a root ends, it and its finished children are queued as one `transaction` event on the same transport as
-  errors. At most 1,000 spans go in one transaction. `beforeSend` does not see transactions.
+  errors. At most 1,000 spans go in one transaction. `beforeSend` does not see transactions; `beforeSendTransaction` does.
+- `beforeSendTransaction(transaction)` sees every transaction before it is queued: its name, tags, measurements and
+  spans (each with its `description` and `data`). Return it, changed if you like, or `null` to drop it. A server
+  transaction is named by the raw path when no route is given, and an `http.client` span carries the path in its name
+  and `data.url`, so rename them here:
+
+  ```ts
+  init({
+    tracesSampleRate: 0.1,
+    beforeSendTransaction(tx) {
+      const clean = (s: string) => s.replace(/\/reset\/[^/\s?]+/, '/reset/:token');
+      return {
+        ...tx,
+        name: clean(tx.name), // 'GET /reset/9f8a2c' -> 'GET /reset/:token'
+        spans: tx.spans.map((s) => ({
+          ...s,
+          description: s.description && clean(s.description),
+          data: s.data && { ...s.data, ...(typeof s.data.url === 'string' ? { url: clean(s.data.url) } : {}) },
+        })),
+      };
+    },
+  });
+  ```
+
+  It gets a copy, so editing it never changes your own objects. As with `beforeSend`, a throw, a rejected Promise or a
+  result that is not a transaction drops the transaction, never reaches your app, and `onDropped` hears `before_send`;
+  `null` drops it silently. An async hook is awaited, and `flush()` and `close()` wait for it. It is not called for
+  errors, and `beforeSend` is not called for transactions.
 - An error captured inside a span carries that span's `trace_id` and `span_id` in `contexts.trace`, sampled or not, so
   an issue links to its trace and the errors of two services in one trace can be joined. Outside any span, and with
   tracing off, it carries none. A `contexts.trace` you pass in the capture context wins:
@@ -1838,6 +1865,7 @@ Leave it off unless you serve that manifest.
 | `replaysSessionSampleRate` | `0` | Read by `startReplay()` |
 | `replaysOnErrorSampleRate` | `1` | Read by `startReplay()` |
 | `beforeSend` | keeps every event | `(event) => event \| null`, for errors and messages; `null` drops the event |
+| `beforeSendTransaction` | keeps every transaction | `(transaction) => transaction \| null`; `null` drops it. See [Tracing](#tracing) |
 | `ignoreErrors` | `[]` | Strings (substrings) and RegExps; an error or message that matches is not sent. See [Filtering noise](#filtering-noise) |
 | `defaultIgnoreErrors` | `true` | The built-in entries: the cross-origin `Script error.` and `ResizeObserver loop…`. `false` turns them off |
 | `denyUrls` / `allowUrls` | `[]` | Drop an error thrown in a script whose URL matches `denyUrls`, or matches none of `allowUrls` (no URL: kept) |
