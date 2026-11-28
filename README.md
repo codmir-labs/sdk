@@ -1264,6 +1264,17 @@ your `beforeSend` drops (or one that is rate limited) never makes an on-error re
 `startReplay()` returns the replay id, or `null` when nothing records: no client, no client key, not in a browser, or
 neither rate hit.
 
+A session is a visit in one tab. Its replay id, the draw that chose it (a miss too) and its next segment number are kept
+in `sessionStorage` under `codmir.replay.session`, with the times it started and was last active, and never any recorded
+content. A reload or a same-tab navigation continues it: the same replay id, segment numbers carrying on, and a full
+snapshot first; a visit that was not sampled stays unsampled, so `replaysSessionSampleRate: 0.1` records one visit in
+ten, not one page in ten. An on-error buffer never outlives its page, so each page buffers under its own id while the
+decision is kept. A session ends after 15 minutes without user input (`SESSION_IDLE_MS`; a DOM change alone is not
+input): a page that was idle that long and then gets input continues under a new replay id, and a stored session older
+than that is not continued, so the next page load makes a new draw. After `maxSessionDuration` recording does not stop:
+the replay is split and recording goes on under a new id. A browser with no usable `sessionStorage` records page by
+page, as before. `stopReplay()` forgets the stored session.
+
 A session takes a full snapshot every 5 minutes, and a segment that did not arrive (a failed upload, or one event the
 server refused as too large) is followed by a fresh snapshot, taken once the page is back online, so a replay is never
 lost for good to one segment. At most 3 such snapshots are taken with no segment stored in between; after that a loss
@@ -1382,7 +1393,7 @@ address and a query of its own stays as it is.
 | `maxSegmentEvents` | 5,000 | ... or after this many events, whichever comes first |
 | `bufferDuration` | 60,000 ms | History the on-error buffer keeps (between half of this and all of it) |
 | `postErrorDuration` | 30,000 ms | How long recording continues after an error before the follow-up segment uploads |
-| `maxSessionDuration` | 1 hour | Upper bound on one continuous session |
+| `maxSessionDuration` | 1 hour | Upper bound on one replay of a session: at it recording continues under a new replay id (segments from 0, a full snapshot first), it does not stop |
 | `privacy.maskAllInputs` | `true` | Mask the value of every input, textarea and select |
 | `privacy.maskInputTypes` | `['password', 'credit-card']` | Input types masked even when `maskAllInputs` is false; `password` always is |
 | `privacy.maskSelectors` | `['[data-private]', '.private']` | Text of matching elements and their descendants is replaced by `*` |

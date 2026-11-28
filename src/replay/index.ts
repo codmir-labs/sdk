@@ -194,7 +194,10 @@ export interface ReplayConfig {
   sessionSampleRate: number;
   /** Probability a session not sampled above keeps a rolling buffer for an error. Default 1. */
   errorSampleRate: number;
-  /** Upper bound on one continuous session, in ms. Default 1 hour. */
+  /**
+   * Upper bound on one replay of a session, in ms. Default 1 hour. At the bound the recorder keeps recording under a
+   * new replay id (segments from 0, a full snapshot first); it does not stop.
+   */
   maxSessionDuration: number;
   /** A segment is uploaded after this many ms. Default 30,000. */
   segmentDuration: number;
@@ -246,6 +249,62 @@ const DEFAULT_CONFIG: Omit<ReplayConfig, "privacy" | "upload" | "beforeSend"> = 
   bufferDuration: 60_000,
   postErrorDuration: 30_000,
 };
+
+/** A stored session whose last activity is older than this is not continued: the visit is over. */
+export const SESSION_IDLE_MS = 15 * 60 * 1000;
+
+/** The key in `sessionStorage` that holds the session (ids, counters and times, never recorded content). */
+const SESSION_STORAGE_KEY = "codmir.replay.session";
+
+/** Activity is written to storage at most this often. */
+const ACTIVITY_WRITE_MS = 5000;
+
+/**
+ * rrweb incremental sources that are the user: mouse move, mouse interaction, scroll, input, touch move, media
+ * interaction, drag and selection. A mutation of the DOM alone is not.
+ */
+const ACTIVITY_SOURCES = new Set([1, 2, 3, 5, 6, 7, 12, 14]);
+const RRWEB_INCREMENTAL = 3;
+
+type StoredMode = "session" | "buffer" | "none";
+
+interface StoredSession {
+  id: string;
+  mode: StoredMode;
+  /** The next segment number of the replay `id`. */
+  next: number;
+  startedAt: number;
+  lastActivity: number;
+}
+
+function isStoredSession(value: unknown): value is StoredSession {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  const finite = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
+  if (v.mode !== "session" && v.mode !== "buffer" && v.mode !== "none") return false;
+  if (typeof v.id !== "string" || (v.mode !== "none" && v.id === "")) return false;
+  return finite(v.next) && Number.isInteger(v.next) && v.next >= 0 && finite(v.startedAt) && finite(v.lastActivity);
+}
+
+function readStoredSession(): StoredSession | null {
+  try {
+    const raw = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const value: unknown = JSON.parse(raw);
+    return isStoredSession(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredSession(session: StoredSession | null): void {
+  try {
+    if (session) window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+    else window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  } catch {
+    // storage that fails leaves recording page by page
+  }
+}
 
 /** In session mode rrweb takes a full snapshot this often, so a lost segment costs about this much of the replay. */
 export const SESSION_CHECKOUT_MS = 300_000;
@@ -328,7 +387,13 @@ export class ReplayRecorder {
   private replayId = "";
   /** Segment numbers of the replay now recording; a segment cut in two after a 413 keeps drawing from the counter of its own replay. */
   private segments = { next: 0 };
+  /** When the replay now recording started (it is a replay of a session that may have started on an earlier page). */
   private sessionStartTime = 0;
+  /** What the visit's draw decided, as stored. */
+  private decision: StoredMode = "none";
+  /** The last user activity (epoch ms); in memory always, written to storage at most every {@link ACTIVITY_WRITE_MS}. */
+  private lastActivity = 0;
+  private lastWriteAt = 0;
   /** Events of the segment being built (session and post-error modes). */
   private events: RrwebEvent[] = [];
   /** {@link eventBytes} of `events`, measured as each was recorded. */
@@ -412,20 +477,39 @@ export class ReplayRecorder {
     if (this.mode !== "idle") return this.replayId || null;
     if (typeof window === "undefined") return null;
 
+    const now = Date.now();
+    const found = readStoredSession();
+    const stored = found && now - found.lastActivity < SESSION_IDLE_MS ? found : null;
+
     let mode: Mode | null = null;
-    if (Math.random() < this.config.sessionSampleRate) mode = "session";
+    if (stored) {
+      if (stored.mode !== "none") mode = stored.mode;
+    } else if (Math.random() < this.config.sessionSampleRate) mode = "session";
     else if (Math.random() < this.config.errorSampleRate) mode = "buffer";
-    if (!mode) return null;
+    if (!mode) {
+      // The draw is kept, a miss included, so the visit stays unrecorded.
+      writeStoredSession({ id: "", mode: "none", next: 0, startedAt: stored?.startedAt ?? now, lastActivity: now });
+      return null;
+    }
 
     this.mode = mode;
+    this.decision = mode === "session" ? "session" : "buffer";
     this.halted = false;
     this.buffered = mode === "buffer";
-    this.sessionStartTime = Date.now();
+    this.sessionStartTime = now;
+    this.lastActivity = now;
     this.beginReplay();
+    // A session continues under its id; a buffer never outlives its page, so each page's buffer has its own.
+    if (stored && mode === "session") {
+      this.replayId = stored.id;
+      this.segments = { next: stored.next };
+      this.sessionStartTime = stored.startedAt;
+    }
+    this.persist();
     this.session = {
       id: this.replayId,
       userId: options?.userId,
-      startedAt: new Date(),
+      startedAt: new Date(this.sessionStartTime),
       duration: 0,
       url: window.location.href,
       userAgent: navigator.userAgent,
@@ -462,6 +546,7 @@ export class ReplayRecorder {
     this.mode = "idle";
     this.generation++;
     this.teardown();
+    writeStoredSession(null); // stopped on purpose, after the last flush wrote it: the next start is a new visit
 
     const session = this.session;
     session.endedAt = new Date();
@@ -628,7 +713,73 @@ export class ReplayRecorder {
     }
   }
 
+  /** Writes the session as it is now. Never throws. */
+  private persist(): void {
+    this.lastWriteAt = Date.now();
+    writeStoredSession({
+      id: this.replayId,
+      mode: this.decision,
+      next: this.segments.next,
+      startedAt: this.sessionStartTime,
+      lastActivity: this.lastActivity,
+    });
+  }
+
+  private isActivity(event: RrwebEvent): boolean {
+    const data = event.data as { source?: unknown } | undefined;
+    return event.type === RRWEB_INCREMENTAL && typeof data?.source === "number" && ACTIVITY_SOURCES.has(data.source);
+  }
+
+  /** The user did something: after 15 minutes without any a session continues under a new id. */
+  private onActivity(): void {
+    const now = Date.now();
+    if (this.mode === "session" && now - this.lastActivity >= SESSION_IDLE_MS) {
+      this.lastActivity = now;
+      this.continueReplay();
+      return;
+    }
+    this.lastActivity = now;
+    if (now - this.lastWriteAt >= ACTIVITY_WRITE_MS) this.persist();
+  }
+
+  /**
+   * Ends the replay recording and goes on under a new one: what is gathered is uploaded, then a new id, segments from 0
+   * and a full snapshot. There is no new draw. What `stop()` returns describes the new replay from here.
+   */
+  private continueReplay(): void {
+    this.flushSegment();
+    this.beginReplay();
+    this.sessionStartTime = Date.now();
+    if (this.session) {
+      this.session.id = this.replayId;
+      this.session.startedAt = new Date(this.sessionStartTime);
+      this.session.errorIds = [];
+      this.session.segments = [];
+      this.session.url = window.location.href;
+    }
+    this.persist();
+    this.armFirstSegment();
+    try {
+      this.record?.takeFullSnapshot(true);
+    } catch {
+      // never into the page
+    }
+  }
+
+  private armFirstSegment(): void {
+    if (this.firstSegmentTimer) clearTimeout(this.firstSegmentTimer);
+    this.firstSegmentTimer = null;
+    const first = Math.min(this.config.segmentDuration, Math.max(1000, this.config.firstSegmentDelay));
+    if (first < this.config.segmentDuration) {
+      this.firstSegmentTimer = setTimeout(() => {
+        this.firstSegmentTimer = null;
+        this.flushSegment();
+      }, first);
+    }
+  }
+
   private onEvent(event: RrwebEvent, isCheckout: boolean): void {
+    if (this.mode !== "idle" && this.isActivity(event)) this.onActivity();
     if (this.mode === "buffer") {
       const bytes = eventBytes(event);
       // A checkout starts with a Meta event: that is where the older generation can go.
@@ -691,7 +842,7 @@ export class ReplayRecorder {
 
   private tick(): void {
     if (Date.now() - this.sessionStartTime >= this.config.maxSessionDuration) {
-      this.stop();
+      this.continueReplay();
       return;
     }
     this.flushSegment();
@@ -709,6 +860,7 @@ export class ReplayRecorder {
    * fits the budget, and once one does not, it and every later one do without.
    */
   private flushOnHide(): void {
+    this.persist();
     runHideFlushes();
     const run: HideRun = { cut: false };
     this.hideRun = run;
@@ -803,6 +955,7 @@ export class ReplayRecorder {
     this.flushSegment();
     this.mode = "buffer";
     this.beginReplay();
+    this.persist();
     // Start the next buffer with its own full snapshot.
     try {
       this.record?.takeFullSnapshot(true);
@@ -844,6 +997,7 @@ export class ReplayRecorder {
       }
       this.upload(counter, segment.sessionId, segment.sequenceNumber, segment.events, segment.errorIds ?? [], hiding, epoch);
     });
+    if (counter === this.segments) this.persist();
   }
 
   private upload(
@@ -955,6 +1109,7 @@ export class ReplayRecorder {
       const middle = Math.ceil(events.length / 2);
       this.upload(counter, replayId, sequenceNumber, events.slice(0, middle), [], hiding, epoch);
       this.upload(counter, replayId, counter.next++, events.slice(middle), errorIds, hiding, epoch);
+      if (counter === this.segments) this.persist();
     } else if (outcome === "stored") {
       this.queueBackoffMs = 0;
       if (replayId === this.replayId) this.recoveries = 0;
