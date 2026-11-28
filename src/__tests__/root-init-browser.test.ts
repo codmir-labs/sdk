@@ -21,12 +21,28 @@ beforeEach(() => {
     }),
   );
 });
-afterEach(() => {
+/** The two flags the page listeners keep on `globalThis`. */
+const FLAGS = [Symbol.for("codmir.page-errors.error"), Symbol.for("codmir.page-errors.unhandledrejection")];
+let loaded: Array<{ root: Root; browser: Browser }>;
+beforeEach(() => {
+  loaded = [];
+});
+// A test that fails before its own close must not leave its listeners or flags for the next one.
+afterEach(async () => {
+  for (const { root, browser } of loaded) {
+    browser.close();
+    await root.close();
+  }
+  for (const flag of FLAGS) delete (globalThis as Record<symbol, unknown>)[flag];
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
-const load = async () => ({ root: (await import("../index")) as Root, browser: (await import("../browser/index")) as Browser });
+const load = async () => {
+  const entries = { root: (await import("../index")) as Root, browser: (await import("../browser/index")) as Browser };
+  loaded.push(entries);
+  return entries;
+};
 const events = () => bodies.flatMap((b) => b.events).filter((e) => e.type === "error");
 const throwError = (message: string) => window.dispatchEvent(new ErrorEvent("error", { error: new Error(message), message }));
 const reject = (reason: unknown) => {
@@ -36,8 +52,9 @@ const reject = (reason: unknown) => {
 };
 /** A listener of the page's own for the test that dispatches an error nobody should capture: jsdom reports an unhandled one. */
 const absorb = (e: Event) => e.preventDefault();
-beforeEach(() => window.addEventListener("error", absorb));
-afterEach(() => window.removeEventListener("error", absorb));
+const pageWindow = window; // the stubbed `window` of a test is gone by the time this hook runs
+beforeEach(() => pageWindow.addEventListener("error", absorb));
+afterEach(() => pageWindow.removeEventListener("error", absorb));
 const config = { clientKey: "osk_test" };
 
 describe("root init in a browser", () => {
@@ -152,6 +169,24 @@ describe("the capture switches", () => {
     await root.close();
   });
 
+  it("the browser entry's captureGlobalErrors: false skips the error listener and still captures a rejection once", async () => {
+    const { browser } = await load();
+    browser.init({ ...config, captureGlobalErrors: false });
+    throwError("ignored error");
+    reject(new Error("kept rejection"));
+    await browser.flush();
+    expect(events().map((e) => e.event.message)).toEqual(["kept rejection"]);
+  });
+
+  it("the browser entry's captureUnhandledRejections: false skips the rejection listener and still captures an error once", async () => {
+    const { browser } = await load();
+    browser.init({ ...config, captureUnhandledRejections: false });
+    throwError("kept error");
+    reject(new Error("ignored rejection"));
+    await browser.flush();
+    expect(events().map((e) => e.event.message)).toEqual(["kept error"]);
+  });
+
   it("does not hand the two switches to core init", async () => {
     const received: Array<Record<string, unknown>> = [];
     vi.doMock("../overseer/index", async () => {
@@ -234,5 +269,27 @@ describe("a window that cannot listen", () => {
     vi.stubGlobal("window", {});
     expect(() => root.init({ ...config, debug: true })).not.toThrow();
     await expect(root.close()).resolves.toBe(true);
+  });
+
+  it("sets neither flag and logs no browser line, even with debug", async () => {
+    const { root } = await load();
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.stubGlobal("window", {});
+    root.init({ ...config, debug: true });
+    const slots = globalThis as Record<symbol, unknown>;
+    for (const flag of FLAGS) expect(slots[flag]).toBeUndefined();
+    expect(log.mock.calls.filter((call) => String(call[1]).includes("@codmir/sdk/browser adds"))).toHaveLength(0);
+    await root.close();
+  });
+});
+
+describe("what an error event reports", () => {
+  it("prefers the error over a generic message", async () => {
+    const { root } = await load();
+    root.init(config);
+    window.dispatchEvent(new ErrorEvent("error", { message: "Script error.", error: new Error("real cause") }));
+    await root.flush();
+    expect(events().map((e) => e.event.message)).toEqual(["real cause"]);
+    expect(events()[0].event.exception.value).toBe("real cause");
   });
 });
