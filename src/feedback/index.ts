@@ -199,7 +199,7 @@ function bodyOf(ctx: FeedbackContext, text: string, input: unknown, now: number)
   const json = JSON.stringify({
     text,
     replyWhenFixed: typeof replyWhenFixed === "boolean" ? replyWhenFixed : undefined,
-    replayId: pick("replayId", () => ctx.replayId, (v) => (typeof v === "string" && UUID.test(v) ? v : undefined)),
+    replayId: pick("replayId", () => ctx.replayId(), (v) => (typeof v === "string" && UUID.test(v) ? v : undefined)),
     eventId: pick("eventId", () => (ctx.lastError && now - ctx.lastError.at <= 600000 ? ctx.lastError.id : undefined), (v) => str(v, 200)),
     failed: pick("failedRequest", () => lastFailed(ctx, now), (v) => failedOf(v, at)),
     pagePath: pick("pagePath", () => (globalThis as { location?: { pathname?: string } }).location?.pathname, pathOf),

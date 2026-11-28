@@ -366,6 +366,11 @@ export interface ReplayHook {
   getReplayId(): string | null;
   /** Called with the id of every error event captured while the hook is set. */
   onError(eventId: string): void;
+  /**
+   * Called when feedback goes out. Returns the id of a replay that uploads, which the feedback may name, or null. In
+   * on-error mode it uploads the buffer first, as an error would.
+   */
+  onFeedback(): string | null;
 }
 
 /** What `@codmir/sdk/feedback` reads from the client. Not part of the stable API. */
@@ -376,7 +381,8 @@ export interface FeedbackContext {
   environment: string;
   release: string;
   userId: unknown;
-  replayId: string | null;
+  /** The replay the feedback names, or null: called only when the feedback takes the SDK's own, since in on-error mode it uploads the buffer. */
+  replayId: () => string | null;
   /** The last error event that was really queued: not one sampled out, dropped by `beforeSend` or captured while disabled. */
   lastError: { id: string; at: number } | null;
   breadcrumbs: readonly Breadcrumb[];
@@ -736,13 +742,14 @@ class OverseerClient {
 
   /** What `sendFeedback()` in `@codmir/sdk/feedback` adds to a visitor's words. Not part of the stable API. */
   feedbackContext(): FeedbackContext {
-    let replayId: string | null = null;
     let userId: unknown;
-    try {
-      replayId = this.replayHook?.getReplayId() ?? null;
-    } catch {
-      // a failing replay hook never breaks feedback
-    }
+    const replayId = (): string | null => {
+      try {
+        return this.replayHook?.onFeedback() ?? null;
+      } catch {
+        return null; // a failing replay hook never breaks feedback
+      }
+    };
     try {
       userId = this.userOf()?.id;
     } catch {

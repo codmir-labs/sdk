@@ -295,7 +295,7 @@ Each import is its own bundle, so a page that only reports errors never loads th
 | `@codmir/sdk` | The error SDK (`init`, `captureException`, `captureMessage`, `setUser`, `setTag`, `addBreadcrumb`, `flush` ...), the `Overseer` namespace and `CodmirClient` | Anywhere |
 | `@codmir/sdk/overseer` | The error SDK alone: the same functions as the root, without the API client | Anywhere |
 | `@codmir/sdk/browser` | `init` with global handlers, click, request, navigation and console breadcrumbs, `fetch` and XHR spans, `startBrowserTracing` | Browser |
-| `@codmir/sdk/replay` | `startReplay`, `stopReplay`, `ReplayRecorder`, `DEFAULT_PRIVACY` | Browser |
+| `@codmir/sdk/replay` | `startReplay`, `stopReplay`, `flushReplay`, `ReplayRecorder`, `DEFAULT_PRIVACY` | Browser |
 | `@codmir/sdk/tracing` | `startSpan`, `startTransaction`, `startChildSpan`, `traceparent` helpers, `instrumentFetch`, `instrumentXhr` | Anywhere |
 | `@codmir/sdk/logs` | `createLogMonitor`, `redact`, `pathPattern`, `messageKey`: findings from an app's own logs, local first; the `LogStore` and `LogState` types for the `store` option | Anywhere |
 | `@codmir/sdk/logs/node` | `captureConsole`, `captureProcess`, `fileSink`, `fileStore`, `expressLogs`, `honoLogs`, and for [logs you already have](#read-logs-you-already-have) `readLog`, `followFile` | Node.js |
@@ -1314,6 +1314,19 @@ ended; an entry is given up after 6 attempts from the queue, so a queue that nev
 that would overflow is dropped, each replay in it as one lost segment, which the fresh snapshot above then covers; a
 page hide sends what waits in the queue, oldest first, then the new segment; a hide send that fails waits in the queue like any other.
 
+Feedback and `flushReplay()` upload too. In on-error mode `sendFeedback` (see [Feedback](#what-is-sent)) uploads the buffer
+under its replay id, as an error does but with no error id, and keeps recording for 30 s (`postErrorDuration`), so the
+replay the feedback names exists. In session mode the replay already uploads, so nothing extra is sent. `flushReplay()`
+does the same on demand: in on-error mode it uploads the buffer now and keeps recording for 30 s, in session mode it
+uploads the pending segment, and it resolves when those requests have answered (a segment that must wait for a retry
+does not hold it up), or at once when no replay records. It never rejects.
+
+```ts
+import { flushReplay } from '@codmir/sdk/replay';
+
+await flushReplay(); // for example before the page hands off to a payment provider
+```
+
 Privacy is on by default: every input is masked, a picked radio button or checkbox is not recorded, `[data-private]`
 and `.private` text is masked, `[data-codmir-block]` subtrees are not recorded, and password fields are masked
 whatever the config says (the exact rules are [below](#what-a-recording-holds)). Meta tags carrying a token (CSRF, XSRF,
@@ -2238,7 +2251,7 @@ the server's limits is left out, and the words are never cut: more than 2,000 ch
 | --- | --- |
 | `text` | What the person typed, trimmed. 1 to 2,000 characters |
 | `replyWhenFixed` | `replyWhenFixed`, when it is a boolean. A wish only: the server keeps it, and the SDK sends nothing by itself. Read the state of the entry with [`feedbackStatus`](#what-became-of-it) and show the visitor what became of it |
-| `replayId` | The id the running [replay](#session-replay) reports, when it is a uuid. `replayId` overrides it, `replayId: false` leaves it out |
+| `replayId` | The id of the [replay](#session-replay) that uploads, when it is a uuid. In on-error mode the feedback uploads the buffer under that id and keeps recording for 30 s, as an error does, so the replay exists; in session mode it is the session's, and nothing extra is sent. Left out when no replay records, the recorder stopped, the visit was not sampled, or an upload cannot happen (a refused card or credits, a replay that cannot play, or nothing recorded yet). `replayId` overrides it and uploads nothing, `replayId: false` leaves it out and uploads nothing |
 | `eventId` | The id of the last **error** the SDK queued in the last 10 minutes (not one that was sampled out, dropped by `beforeSend` or captured while `enabled` is false, and not a message). `eventId` overrides it, `eventId: false` leaves it out |
 | `failed` | `{ method, path, status, at }` of the newest `fetch` or XHR breadcrumb of the last 5 minutes with a status of 400 or more, to the page's own origin or a `tracePropagationTargets` match, and not one of the SDK's own requests. A request that failed without an answer is not one. `failedRequest` overrides it, `failedRequest: false` leaves it out |
 | `pagePath` | `location.pathname`. `pagePath` overrides it, `pagePath: false` leaves it out |

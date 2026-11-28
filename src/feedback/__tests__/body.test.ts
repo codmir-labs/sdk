@@ -21,7 +21,7 @@ async function busyPage(): Promise<{ eventId: string }> {
     { environment: "production", release: "1.2.3", initialUser: { id: "u-42", email: "ann@example.com", username: "ann" } },
     { page: `${PAGE}/checkout?email=ann%40example.com&token=SECRET#access_token=Z` },
   );
-  h.overseer.getClient()!.setReplayHook({ getReplayId: () => REPLAY_ID, onError: () => undefined });
+  h.overseer.getClient()!.setReplayHook({ getReplayId: () => REPLAY_ID, onError: () => undefined, onFeedback: () => REPLAY_ID });
   const eventId = h.overseer.captureException(new Error("save failed"));
   h.overseer.addBreadcrumb({ category: "fetch", message: "POST /api/save", data: { method: "POST", url: `${PAGE}/api/save`, status: 500 } });
   return { eventId };
@@ -89,7 +89,7 @@ describe("the body", () => {
 
   it("the release is left out when it is the default `unknown`, and an id that is not a uuid is not sent as a replay", async () => {
     h = await setup({});
-    h.overseer.getClient()!.setReplayHook({ getReplayId: () => "not-a-uuid", onError: () => undefined });
+    h.overseer.getClient()!.setReplayHook({ getReplayId: () => "not-a-uuid", onError: () => undefined, onFeedback: () => "not-a-uuid" });
     await h.fb.sendFeedback("hello");
     expect(Object.keys(h.door.accepted[0])).not.toContain("release");
     expect(Object.keys(h.door.accepted[0])).not.toContain("replayId");

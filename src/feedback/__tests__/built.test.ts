@@ -48,7 +48,7 @@ interface Api {
   close(): void;
   addBreadcrumb(crumb: Record<string, unknown>): void;
   captureException(error: Error): string;
-  setReplayHook(hook: { getReplayId(): string | null; onError(id: string): void }): void;
+  setReplayHook(hook: { getReplayId(): string | null; onError(id: string): void; onFeedback(): string | null }): void;
   sendFeedback(input: string | Record<string, unknown>): Promise<FeedbackResult>;
   deleteFeedback(id: string, token?: string): Promise<{ ok: boolean; reason?: string }>;
   listFeedback(): Array<{ id: string; at: string }>;
@@ -69,7 +69,7 @@ const CONFIG = () => ({
 async function story(api: Api, label: string): Promise<void> {
   const before = door.accepted.length;
   api.init(CONFIG());
-  api.setReplayHook({ getReplayId: () => REPLAY_ID, onError: () => undefined });
+  api.setReplayHook({ getReplayId: () => REPLAY_ID, onError: () => undefined, onFeedback: () => REPLAY_ID });
   const eventId = api.captureException(new Error(`${label}: save failed for ann@example.com`));
   api.addBreadcrumb({ category: "fetch", message: "POST", data: { method: "post", url: "https://api.shop.example/v2/orders?token=SECRET", status: 500 } });
   api.addBreadcrumb({ category: "fetch", message: "POST", data: { method: "POST", url: `${base}/replay`, status: 500 } });
@@ -273,7 +273,7 @@ describe.skipIf(!hasDist)("the built files against a server that enforces the do
     const feedback = await import(pathToFileURL(`${root}dist/feedback/index.js`).href);
     const before = door.accepted.length;
     overseer.init(CONFIG());
-    overseer.getClient().setReplayHook({ getReplayId: () => REPLAY_ID, onError: () => undefined });
+    overseer.getClient().setReplayHook({ getReplayId: () => REPLAY_ID, onError: () => undefined, onFeedback: () => REPLAY_ID });
     overseer.captureException(new Error("another visitor's"));
     const sent = await feedback.sendFeedback("from a server");
     expect(sent).toMatchObject({ ok: true });

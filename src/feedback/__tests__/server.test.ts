@@ -12,7 +12,7 @@ afterEach(() => teardown(h));
 /** A client that holds what another visitor's request left in it. */
 async function busy(opts: { server?: boolean } = {}): Promise<string> {
   h = await setup({ environment: "production", release: "1.2.3", initialUser: { id: "u-other" } }, { page: `${PAGE}/checkout`, ...opts });
-  h.overseer.getClient()!.setReplayHook({ getReplayId: () => REPLAY_ID, onError: () => undefined });
+  h.overseer.getClient()!.setReplayHook({ getReplayId: () => REPLAY_ID, onError: () => undefined, onFeedback: () => REPLAY_ID });
   h.overseer.addBreadcrumb({ category: "fetch", message: "POST /api/save", data: { method: "POST", url: `${PAGE}/api/save`, status: 500 } });
   return h.overseer.captureException(new Error("another visitor's error"));
 }

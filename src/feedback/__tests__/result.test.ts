@@ -289,7 +289,7 @@ describe("no network at all", () => {
 describe("a failing replay hook", () => {
   it("does not break the feedback: the body just has no replay", async () => {
     h = await setup({});
-    h.overseer.getClient()!.setReplayHook({ getReplayId: () => { throw new Error("recorder gone"); }, onError: () => undefined });
+    h.overseer.getClient()!.setReplayHook({ getReplayId: () => { throw new Error("recorder gone"); }, onError: () => undefined, onFeedback: () => { throw new Error("recorder gone"); } });
     expect(await h.fb.sendFeedback("hello")).toMatchObject({ ok: true });
     expect(h.door.accepted[0]).not.toHaveProperty("replayId");
   });
