@@ -292,9 +292,9 @@ Each import is its own bundle, so a page that only reports errors never loads th
 
 | Import | What it gives you | Runs in |
 | --- | --- | --- |
-| `@codmir/sdk` | The error SDK (`init`, `captureException`, `captureMessage`, `setUser`, `setTag`, `addBreadcrumb`, `flush` ...), the `Overseer` namespace and `CodmirClient` | Anywhere |
+| `@codmir/sdk` | The error SDK (`init`, `captureException`, `captureMessage`, `setUser`, `setTag`, `addBreadcrumb`, `flush` ...), the `Overseer` namespace and `CodmirClient`. In a browser its `init` also captures uncaught errors and unhandled rejections, and nothing more | Anywhere |
 | `@codmir/sdk/overseer` | The error SDK alone: the same functions as the root, without the API client | Anywhere |
-| `@codmir/sdk/browser` | `init` with global handlers, click, request, navigation and console breadcrumbs, `fetch` and XHR spans, `startBrowserTracing` | Browser |
+| `@codmir/sdk/browser` | `init` with the same global handlers, plus click, request, navigation and console breadcrumbs, `fetch` and XHR spans, `startBrowserTracing` | Browser |
 | `@codmir/sdk/replay` | `startReplay`, `stopReplay`, `flushReplay`, `ReplayRecorder`, `DEFAULT_PRIVACY` | Browser |
 | `@codmir/sdk/tracing` | `startSpan`, `startTransaction`, `startChildSpan`, `traceparent` helpers, `instrumentFetch`, `instrumentXhr` | Anywhere |
 | `@codmir/sdk/logs` | `createLogMonitor`, `redact`, `pathPattern`, `messageKey`: findings from an app's own logs, local first; the `LogStore` and `LogState` types for the `store` option | Anywhere |
@@ -313,6 +313,12 @@ Each import is its own bundle, so a page that only reports errors never loads th
 | `@codmir/sdk/feedback` | `sendFeedback`, `deleteFeedback`, `listFeedback`, `feedbackStatus`, `answerFeedback`: what a visitor says, what became of it, sent with the replay, the error and the failed request of their session | Anywhere (a browser, React Native, a worker, Node 20+) |
 | `@codmir/sdk/client` | `CodmirClient` | Server side (it holds an API key) |
 | `@codmir/sdk/types` | API types, `CodmirApiError`, `CreateTicketSchema`, `CreateAgentTaskSchema` | Anywhere |
+
+**Root or `/browser`.** In a browser, `init` from `@codmir/sdk` captures uncaught errors and unhandled rejections: the same
+two listeners `@codmir/sdk/browser` installs, so an app that calls both `init`s still captures each error once, in either order,
+and `close()` removes them. It adds no breadcrumbs, no click, request or navigation tracking and no tracing: import
+`@codmir/sdk/browser` for those. In Node, a worker and React Native the root `init` installs no page listener. With
+`debug: true` it logs one line saying so.
 
 > [!IMPORTANT]
 > **What is in this package.** `@codmir/sdk` is the error, tracing and replay SDK: error capture (`overseer`),

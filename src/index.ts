@@ -32,11 +32,13 @@ export { CodmirClient, default } from "./client";
 
 // Overseer (Error Tracking)
 export * as Overseer from "./overseer/index";
+import { init as coreInit, close as coreClose, type OverseerConfig } from "./overseer/index";
+import { Stops } from "./overseer/lifecycle";
+import { installPageErrors, hasPageEvents } from "./overseer/page-errors";
 
 // The error SDK at the root: `import { init, captureException } from "@codmir/sdk"`.
 // Same functions and the same singleton client as `@codmir/sdk/overseer`.
 export {
-  init,
   getClient,
   captureException,
   captureMessage,
@@ -45,7 +47,6 @@ export {
   setTags,
   addBreadcrumb,
   flush,
-  close,
   setConversationId,
   getConversationId,
   setSessionId,
@@ -73,6 +74,33 @@ export type {
   PatchEntry,
   PatchOp,
 } from "./overseer/index";
+
+/** What the root `init` started in a browser, ended by `close`. */
+const pageStops = new Stops();
+/** The debug line is for the page, once: a second `init`, or one after `close`, does not repeat it. */
+let browserNoted = false;
+
+/**
+ * Starts the error SDK. In a browser (a `window` with `addEventListener`) it also captures uncaught errors and unhandled
+ * rejections, the two listeners `@codmir/sdk/browser` installs; a second `init` adds none, and neither does one after
+ * `@codmir/sdk/browser` has. It adds no breadcrumbs, request or navigation tracking, or tracing: those are
+ * `@codmir/sdk/browser`. Node, workers and React Native install nothing.
+ */
+export function init(config: OverseerConfig = {}): void {
+  coreInit(config);
+  if (!hasPageEvents()) return;
+  installPageErrors(pageStops);
+  if (config.debug && !browserNoted) {
+    browserNoted = true;
+    console.log("[Overseer]", "@codmir/sdk/browser adds breadcrumbs, request and navigation tracking, and tracing; this entry captures page errors only");
+  }
+}
+
+/** Ends the SDK as `@codmir/sdk/overseer`'s `close` does, and removes the page listeners `init` installed. */
+export function close(timeoutMs?: number): Promise<boolean> {
+  pageStops.run();
+  return coreClose(timeoutMs);
+}
 
 // Types
 export type {
