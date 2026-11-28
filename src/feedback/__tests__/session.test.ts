@@ -70,7 +70,7 @@ describe("the last error event", () => {
 
   it("is an error event of the client's own queue only: the last one survives a failing replay hook", async () => {
     h = await setup({});
-    h.overseer.getClient()!.setReplayHook({ getReplayId: () => { throw new Error("x"); }, onError: () => { throw new Error("y"); } });
+    h.overseer.getClient()!.setReplayHook({ getReplayId: () => { throw new Error("x"); }, onError: () => { throw new Error("y"); }, onFeedback: () => { throw new Error("z"); } });
     const id = h.overseer.captureException(new Error("x"));
     expect((await sent()).eventId).toBe(id);
   });

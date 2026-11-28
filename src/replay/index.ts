@@ -455,6 +455,8 @@ export class ReplayRecorder {
   /** The sends of the page hide being made now, so every request of it shares one keepalive order. */
   private hideRun: HideRun | null = null;
   private postErrorTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Callers of {@link flush} waiting for every segment sent so far to leave its slot. */
+  private idleWaiters: Array<() => void> = [];
   private onSegmentReady?: (segment: ReplaySegment) => void;
   private onSessionEnd?: (session: ReplaySession) => void;
   private onHide = (): void => {
@@ -591,16 +593,71 @@ export class ReplayRecorder {
     }
     if (this.mode === "buffer") {
       this.pushPendingErrorId(errorId);
-      this.mode = "post-error";
-      const history = this.prevBuffer.concat(this.curBuffer);
-      this.clearBuffer();
-      // Nothing recorded yet (rrweb still loading, or waiting for `load`): the ids ride on the post-error segment.
-      if (history.length > 0) this.emitSegment(history, this.takeErrorIds());
-      this.postErrorTimer = setTimeout(() => this.endPostError(), this.config.postErrorDuration);
-      (this.postErrorTimer as { unref?: () => void }).unref?.();
+      this.uploadBuffer();
     } else if (this.mode === "session" || this.mode === "post-error") {
       this.pushPendingErrorId(errorId);
     }
+  }
+
+  /**
+   * Feedback is going out (called by the client for the feedback it sends). Returns the id of a replay that uploads, or
+   * null when none does. In on-error mode the buffer uploads now under its id, as for an error but with no error id, and
+   * recording goes on for `postErrorDuration`. A replay that already uploads (session mode, or the window after an
+   * error) keeps its id and nothing extra is sent.
+   */
+  markFeedback(): string | null {
+    if (!this.canUpload()) return null;
+    if (this.mode === "session" || this.mode === "post-error") return this.replayId;
+    if (this.mode !== "buffer") return null;
+    const id = this.replayId;
+    return this.uploadBuffer() ? id : null;
+  }
+
+  /** Whether a segment recorded now could be sent at all: uploads are set up, not refused, and the replay is not halted. */
+  private canUpload(): boolean {
+    return this.mode !== "idle" && !!this.session && !!this.config.upload && !this.uploadsRefused && !this.halted;
+  }
+
+  /**
+   * On-error mode: the buffer goes up as a segment of the replay now, and recording continues for `postErrorDuration`.
+   * False, and nothing changes, when there is nothing to send: the buffer is empty (rrweb is still loading) with no
+   * error id waiting for it, or no upload can happen.
+   */
+  private uploadBuffer(): boolean {
+    const history = this.prevBuffer.concat(this.curBuffer);
+    // An error with nothing recorded yet still opens the window: its ids ride on the post-error segment.
+    if (history.length === 0 && this.pendingErrorIds.length === 0) return false;
+    this.mode = "post-error";
+    this.clearBuffer();
+    if (history.length > 0) this.emitSegment(history, this.takeErrorIds());
+    this.postErrorTimer = setTimeout(() => this.endPostError(), this.config.postErrorDuration);
+    (this.postErrorTimer as { unref?: () => void }).unref?.();
+    return history.length > 0 && !this.halted;
+  }
+
+  /**
+   * Uploads what the recorder holds now: in on-error mode the buffer, as an error would (and recording goes on for
+   * `postErrorDuration`); in session mode the pending segment. Resolves when the requests that sends have answered, or
+   * at once when nothing records. A segment that must be retried later does not hold it up.
+   */
+  flush(): Promise<void> {
+    if (this.mode === "buffer") this.uploadBuffer();
+    else this.flushSegment();
+    return this.whenIdle();
+  }
+
+  private whenIdle(): Promise<void> {
+    return new Promise((resolve) => {
+      this.idleWaiters.push(resolve);
+      this.notifyIdle();
+    });
+  }
+
+  private notifyIdle(): void {
+    if (this.inFlight > 0 || this.waiting.length > 0) return;
+    const waiters = this.idleWaiters;
+    this.idleWaiters = [];
+    for (const resolve of waiters) resolve();
   }
 
   /** A body carries the newest {@link MAX_ERROR_EVENT_IDS} ids, so no more are kept while they wait for a segment. */
@@ -1162,6 +1219,7 @@ export class ReplayRecorder {
         if (hiding) return;
         this.pump();
         this.drain();
+        this.notifyIdle();
       },
       () => {
         // postSegment does not reject; if it ever does, the slot is freed like an answered one's
@@ -1169,6 +1227,7 @@ export class ReplayRecorder {
         if (hiding) return;
         this.pump();
         this.drain();
+        this.notifyIdle();
       },
     );
   }
@@ -1528,8 +1587,22 @@ export function startReplay(options: StartReplayOptions = {}): string | null {
   client.setReplayHook({
     getReplayId: () => recorder.getReplayId(),
     onError: (errorId) => recorder.markError(errorId),
+    onFeedback: () => recorder.markFeedback(),
   });
   return id;
+}
+
+/**
+ * Uploads what the active replay holds now and resolves when its requests have answered: in on-error mode the buffer,
+ * as an error would (recording then goes on for `postErrorDuration`); in session mode the pending segment. Resolves at
+ * once when no replay records. Never rejects.
+ */
+export async function flushReplay(): Promise<void> {
+  try {
+    await active?.flush();
+  } catch {
+    // replay never breaks the page
+  }
 }
 
 /** Stops the recorder `startReplay()` started and unlinks it from the client. */
