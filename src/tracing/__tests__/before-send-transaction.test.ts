@@ -161,6 +161,38 @@ describe("beforeSendTransaction", () => {
   });
 });
 
+describe("a secret in the transaction name", () => {
+  const finishReset = (): void => {
+    startTransaction({ op: "http.server", name: "GET /reset?token=qzkvwjxmprth" }).end();
+  };
+
+  it("is masked when there is no hook", async () => {
+    start();
+    finishReset();
+    await flush();
+    const [tx] = sentTransactions(calls);
+    expect(tx.name).not.toContain("qzkvwjxmprth");
+    expect(wire()).not.toContain("qzkvwjxmprth");
+  });
+
+  it("is masked before the hook sees it, and a hook that returns it unchanged sends it masked", async () => {
+    const seen: string[] = [];
+    start({
+      beforeSendTransaction: (t) => {
+        seen.push(t.name);
+        return t;
+      },
+    });
+    finishReset();
+    await flush();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).not.toContain("qzkvwjxmprth");
+    const [tx] = sentTransactions(calls);
+    expect(tx.name).toBe(seen[0]);
+    expect(wire()).not.toContain("qzkvwjxmprth");
+  });
+});
+
 describe("a renamed browser transaction's data.url", () => {
   it("takes the origin and the new route, never the raw path", async () => {
     window.history.replaceState(null, "", "/orders/42?token=secret");
@@ -191,5 +223,18 @@ describe("a renamed browser transaction's data.url", () => {
       stop();
     }
     expect(urls).toEqual([`${window.location.origin}/orders/42`]);
+  });
+
+  it("puts a slash after the origin when the route has none", async () => {
+    window.history.replaceState(null, "", "/users/7");
+    start();
+    const urls: unknown[] = [];
+    const stop = startBrowserTracing({ routeName: () => "users/:id", onPageloadEnd: (tx) => urls.push(tx.data.url) });
+    try {
+      await new Promise((r) => setTimeout(r, 1500));
+    } finally {
+      stop();
+    }
+    expect(urls).toEqual([`${window.location.origin}/users/:id`]);
   });
 });
