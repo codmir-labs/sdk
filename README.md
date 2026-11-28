@@ -1755,13 +1755,37 @@ init({
   clientKey: process.env.CODMIR_CLIENT_KEY,
   beforeSend(event) {
     if (event.user) event.user = { id: event.user.id }; // keep only the id, even with sendDefaultPii on
-    if (event.message?.includes('ResizeObserver loop')) return null; // drop noise
+    if (event.tags?.internal === 'true') return null; // drop what you tag as internal
     return event;
   },
 });
 ```
 
 `beforeSend` gets copies of `user`, the breadcrumbs and `contexts`, so editing them never changes your own objects. If it throws, the event is dropped (never sent unscrubbed) and `onDropped` hears `before_send`. An async hook is awaited, and `flush()` and `close()` wait for it.
+
+#### Filtering noise
+
+Stored events are billed, and most browser noise is the same few things. Filter it before it is sent, with no hand-written `beforeSend`:
+
+```ts
+init({
+  clientKey: process.env.CODMIR_CLIENT_KEY,
+  ignoreErrors: ['Network request failed', /^Loading chunk \d+ failed/],
+  denyUrls: [/^chrome-extension:/, /^moz-extension:/, 'googletagmanager.com'],
+  allowUrls: [/^https:\/\/app\.example\.com\//],
+  maxBreadcrumbs: 50,
+  beforeBreadcrumb(crumb) {
+    return crumb.category === 'console' ? null : crumb; // drop console breadcrumbs
+  },
+});
+```
+
+- **`ignoreErrors`** drops an event whose text matches. A string matches as a substring, a RegExp when it tests true. An error is matched on both `<type>: <message>` (`TypeError: x is undefined`) and its bare message; a message event on its text. An empty string and an entry that is neither a string nor a RegExp are ignored.
+- **Built in:** the browser's cross-origin `Script error.` (the whole message, with or without the period) and any message that starts with `ResizeObserver loop` are always ignored, as well as your list. `defaultIgnoreErrors: false` turns them off.
+- **`denyUrls` / `allowUrls`** match the URL of the script the error was thrown in: the file of the innermost stack frame, else the event's own file name. `denyUrls` drops the event when the URL matches. `allowUrls` drops it when there is a URL and it matches none; an event with no URL (no stack, a message event) is kept.
+- **A filtered event** is never sent, sampled or rate limited, and `beforeSend` never sees it. `onDropped` hears it as `{ events: 1, status: 0, reason: 'filtered', eventIds }`, and with `debug: true` the log names the option.
+- **`maxBreadcrumbs`** (0 to 100, default 20) is how many breadcrumbs an event keeps, the client's and a request's alike. `0` keeps none; a number outside the range is clamped (a fraction is rounded down) and a value that is not a number is ignored, so the default 20 stays.
+- **`beforeBreadcrumb(crumb, hint?)`** sees every breadcrumb before it is kept, automatic (clicks, requests, navigation, console) or added by `addBreadcrumb(crumb, hint)`. Return it, changed if you like, or `null` (or no return value) to drop it. It gets a copy. As with `beforeSend`, a throw, or a result that is not a breadcrumb object (a Promise, say), drops the breadcrumb and never reaches your app; `debug: true` logs it. `onDropped` is about events and does not hear about breadcrumbs.
 
 > [!WARNING]
 > Some fields are yours to keep out. Click breadcrumbs carry up to 50 characters of a button's or link's text, and a
@@ -1809,7 +1833,12 @@ Leave it off unless you serve that manifest.
 | `replaysSessionSampleRate` | `0` | Read by `startReplay()` |
 | `replaysOnErrorSampleRate` | `1` | Read by `startReplay()` |
 | `beforeSend` | keeps every event | `(event) => event \| null`, for errors and messages; `null` drops the event |
-| `onDropped` | none | `({ events, status, reason, eventIds }) => void`, called when the server did not take events: a batch it refused, or ones it dropped behind a 200, or ones the client gave up on (`status` 0: the queue was full, the client was closed before the last try went through, or `rateLimit` held the event back). `status` 0 comes with a `reason`: `queue_full`, `closed`, `too_large`, `before_send`, `rate_limited`, `unserializable` (an event whose `toJSON` or getter throws), `expired` (still unsent after 24 hours) or `not_configured` (the client has no `clientKey` and no `dsn`, so no event can leave; the client warns once at init); a batch the server answers with a 5xx is resent as it was; in an outage nothing is dropped, however long it lasts, and the delay between tries grows to a minute. Only when the server keeps refusing a batch while it takes other requests (5 answers of 5xx, and a 2xx to something else since the one before) is the batch split in half, and a single event is dropped with that `status` and the reason `retry_exhausted`; network errors, timeouts, 408 and 429 are retried with no limit on tries; the server's own reasons (such as `payment_required`) come with its status. `eventIds` are the ids `captureEvent` returned for them |
+| `ignoreErrors` | `[]` | Strings (substrings) and RegExps; an error or message that matches is not sent. See [Filtering noise](#filtering-noise) |
+| `defaultIgnoreErrors` | `true` | The built-in entries: the cross-origin `Script error.` and `ResizeObserver loop…`. `false` turns them off |
+| `denyUrls` / `allowUrls` | `[]` | Drop an error thrown in a script whose URL matches `denyUrls`, or matches none of `allowUrls` (no URL: kept) |
+| `maxBreadcrumbs` | `20` | Breadcrumbs an event keeps, 0 to 100 (clamped; a non-number is ignored) |
+| `beforeBreadcrumb` | keeps every breadcrumb | `(crumb, hint?) => crumb \| null`, for every breadcrumb before it is kept; `null`, no return value, a throw or a non-breadcrumb result drops it |
+| `onDropped` | none | `({ events, status, reason, eventIds }) => void`, called when the server did not take events: a batch it refused, or ones it dropped behind a 200, or ones the client gave up on (`status` 0: the queue was full, the client was closed before the last try went through, or `rateLimit` held the event back). `status` 0 comes with a `reason`: `queue_full`, `closed`, `too_large`, `before_send`, `filtered` (`ignoreErrors`, `denyUrls` or `allowUrls` matched), `rate_limited`, `unserializable` (an event whose `toJSON` or getter throws), `expired` (still unsent after 24 hours) or `not_configured` (the client has no `clientKey` and no `dsn`, so no event can leave; the client warns once at init); a batch the server answers with a 5xx is resent as it was; in an outage nothing is dropped, however long it lasts, and the delay between tries grows to a minute. Only when the server keeps refusing a batch while it takes other requests (5 answers of 5xx, and a 2xx to something else since the one before) is the batch split in half, and a single event is dropped with that `status` and the reason `retry_exhausted`; network errors, timeouts, 408 and 429 are retried with no limit on tries; the server's own reasons (such as `payment_required`) come with its status. `eventIds` are the ids `captureEvent` returned for them |
 | `rateLimit` | `{ perGroupPerMinute: 10, perMinute: 100 }` | Caps `error` and `message` events per rolling minute: so many of one group (the event's own `fingerprint`, else the default one) and so many in all. The rest are not sent; `onDropped` hears them as `rate_limited` (`status` 0), in one call a second at most, and on `close()`. It runs after `beforeSend`, so an event the app dropped never counts. Transactions are never capped. `false` turns it off |
 | `sendDefaultPii` | `false` | Off: an event carries only the user's `id` and `username` (the `email` when there is no `id`), and Express adds no `clientIp`. On: every key of the user is sent, `email` and `ip_address` included, except a key that names a secret, and Express adds `clientIp`. Applied before `beforeSend` |
 | `initialUser` | none | The user from the first event on |
