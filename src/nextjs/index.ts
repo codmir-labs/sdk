@@ -38,7 +38,7 @@ import { listen, Stops } from "../overseer/lifecycle";
 import { withHint, crash, eventFrame } from "../overseer/capture-hint";
 import { installBrowserBreadcrumbs, type ConsoleMethod } from "../overseer/browser-breadcrumbs";
 import { scrubUrl } from "../overseer/url-scrub";
-import { getRequestScope, openScopeOnWrite, requestScopeFrom, shareRequestScopeStore, withRequestScope, type RequestScope } from "../overseer/request-scope";
+import { getRequestScope, openScopeOnWrite, requestScopeFrom, shareRequestScopeStore, withRequestScope, withoutRequestScope, type RequestScope } from "../overseer/request-scope";
 import { flushInBackground, isServerlessRuntime } from "../overseer/flush-in-background";
 
 // =============================================================================
@@ -123,11 +123,32 @@ function startServerScopes(): void {
     const getBuiltinModule = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } }).process?.getBuiltinModule;
     const hooks = getBuiltinModule?.("node:async_hooks") as { AsyncLocalStorage?: new () => never } | undefined;
     const Store = hooks?.AsyncLocalStorage;
-    if (Store) shareRequestScopeStore(() => new Store());
+    if (Store) {
+      shareRequestScopeStore(() => new Store());
+      for (const id of ["node:http", "node:https"]) startEachRequestClean(getBuiltinModule?.(id) as { Server?: { prototype: HttpEmitter } } | undefined);
+    }
   } catch {
     // no process.getBuiltinModule here
   }
   openScopeOnWrite();
+}
+
+type HttpEmitter = { emit: (event: string | symbol, ...args: unknown[]) => boolean };
+const CLEAN_REQUESTS = Symbol.for("codmir.request-scope.clean-requests");
+/**
+ * A server runs a request's handler in the async context of its connection, so a scope a setter opened in one request
+ * (`enterWith`) would be the next request's on a keep-alive socket, and one a setter opened before the server listened
+ * would be every request's. Each `request` event of the server therefore runs with no scope opened. Installed once per
+ * process, whatever the number of copies of this module; after `close` it only runs the handler as it was.
+ */
+function startEachRequestClean(http: { Server?: { prototype: HttpEmitter } } | undefined): void {
+  const proto = http?.Server?.prototype;
+  if (!proto || (proto as unknown as Record<symbol, unknown>)[CLEAN_REQUESTS]) return;
+  const emit = proto.emit;
+  proto.emit = function (this: unknown, event, ...args) {
+    return event === "request" ? withoutRequestScope(() => emit.call(this, event, ...args)) : emit.call(this, event, ...args);
+  };
+  Object.defineProperty(proto, CLEAN_REQUESTS, { value: true });
 }
 
 /** What `init` started in a browser, ended by `close`. */

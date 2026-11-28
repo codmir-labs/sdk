@@ -41,9 +41,10 @@ ALL PASS: 6 checks
 `dsn` is read from `CODMIR_DSN` in [`instrumentation.ts`](instrumentation.ts)), requests [`/boom`](app/boom/page.tsx), a
 server component that throws a known message, and waits up to 30 s for the stub to receive the error event. It exits 0
 when exactly one error event carries that message, and otherwise exits 1 and prints what arrived. It then calls
-[`/api/who`](app/api/who/route.ts), a route handler that is not wrapped with `withCodmirTracing`, with `?who=carol` and
-`?who=dave` at once and twice more with no `who`, over the same keep-alive connections: each handler sets the user its
-query names, waits 150 ms and captures an error, and every error must carry its own user (the two with no `who`, none).
+[`/api/who`](app/api/who/route.ts), a route handler, and [`/api/who-pages`](pages/api/who-pages.ts), a Pages Router API
+route, neither wrapped with `withCodmirTracing`, with `?who=carol` and `?who=dave` at once and twice more with no `who`,
+over the same keep-alive connections: each handler sets the user its query names, waits 150 ms and captures an error, and
+every error must carry its own user (the two with no `who`, none).
 Both servers are stopped by PID on every path. CI runs it twice: with the example's Next.js, and with Next.js 15.0.0, the lowest
 release the SDK supports (it needs its own React release candidate):
 

@@ -4,11 +4,20 @@
  * for the rest of that async context, so two overlapping requests each report their own user, tags and breadcrumbs, and
  * a request that sets none reports none. Plain Node, with the core `init`, keeps the process-wide user.
  */
+import { Agent, createServer, get, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Nextjs from "../index";
 import * as overseer from "../../overseer/index";
 
-type Sent = { message: string; user?: { id?: string }; tags?: Record<string, string>; breadcrumbs?: Array<{ message?: string }>; request?: unknown };
+type Sent = {
+  message: string;
+  user?: { id?: string };
+  tags?: Record<string, string>;
+  breadcrumbs?: Array<{ message?: string; data?: { count?: number } }>;
+  request?: unknown;
+  contexts?: { conversation?: { id: string }; session?: { id: string } };
+};
 let sent: Sent[];
 
 const SLOTS = ["codmir.request-scope.store", "codmir.request-scope.open-on-write", "codmir.overseer.client"].map((key) => Symbol.for(key));
@@ -104,6 +113,93 @@ describe("an unwrapped handler on a server", () => {
     });
     await Nextjs.flush();
     expect(eventFor("report boot").user?.id).toBe("boot");
+  });
+});
+
+/** What each setter writes, and how to read it back off an event. */
+const WRITERS: Array<{ name: string; write: (v: string) => void; read: (e: Sent) => unknown; value: (v: string) => unknown }> = [
+  { name: "setTag", write: (v) => Nextjs.setTag("k", v), read: (e) => e.tags?.k, value: (v) => v },
+  { name: "setTags", write: (v) => Nextjs.setTags({ k: v }), read: (e) => e.tags?.k, value: (v) => v },
+  { name: "setSessionId", write: (v) => overseer.setSessionId(v), read: (e) => e.contexts?.session?.id, value: (v) => v },
+  { name: "setConversationId", write: (v) => overseer.setConversationId(v), read: (e) => e.contexts?.conversation?.id, value: (v) => v },
+  { name: "addBreadcrumb", write: (v) => Nextjs.addBreadcrumb({ category: "t", message: v }), read: (e) => e.breadcrumbs?.map((b) => b.message), value: (v) => [v] },
+  {
+    name: "addRepeatedBreadcrumb",
+    write: (v) => {
+      overseer.addRepeatedBreadcrumb({ category: "t", message: v });
+      overseer.addRepeatedBreadcrumb({ category: "t", message: v });
+    },
+    read: (e) => e.breadcrumbs?.map((b) => `${b.message}x${b.data?.count}`),
+    value: (v) => [`${v}x2`],
+  },
+];
+
+describe.each(WRITERS)("$name outside a request scope on a server", ({ write, read, value }) => {
+  beforeEach(() => Nextjs.init(config));
+
+  it("stays in its async context: two concurrent contexts each carry only their own, a third none, and nothing is process-wide", async () => {
+    const report = async (who: string, v: string | null): Promise<void> => {
+      if (v) write(v);
+      await sleep(30);
+      Nextjs.captureException(new Error(`report ${who}`));
+    };
+    await Promise.all([request(() => report("a", "va")), request(() => report("b", "vb")), request(() => report("none", null))]);
+    // A context of its own that sets nothing, after the others are done: the process holds nothing either.
+    await request(() => report("later", null));
+    await Nextjs.flush();
+    expect(read(eventFor("report a"))).toEqual(value("va"));
+    expect(read(eventFor("report b"))).toEqual(value("vb"));
+    const empty = (e: Sent): unknown => read(e);
+    for (const who of ["none", "later"]) {
+      const got = empty(eventFor(`report ${who}`));
+      expect(got === undefined || got === null || (Array.isArray(got) && got.length === 0), `${who}: ${JSON.stringify(got)}`).toBe(true);
+    }
+  });
+});
+
+describe("a node:http server", () => {
+  let server: Server;
+  let agent: Agent;
+  afterEach(async () => {
+    agent?.destroy();
+    await new Promise((resolve) => server?.close(resolve));
+  });
+
+  it("starts every request with no opened scope: a later request on the same keep-alive socket carries nothing of the first", async () => {
+    Nextjs.init(config);
+    const sockets: object[] = [];
+    server = createServer(async (req, res) => {
+      sockets.push(req.socket);
+      const who = new URL(req.url ?? "/", "http://x").searchParams.get("who");
+      if (who) {
+        Nextjs.setUser({ id: who });
+        Nextjs.setTag("who", who);
+        Nextjs.addBreadcrumb({ category: "t", message: `crumb ${who}` });
+      }
+      await sleep(10);
+      Nextjs.captureException(new Error(`report ${who ?? "nobody"}`));
+      res.end("ok");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    agent = new Agent({ keepAlive: true, maxSockets: 1 });
+    const call = (query: string): Promise<void> =>
+      new Promise((resolve, reject) => {
+        get({ host: "127.0.0.1", port, path: `/${query}`, agent }, (res) => {
+          res.resume();
+          res.on("end", resolve);
+        }).on("error", reject);
+      });
+    await call("?who=carol");
+    await call("");
+    expect(sockets).toHaveLength(2);
+    expect(sockets[1], "the second request reuses the first one's socket").toBe(sockets[0]);
+    await Nextjs.flush();
+    expect(eventFor("report carol").user?.id).toBe("carol");
+    const nobody = eventFor("report nobody");
+    expect(nobody.user).toBeUndefined();
+    expect(nobody.tags?.who).toBeUndefined();
+    expect(nobody.breadcrumbs ?? []).toEqual([]);
   });
 });
 

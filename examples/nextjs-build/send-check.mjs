@@ -2,8 +2,8 @@
  * Runs after `next build` (`npm run send-check`): proves that a server error reaches the server. It starts a stub ingest
  * server, starts `next start` with the SDK pointed at the stub, requests /boom (a server component that throws a known
  * message) and waits up to 30 s for the stub to receive the error event. Then it calls /api/who, a route handler the app
- * does not wrap, with ?who=carol and ?who=dave at once, and again with no `who` over the same keep-alive connections: each
- * error must carry its own user, and the last one none. Exit 0 when exactly one error event carries the /boom message and
+ * does not wrap, and /api/who-pages, the same as a Pages Router API route, with ?who=carol and ?who=dave at once, and
+ * again with no `who` over the same keep-alive connections: each error must carry its own user, and the last two none. Exit 0 when exactly one error event carries the /boom message and
  * the /api/who errors have the right users; otherwise exit 1, with what arrived. Both servers are stopped by PID on every path.
  */
 import { spawn } from "node:child_process";
@@ -35,8 +35,12 @@ const stub = createServer((req, res) => {
   });
 });
 
-const WHO = "codmir send-check: who ";
-const errorsOfWho = () => received.flatMap((r) => r.events).filter((e) => e.type === "error" && e.message?.includes(WHO));
+// The two unwrapped routes: the App Router route handler and the Pages Router API route. Each reports "<prefix><who>".
+const ROUTES = [
+  { path: "/api/who", prefix: "codmir send-check: who " },
+  { path: "/api/who-pages", prefix: "codmir send-check: pages who " },
+];
+const errorsOfWho = (prefix) => received.flatMap((r) => r.events).filter((e) => e.type === "error" && e.message?.startsWith(prefix));
 
 // GET over a shared keep-alive agent, so a later request reuses a connection an earlier one used.
 const keepAlive = new Agent({ keepAlive: true, maxSockets: 2 });
@@ -127,23 +131,25 @@ async function run() {
   if (errorsWithMessage().length > 0) await sleep(2000);
   if (errorsWithMessage().length !== 1) return { ok: false, why: `${errorsWithMessage().length} error event(s) with the message, expected 1`, output };
 
-  // Two overlapping requests of an unwrapped handler, each of which sets its own user and waits before it reports.
-  const statuses = await Promise.all(["carol", "dave"].map((who) => getKeepAlive(`${base}/api/who?who=${who}`)));
-  console.log(`GET /api/who?who=carol and ?who=dave, overlapping, answered ${statuses.join(" and ")}`);
-  // Then, on the same connections, requests that set no user.
-  const later = await Promise.all([getKeepAlive(`${base}/api/who`), getKeepAlive(`${base}/api/who`)]);
-  console.log(`GET /api/who twice with no who, on the same keep-alive connections, answered ${later.join(" and ")}`);
-  const whoDeadline = Date.now() + WAIT_MS;
-  while (errorsOfWho().length < 4 && Date.now() < whoDeadline) await sleep(250);
-  await sleep(500);
+  // For each unwrapped route: two overlapping requests, each of which sets its own user and waits before it reports.
+  for (const { path, prefix } of ROUTES) {
+    const statuses = await Promise.all(["carol", "dave"].map((who) => getKeepAlive(`${base}${path}?who=${who}`)));
+    console.log(`GET ${path}?who=carol and ?who=dave, overlapping, answered ${statuses.join(" and ")}`);
+    // Then, on the same connections, requests that set no user.
+    const later = await Promise.all([getKeepAlive(`${base}${path}`), getKeepAlive(`${base}${path}`)]);
+    console.log(`GET ${path} twice with no who, on the same keep-alive connections, answered ${later.join(" and ")}`);
+    const whoDeadline = Date.now() + WAIT_MS;
+    while (errorsOfWho(prefix).length < 4 && Date.now() < whoDeadline) await sleep(250);
+    await sleep(500);
 
-  const users = (name) => errorsOfWho().filter((e) => e.message.endsWith(` ${name}`)).map((e) => e.user ?? null);
-  const expected = { carol: ["carol"], dave: ["dave"], nobody: [null, null] };
-  const actual = { carol: users("carol"), dave: users("dave"), nobody: users("nobody") };
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-    return { ok: false, why: `/api/who errors carry the wrong user: ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`, output };
+    const users = (name) => errorsOfWho(prefix).filter((e) => e.message.endsWith(` ${name}`)).map((e) => e.user ?? null);
+    const expected = { carol: ["carol"], dave: ["dave"], nobody: [null, null] };
+    const actual = { carol: users("carol"), dave: users("dave"), nobody: users("nobody") };
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      return { ok: false, why: `${path} errors carry the wrong user: ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`, output };
+    }
+    console.log(`PASS  each ${path} error carries its own user: ${JSON.stringify(actual)}`);
   }
-  console.log(`PASS  each /api/who error carries its own user: ${JSON.stringify(actual)}`);
   return { ok: true, why: "", output };
 }
 

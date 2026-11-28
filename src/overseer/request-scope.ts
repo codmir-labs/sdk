@@ -100,6 +100,16 @@ export function scopeForWrite(): RequestScope | undefined {
   return fresh;
 }
 
+/**
+ * Runs `fn` with no request scope in effect, whatever the caller's async context held. An HTTP server runs each request's
+ * handler in the async context of its connection, so a scope a setter opened in one request would otherwise be the next
+ * request's on a keep-alive socket. Without a store, `fn` runs as it is.
+ */
+export function withoutRequestScope<T>(fn: () => T): T {
+  const store = slots[STORE_SLOT];
+  return store ? store.run(undefined as unknown as RequestScope, fn) : fn();
+}
+
 let current: RequestScope | undefined;
 const slotStrategy: RequestScopeStrategy = {
   get: () => slots[STORE_SLOT]?.getStore() ?? current,
