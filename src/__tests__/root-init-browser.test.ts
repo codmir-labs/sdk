@@ -111,6 +111,64 @@ describe("root init in a browser", () => {
   });
 });
 
+describe("the capture switches", () => {
+  it("captureGlobalErrors: false skips the error listener and still captures a rejection once", async () => {
+    const { root } = await load();
+    root.init({ ...config, captureGlobalErrors: false });
+    throwError("ignored error");
+    reject(new Error("kept rejection"));
+    await root.flush();
+    expect(events().map((e) => e.event.message)).toEqual(["kept rejection"]);
+    await root.close();
+  });
+
+  it("captureUnhandledRejections: false skips the rejection listener and still captures an error once", async () => {
+    const { root } = await load();
+    root.init({ ...config, captureUnhandledRejections: false });
+    throwError("kept error");
+    reject(new Error("ignored rejection"));
+    await root.flush();
+    expect(events().map((e) => e.event.message)).toEqual(["kept error"]);
+    await root.close();
+  });
+
+  it("both false captures nothing and leaves the flags free for a later browser init", async () => {
+    const { root, browser } = await load();
+    root.init({ ...config, captureGlobalErrors: false, captureUnhandledRejections: false });
+    throwError("nobody listens");
+    reject(new Error("nobody listens either"));
+    await root.flush();
+    expect(events()).toHaveLength(0);
+    const slots = globalThis as Record<symbol, unknown>;
+    expect(slots[Symbol.for("codmir.page-errors.error")]).toBeUndefined();
+    expect(slots[Symbol.for("codmir.page-errors.unhandledrejection")]).toBeUndefined();
+
+    browser.init(config);
+    throwError("browser error");
+    reject(new Error("browser rejection"));
+    await browser.flush();
+    expect(events().map((e) => e.event.message).sort()).toEqual(["browser error", "browser rejection"]);
+    browser.close();
+    await root.close();
+  });
+
+  it("does not hand the two switches to core init", async () => {
+    const received: Array<Record<string, unknown>> = [];
+    vi.doMock("../overseer/index", async () => {
+      const actual = await vi.importActual<typeof import("../overseer/index")>("../overseer/index");
+      return { ...actual, init: (c: Record<string, unknown>) => { received.push(c); return actual.init(c); } };
+    });
+    const { root } = await load();
+    root.init({ ...config, captureGlobalErrors: false, captureUnhandledRejections: false });
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject(config);
+    expect(received[0]).not.toHaveProperty("captureGlobalErrors");
+    expect(received[0]).not.toHaveProperty("captureUnhandledRejections");
+    await root.close();
+    vi.doUnmock("../overseer/index");
+  });
+});
+
 describe("root init and browser init together", () => {
   for (const order of ["root first", "browser first"] as const) {
     it(`${order}: one event per error and per rejection`, async () => {

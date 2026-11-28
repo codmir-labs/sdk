@@ -34,9 +34,6 @@ import {
   close as coreClose,
   getClient,
   type OverseerConfig,
-  type UserContext,
-  type Breadcrumb,
-  type SeverityLevel,
 } from "../overseer/index";
 import { patch, Stops } from "../overseer/lifecycle";
 import { installPageErrors } from "../overseer/page-errors";
