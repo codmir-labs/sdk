@@ -38,7 +38,7 @@ import { listen, Stops } from "../overseer/lifecycle";
 import { withHint, crash, eventFrame } from "../overseer/capture-hint";
 import { installBrowserBreadcrumbs, type ConsoleMethod } from "../overseer/browser-breadcrumbs";
 import { scrubUrl } from "../overseer/url-scrub";
-import { getRequestScope, openScopeOnWrite, requestScopeFrom, shareRequestScopeStore, withRequestScope, withOwnRequestScope, type RequestScope } from "../overseer/request-scope";
+import { getRequestScope, installRequestScopeStore, openScopeOnWrite, requestScopeFrom, withRequestScope, withOwnRequestScope, type RequestScope } from "../overseer/request-scope";
 import { flushInBackground, isServerlessRuntime } from "../overseer/flush-in-background";
 
 // =============================================================================
@@ -120,11 +120,8 @@ function withDigest(scope: RequestScope, error: unknown): RequestScope {
  */
 function startServerScopes(): void {
   try {
-    const getBuiltinModule = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } }).process?.getBuiltinModule;
-    const hooks = getBuiltinModule?.("node:async_hooks") as { AsyncLocalStorage?: new () => never } | undefined;
-    const Store = hooks?.AsyncLocalStorage;
-    if (Store) {
-      shareRequestScopeStore(() => new Store());
+    if (installRequestScopeStore()) {
+      const getBuiltinModule = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } }).process?.getBuiltinModule;
       for (const id of ["node:http", "node:https"]) startEachRequestClean(getBuiltinModule?.(id) as { Server?: { prototype: HttpEmitter } } | undefined);
     }
   } catch {

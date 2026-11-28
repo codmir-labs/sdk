@@ -963,7 +963,12 @@ Codmir.init({ clientKey: process.env.CODMIR_CLIENT_KEY, environment: process.env
 export const handleError = Codmir.handleError;
 ```
 
-In a route module, wrap loaders and actions. Errors are captured and rethrown, so your error boundaries still run:
+In a route module, wrap loaders and actions. Errors are captured and rethrown, so your error boundaries still run. A wrapped
+loader or action runs in its request's scope unless one is already open (a server wrapper's, which is kept): its `Loader:` /
+`Action:` breadcrumb, whatever it adds with `addBreadcrumb` or `setTag`, and a captured error or thrown `Response` belong to
+that request and carry its `request.url` and `request.method`, never another's. This needs an async store. On Node 20.16+
+and 22.3+ the wrappers set it up themselves on a server; elsewhere a server wrapper (`/remix/server`, Express) provides it,
+and without one the loader runs on the process-wide state, as before.
 
 ```ts
 import type { ActionFunctionArgs, LoaderFunctionArgs } from '@remix-run/node';
@@ -1016,8 +1021,8 @@ inside the request, as in the Express, Next.js and Hono integrations; the transa
 | Function | Captures | On the event |
 | --- | --- | --- |
 | `handleError(error, { request })` | Server errors Remix reports. A thrown `Response` with a status of 500 or more is captured as `Response Error: <status> <statusText>` unless `captureResponseErrors: false`; a redirect or a 4xx is not an error | event mechanism `remix-handleError`, `responseStatus`, `responseStatusText` |
-| `wrapLoader(fn)` | Errors thrown by the loader (`captureLoaderErrors`); a thrown `Response` is rethrown and captured only as `handleError` would (5xx, `captureResponseErrors`), plus a `loader` breadcrumb with method and path | event mechanism `remix-loader` |
-| `wrapAction(fn)` | Errors thrown by the action (`captureActionErrors`); a thrown `Response` is handled as in `wrapLoader`, plus an `action` breadcrumb | event mechanism `remix-action`, and `formDataKeys` (the form's field names, never their values) when the action threw before reading the body |
+| `wrapLoader(fn)` | Errors thrown by the loader (`captureLoaderErrors`); a thrown `Response` is rethrown and captured only as `handleError` would (5xx, `captureResponseErrors`), plus a `loader` breadcrumb with method and path, all in the request's scope (see above) | event mechanism `remix-loader` |
+| `wrapAction(fn)` | Errors thrown by the action (`captureActionErrors`); a thrown `Response` is handled as in `wrapLoader`, plus an `action` breadcrumb, all in the request's scope | event mechanism `remix-action`, and `formDataKeys` (the form's field names, never their values) when the action threw before reading the body |
 | `captureRemixServerError(error, request)` | Rendering errors from `entry.server.tsx`; returns the event id | event mechanism `remix-server-render` |
 | `setupBrowserTracking()` | `window` errors and unhandled rejections; click, `fetch`, XHR, navigation and console breadcrumbs, as `init()` was told (`trackNavigation: false` or `captureRouteChanges: false` turns the route ones off) | event mechanism `onerror` or `onunhandledrejection` |
 

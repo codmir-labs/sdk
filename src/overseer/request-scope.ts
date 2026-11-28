@@ -62,6 +62,29 @@ export function shareRequestScopeStore(create: () => RequestStore): void {
 }
 
 /**
+ * Installs the process's request store when none is installed yet, and says whether the process has one. Node 20.16+ and
+ * 22.3+ hand `AsyncLocalStorage` over through `process.getBuiltinModule`, so this module imports nothing from Node; an
+ * older Node or an edge runtime has none to give and the answer is false. Never throws.
+ */
+export function installRequestScopeStore(): boolean {
+  if (slots[STORE_SLOT]) return true;
+  try {
+    const getBuiltinModule = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } }).process?.getBuiltinModule;
+    const hooks = getBuiltinModule?.("node:async_hooks") as { AsyncLocalStorage?: new () => RequestStore } | undefined;
+    const Store = hooks?.AsyncLocalStorage;
+    if (Store) shareRequestScopeStore(() => new Store());
+  } catch {
+    // no process.getBuiltinModule here
+  }
+  return !!slots[STORE_SLOT];
+}
+
+/** Whether the process has an async store, so a scope opened now is still there after an `await`. */
+export function requestScopeSurvivesAwait(): boolean {
+  return !!slots[STORE_SLOT];
+}
+
+/**
  * Set by `@codmir/sdk/nextjs` on a server: each request of the HTTP server then runs with a scope of its own (see
  * {@link withOwnRequestScope}), so a setter (`setUser`, `setTag`, `setTags`, `addBreadcrumb`, `setConversationId`,
  * `setSessionId`) inside a request the app did not wrap writes to that request, and two in flight never hand each
