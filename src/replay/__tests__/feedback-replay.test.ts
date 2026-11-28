@@ -74,6 +74,29 @@ async function recording(config: Record<string, unknown>) {
   return { ...loaded, id };
 }
 
+/** A `fetch` whose replay uploads stay open until the test answers them; other URLs are answered at once. */
+function holdUploads() {
+  const open: Array<(response: Response) => void> = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init: RequestInit) => {
+      calls.push({ url, init, body: JSON.parse(String(init.body)) });
+      if (url !== REPLAY_URL) return Promise.resolve(new Response("{}", { status: 201 }));
+      return new Promise<Response>((resolve) => open.push(resolve));
+    }),
+  );
+  const answer = (response: Response) => open.shift()?.(response);
+  return { open, answer, stored: () => answer(new Response(JSON.stringify({ stored: true }), { status: 202 })) };
+}
+
+/** Whether a promise has settled, after the pending timers and microtasks have run. */
+async function settled(promise: Promise<unknown>): Promise<boolean> {
+  let done = false;
+  void promise.then(() => (done = true));
+  await vi.advanceTimersByTimeAsync(0);
+  return done;
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 describe("feedback in on-error mode", () => {
   it("uploads the buffer under the id it names, with no error id, and records on for postErrorDuration", async () => {
@@ -131,6 +154,45 @@ describe("feedback in on-error mode", () => {
     await vi.advanceTimersByTimeAsync(0);
     await feedback.sendFeedback({ text: "after refusal" });
     expect(feedbackBodies().at(-1)).not.toHaveProperty("replayId");
+  });
+
+  it("names no replay when only the refusal stops it: the buffer holds events and the replay still records", async () => {
+    useFakeClock();
+    const { answer, open } = holdUploads();
+    const recorder = (await import("../index")).createReplayRecorder({
+      errorSampleRate: 1,
+      sessionSampleRate: 0,
+      postErrorDuration: 2000,
+      upload: { url: REPLAY_URL, key: "osk_test" },
+    });
+    recorder.start();
+    await settle();
+    click();
+    await vi.advanceTimersByTimeAsync(1000);
+    recorder.markError("err_1"); // the buffer goes up and its request stays open
+    expect(open).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(2000); // the window ends: a new buffer, while that request is still out
+    click();
+    await vi.advanceTimersByTimeAsync(1000);
+    const uploadsBefore = replayCalls().length;
+
+    answer(new Response(JSON.stringify({ stored: false, reason: "payment_required" }), { status: 202 }));
+    // The refusal is in once the response is read; the recorder's own stop is a timer, which has not run yet.
+    for (let tick = 0; tick < 5; tick++) await new Promise((resolve) => setImmediate(resolve)); // not faked, unlike setTimeout
+    expect(recorder.markFeedback()).toBeNull();
+    expect(replayCalls()).toHaveLength(uploadsBefore);
+  });
+
+  it("names no replay when sending the buffer halts the replay", async () => {
+    useFakeClock();
+    document.body.textContent = "x".repeat(2_500_000); // a full snapshot too big for one request
+    const { feedback, replay } = await load({ replaysOnErrorSampleRate: 1 });
+    replay.startReplay();
+    await settle();
+    await vi.advanceTimersByTimeAsync(1000);
+    await feedback.sendFeedback({ text: "a page too big to replay" });
+    expect(feedbackBodies()[0]).not.toHaveProperty("replayId");
+    expect(replayCalls()).toHaveLength(0);
   });
 });
 
@@ -230,6 +292,34 @@ describe("flushReplay()", () => {
     expect(uploads).toHaveLength(1);
     expect(uploads[0]).toMatchObject({ replay_id: id, segment: 0 });
     expect(uploads[0].events.length).toBeGreaterThan(0);
+  });
+
+  it("waits for the request it sent", async () => {
+    const { replay } = await recording({ replaysOnErrorSampleRate: 1 });
+    const uploads = holdUploads();
+    const flushed = replay.flushReplay();
+    expect(uploads.open).toHaveLength(1);
+    expect(await settled(flushed)).toBe(false);
+    uploads.stored();
+    await expect(flushed).resolves.toBeUndefined();
+  });
+
+  it("waits for a segment that waits for a free upload slot", async () => {
+    const { replay } = await recording({ replaysSessionSampleRate: 1 });
+    const uploads = holdUploads();
+    await vi.advanceTimersByTimeAsync(5000); // a segment is cut: one request out
+    click();
+    await vi.advanceTimersByTimeAsync(5000); // the next: two out, the limit
+    click();
+    const flushed = replay.flushReplay(); // the pending segment has no slot
+    expect(uploads.open).toHaveLength(2);
+    expect(await settled(flushed)).toBe(false);
+    uploads.stored();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await settled(flushed)).toBe(false); // the waiting segment's request is out now, and unanswered
+    uploads.stored();
+    uploads.stored();
+    await expect(flushed).resolves.toBeUndefined();
   });
 
   it("with no replay resolves at once", async () => {
