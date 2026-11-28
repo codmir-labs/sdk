@@ -61,6 +61,11 @@ export function shareRequestScopeStore(create: () => RequestStore): void {
   if (!slots[STORE_SLOT]) slots[STORE_SLOT] = create();
 }
 
+/** Whether the process has an async store, so a scope opened now is still there after an `await`. */
+export function requestScopeSurvivesAwait(): boolean {
+  return !!slots[STORE_SLOT];
+}
+
 /**
  * Set by `@codmir/sdk/nextjs` on a server: each request of the HTTP server then runs with a scope of its own (see
  * {@link withOwnRequestScope}), so a setter (`setUser`, `setTag`, `setTags`, `addBreadcrumb`, `setConversationId`,

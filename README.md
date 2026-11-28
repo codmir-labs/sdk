@@ -963,7 +963,11 @@ Codmir.init({ clientKey: process.env.CODMIR_CLIENT_KEY, environment: process.env
 export const handleError = Codmir.handleError;
 ```
 
-In a route module, wrap loaders and actions. Errors are captured and rethrown, so your error boundaries still run:
+In a route module, wrap loaders and actions. Errors are captured and rethrown, so your error boundaries still run. A wrapped
+loader or action runs in its request's scope unless one is already open (a server wrapper's, which is kept): its `Loader:` /
+`Action:` breadcrumb, whatever it adds with `addBreadcrumb` or `setTag`, and a captured error or thrown `Response` belong to
+that request and carry its `request.url` and `request.method`, never another's. This needs the process's async store, which
+the `/remix/server` wrappers, Express and Next.js install; without one the loader runs on the process-wide state, as before.
 
 ```ts
 import type { ActionFunctionArgs, LoaderFunctionArgs } from '@remix-run/node';

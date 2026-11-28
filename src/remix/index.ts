@@ -54,7 +54,7 @@ import { listen, Stops } from "../overseer/lifecycle";
 import { withHint, crash, eventFrame } from "../overseer/capture-hint";
 import { installBrowserBreadcrumbs, type BrowserBreadcrumbOptions, type ConsoleMethod } from "../overseer/browser-breadcrumbs";
 import { scrubUrl } from "../overseer/url-scrub";
-import { getRequestScope, requestScopeFrom, withRequestScope } from "../overseer/request-scope";
+import { getRequestScope, requestScopeFrom, requestScopeSurvivesAwait, withRequestScope } from "../overseer/request-scope";
 
 // =============================================================================
 // Types
@@ -220,32 +220,34 @@ function captureHandledError(error: unknown): void {
  * ```
  */
 export function wrapLoader<T extends DataFunction>(loader: T): T {
-  const wrapped = async function wrappedLoader(args: DataFunctionArgs) {
-    const url = safeParseUrl(args.request.url);
+  const wrapped = function wrappedLoader(args: DataFunctionArgs) {
+    return inDataFunctionScope(args.request, async () => {
+      const url = safeParseUrl(args.request.url);
 
-    coreAddBreadcrumb({
-      category: "loader",
-      message: `Loader: ${args.request.method} ${url}`,
-      data: {
-        url,
-        method: args.request.method,
-      },
-    });
+      coreAddBreadcrumb({
+        category: "loader",
+        message: `Loader: ${args.request.method} ${url}`,
+        data: {
+          url,
+          method: args.request.method,
+        },
+      });
 
-    try {
-      return await loader(args);
-    } catch (error) {
-      if (isResponseLike(error)) {
-        if (remixConfig.captureLoaderErrors) {
-          captureThrownResponse(error, withHint({}, crash("remix-loader", undefined, "none")));
+      try {
+        return await loader(args);
+      } catch (error) {
+        if (isResponseLike(error)) {
+          if (remixConfig.captureLoaderErrors) {
+            captureThrownResponse(error, withHint({}, crash("remix-loader", undefined, "none")));
+          }
+          throw error;
+        }
+        if (remixConfig.captureLoaderErrors && !alreadySent(error)) {
+          coreCaptureException(error, withHint({}, crash("remix-loader", undefined, "none")));
         }
         throw error;
       }
-      if (remixConfig.captureLoaderErrors && !alreadySent(error)) {
-        coreCaptureException(error, withHint({}, crash("remix-loader", undefined, "none")));
-      }
-      throw error;
-    }
+    });
   };
 
   return wrapped as unknown as T;
@@ -272,41 +274,43 @@ export function wrapLoader<T extends DataFunction>(loader: T): T {
  * ```
  */
 export function wrapAction<T extends DataFunction>(action: T): T {
-  const wrapped = async function wrappedAction(args: DataFunctionArgs) {
-    const url = safeParseUrl(args.request.url);
+  const wrapped = function wrappedAction(args: DataFunctionArgs) {
+    return inDataFunctionScope(args.request, async () => {
+      const url = safeParseUrl(args.request.url);
 
-    coreAddBreadcrumb({
-      category: "action",
-      message: `Action: ${args.request.method} ${url}`,
-      data: {
-        url,
-        method: args.request.method,
-      },
-    });
+      coreAddBreadcrumb({
+        category: "action",
+        message: `Action: ${args.request.method} ${url}`,
+        data: {
+          url,
+          method: args.request.method,
+        },
+      });
 
-    // What the action's own `request.formData()` parses is kept here, so its keys survive the body being consumed.
-    const form = watchFormData(args.request);
-    try {
-      return await action(args);
-    } catch (error) {
-      form.stop();
-      if (isResponseLike(error)) {
-        if (remixConfig.captureActionErrors) {
+      // What the action's own `request.formData()` parses is kept here, so its keys survive the body being consumed.
+      const form = watchFormData(args.request);
+      try {
+        return await action(args);
+      } catch (error) {
+        form.stop();
+        if (isResponseLike(error)) {
+          if (remixConfig.captureActionErrors) {
+            const context: Record<string, unknown> = withHint({}, crash("remix-action", undefined, "none"));
+            if (remixConfig.captureResponseErrors && error.status >= 500) await addFormDataKeys(context, args.request, form.keys);
+            captureThrownResponse(error, context);
+          }
+          throw error;
+        }
+        if (remixConfig.captureActionErrors && !alreadySent(error)) {
           const context: Record<string, unknown> = withHint({}, crash("remix-action", undefined, "none"));
-          if (remixConfig.captureResponseErrors && error.status >= 500) await addFormDataKeys(context, args.request, form.keys);
-          captureThrownResponse(error, context);
+          await addFormDataKeys(context, args.request, form.keys);
+          coreCaptureException(error, context);
         }
         throw error;
+      } finally {
+        form.stop();
       }
-      if (remixConfig.captureActionErrors && !alreadySent(error)) {
-        const context: Record<string, unknown> = withHint({}, crash("remix-action", undefined, "none"));
-        await addFormDataKeys(context, args.request, form.keys);
-        coreCaptureException(error, context);
-      }
-      throw error;
-    } finally {
-      form.stop();
-    }
+    });
   };
 
   return wrapped as unknown as T;
@@ -359,6 +363,16 @@ export function captureRemixServerError(error: unknown, request: Request): strin
 function inRequestScope<T>(request: Request | undefined, fn: () => T): T {
   if (!request || getRequestScope()) return fn();
   return withRequestScope(requestScopeFrom({ url: request.url, method: request.method }), fn);
+}
+
+/**
+ * `inRequestScope` for a loader or action, from its breadcrumb to its capture. A scope opened here lasts to the end of the
+ * async function only where the process has an async store (a server wrapper, Express or Next.js installed it); without
+ * one it would end at the first `await`, and the breadcrumb would be left in a scope no later capture sees, so the
+ * function then runs as before, on the process-wide state.
+ */
+function inDataFunctionScope<T>(request: Request, fn: () => T): T {
+  return requestScopeSurvivesAwait() ? inRequestScope(request, fn) : fn();
 }
 
 // =============================================================================
