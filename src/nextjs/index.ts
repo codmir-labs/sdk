@@ -34,8 +34,9 @@ import {
   type CaptureContext,
 } from "../overseer/index";
 import { detectNextClientHost } from "../overseer/detect";
-import { listen, Stops } from "../overseer/lifecycle";
-import { withHint, crash, eventFrame } from "../overseer/capture-hint";
+import { Stops } from "../overseer/lifecycle";
+import { withHint, crash } from "../overseer/capture-hint";
+import { installPageErrors } from "../overseer/page-errors";
 import { installBrowserBreadcrumbs, type ConsoleMethod } from "../overseer/browser-breadcrumbs";
 import { scrubUrl } from "../overseer/url-scrub";
 import { getRequestScope, installRequestScopeStore, openScopeOnWrite, requestScopeFrom, withRequestScope, withOwnRequestScope, type RequestScope } from "../overseer/request-scope";
@@ -186,25 +187,9 @@ export function init(config: NextjsConfig = {}): void {
 
   // Browser-only setup
   if (typeof window !== "undefined") {
-    // Global error handler
-    if (captureUnhandledErrors) {
-      stops.add(
-        listen(window, "error", (event: ErrorEvent) => {
-          if (alreadySent(event.error)) return;
-          coreCaptureException(event.error || event.message, withHint({}, crash("onerror", undefined, eventFrame(event))));
-        }),
-      );
-    }
-
-    // Unhandled rejection handler
-    if (captureUnhandledRejections) {
-      stops.add(
-        listen(window, "unhandledrejection", (event: PromiseRejectionEvent) => {
-          if (alreadySent(event.reason)) return;
-          coreCaptureException(event.reason, withHint({}, crash("onunhandledrejection", undefined, "none")));
-        }),
-      );
-    }
+    // Uncaught errors and unhandled rejections: shared with the other entries, so a page that also called the root or
+    // `/browser` `init` still captures each once. An error the boundary already sent is left out.
+    installPageErrors(stops, { errors: captureUnhandledErrors, rejections: captureUnhandledRejections, skip: alreadySent });
 
     // Clicks, inputs, requests, route changes and console output: the set every browser entry records.
     stops.add(installBrowserBreadcrumbs({ trackClicks, trackInputs, trackRequests, trackNavigation, trackConsole }));

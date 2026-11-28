@@ -316,7 +316,9 @@ Each import is its own bundle, so a page that only reports errors never loads th
 
 **Root or `/browser`.** In a browser, `init` from `@codmir/sdk` captures uncaught errors and unhandled rejections: the same
 two listeners `@codmir/sdk/browser` installs, so an app that calls both `init`s still captures each error once, in either order,
-and `close()` removes them. It adds no breadcrumbs, no click, request or navigation tracking and no tracing: import
+and `close()` removes them. The same holds for `@codmir/sdk/nextjs`'s `init` and `@codmir/sdk/remix`'s
+`setupBrowserTracking`: they share the two listeners, so each page error is captured once whichever entries ran `init`. The core
+`close` (`@codmir/sdk/overseer`'s) removes the page listeners any entry installed, and a later `init` installs them again. It adds no breadcrumbs, no click, request or navigation tracking and no tracing: import
 `@codmir/sdk/browser` for those. In Node, a worker and React Native the root `init` installs no page listener. With
 `debug: true` it logs one line saying so.
 
@@ -812,7 +814,7 @@ CustomError.getInitialProps = async (ctx) => {
 <details>
 <summary><b>What <code>@codmir/sdk/nextjs</code> does in the browser</b></summary>
 
-- `window` `error` and `unhandledrejection` are captured (`captureUnhandledErrors`, `captureUnhandledRejections`, both on).
+- `window` `error` and `unhandledrejection` are captured (`captureUnhandledErrors`, `captureUnhandledRejections`, both on). The listeners are the ones `@codmir/sdk` and `@codmir/sdk/browser` use, so an app that also calls their `init` still gets one event per error; an error `captureBoundaryError` already sent is not sent again.
 - The same breadcrumbs as `@codmir/sdk/browser`: clicks (`trackClicks`, on), inputs (`trackInputs`, off), `fetch` and
   XHR (`trackRequests`, on), route changes (`trackNavigation`, on; `trackRouteChanges` is the older name) and `console`
   warnings and errors (`trackConsole`, `['error', 'warn']`). A route move reads `pushState /checkout`, with the path
@@ -1024,7 +1026,7 @@ inside the request, as in the Express, Next.js and Hono integrations; the transa
 | `wrapLoader(fn)` | Errors thrown by the loader (`captureLoaderErrors`); a thrown `Response` is rethrown and captured only as `handleError` would (5xx, `captureResponseErrors`), plus a `loader` breadcrumb with method and path, all in the request's scope (see above) | event mechanism `remix-loader` |
 | `wrapAction(fn)` | Errors thrown by the action (`captureActionErrors`); a thrown `Response` is handled as in `wrapLoader`, plus an `action` breadcrumb, all in the request's scope | event mechanism `remix-action`, and `formDataKeys` (the form's field names, never their values) when the action threw before reading the body |
 | `captureRemixServerError(error, request)` | Rendering errors from `entry.server.tsx`; returns the event id | event mechanism `remix-server-render` |
-| `setupBrowserTracking()` | `window` errors and unhandled rejections; click, `fetch`, XHR, navigation and console breadcrumbs, as `init()` was told (`trackNavigation: false` or `captureRouteChanges: false` turns the route ones off) | event mechanism `onerror` or `onunhandledrejection` |
+| `setupBrowserTracking()` | `window` errors (with the file, line and column) and unhandled rejections, shared with the other entries' listeners; click, `fetch`, XHR, navigation and console breadcrumbs, as `init()` was told (`trackNavigation: false` or `captureRouteChanges: false` turns the route ones off) | event mechanism `onerror` or `onunhandledrejection` |
 
 A thrown `Response` (`throw redirect()`, a 404) is rethrown unchanged by `wrapLoader`, `wrapAction` and `handleError`, and
 classified by its status in a `remix/server` transaction; a redirect (3xx) or a client error (4xx) is not an error.
