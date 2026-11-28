@@ -107,6 +107,23 @@ describe("an unwrapped handler on a server", () => {
   });
 });
 
+describe("close", () => {
+  it("ends the scopes setters opened: a later init starts clean", async () => {
+    Nextjs.init(config);
+    await request(async () => {
+      Nextjs.setUser({ id: "before" });
+      Nextjs.setTag("who", "before");
+      await Nextjs.close();
+      Nextjs.init(config);
+      Nextjs.captureException(new Error("report after"));
+    });
+    await Nextjs.flush();
+    const after = eventFor("report after");
+    expect(after.user).toBeUndefined();
+    expect(after.tags?.who).toBeUndefined();
+  });
+});
+
 describe("plain Node", () => {
   it("keeps setUser process-wide with the core client: a script that sets it at its top reports it later", async () => {
     overseer.init(config);

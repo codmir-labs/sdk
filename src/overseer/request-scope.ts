@@ -33,6 +33,8 @@ export interface RequestScope {
   conversationId?: string | null;
   /** The request's session id, set by `setSessionId` inside it, read as `conversationId` is. A batch never carries it. */
   sessionId?: string | null;
+  /** Set on a scope a setter opened on its own (see `scopeForWrite`): the generation it belongs to, which `close` ends. */
+  openedAt?: number;
   /** Brings `user` up to date at the moment an event is built (Express: `req.user` may have been set since the scope opened). Must not throw. */
   refreshUser?: () => void;
 }
@@ -68,6 +70,15 @@ export function shareRequestScopeStore(create: () => RequestStore): void {
  */
 const OPEN_ON_WRITE_SLOT = Symbol.for("codmir.request-scope.open-on-write");
 
+/** The generation of opened scopes, in a slot like the store so every copy of this module agrees. `close` ends it. */
+const GENERATION_SLOT = Symbol.for("codmir.request-scope.generation");
+const generation = (): number => ((globalThis as Record<symbol, unknown>)[GENERATION_SLOT] as number | undefined) ?? 0;
+
+/** Ends every scope a setter opened on its own: `close` and a second `init` start clean, as they do for the client's own state. */
+export function retireOpenedScopes(): void {
+  (globalThis as Record<symbol, unknown>)[GENERATION_SLOT] = generation() + 1;
+}
+
 /** From now on a setter with no request scope in effect opens its own (see {@link scopeForWrite}). */
 export function openScopeOnWrite(): void {
   (globalThis as Record<symbol, unknown>)[OPEN_ON_WRITE_SLOT] = true;
@@ -84,7 +95,7 @@ export function scopeForWrite(): RequestScope | undefined {
   if (own) return own;
   const store = slots[STORE_SLOT];
   if (!store?.enterWith || !(globalThis as Record<symbol, unknown>)[OPEN_ON_WRITE_SLOT]) return undefined;
-  const fresh: RequestScope = { url: "", method: "" };
+  const fresh: RequestScope = { url: "", method: "", openedAt: generation() };
   store.enterWith(fresh);
   return fresh;
 }
@@ -113,7 +124,8 @@ export function setRequestScopeStrategy(next: RequestScopeStrategy): void {
 
 /** The request in scope, or undefined outside any request. */
 export function getRequestScope(): RequestScope | undefined {
-  return strategy.get();
+  const scope = strategy.get();
+  return scope?.openedAt !== undefined && scope.openedAt !== generation() ? undefined : scope;
 }
 
 /** Runs `fn` with `scope` as the current request. */

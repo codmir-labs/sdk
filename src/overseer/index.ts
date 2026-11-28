@@ -26,7 +26,7 @@ import { ingestUrl } from "../endpoints";
 import type { TransactionEvent } from "../tracing/types";
 import { SDK_INFO } from "../version";
 import { PatchRuntime, type SelfHealingConfig } from "./patch-runtime";
-import { getRequestScope, scopeForWrite } from "./request-scope";
+import { getRequestScope, retireOpenedScopes, scopeForWrite } from "./request-scope";
 import { getActiveSpan } from "../tracing/context";
 import { sanitizeExtra } from "./sanitize-extra";
 import { redactSecrets } from "../logs/redact";
@@ -1036,6 +1036,7 @@ class OverseerClient {
    */
   close(timeoutMs = 2000): Promise<boolean> {
     this.closed = true;
+    retireOpenedScopes();
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
