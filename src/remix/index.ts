@@ -46,15 +46,11 @@ import {
   close as coreClose,
   getClient,
   type OverseerConfig,
-  type UserContext,
-  type Breadcrumb,
-  type SeverityLevel,
 } from "../overseer/index";
 import { listen, Stops } from "../overseer/lifecycle";
 import { withHint, crash, eventFrame } from "../overseer/capture-hint";
 import { installBrowserBreadcrumbs, type BrowserBreadcrumbOptions, type ConsoleMethod } from "../overseer/browser-breadcrumbs";
-import { scrubUrl } from "../overseer/url-scrub";
-import { getRequestScope, requestScopeFrom, requestScopeSurvivesAwait, withRequestScope } from "../overseer/request-scope";
+import { getRequestScope, installRequestScopeStore, requestScopeFrom, withRequestScope } from "../overseer/request-scope";
 
 // =============================================================================
 // Types
@@ -367,12 +363,17 @@ function inRequestScope<T>(request: Request | undefined, fn: () => T): T {
 
 /**
  * `inRequestScope` for a loader or action, from its breadcrumb to its capture. A scope opened here lasts to the end of the
- * async function only where the process has an async store (a server wrapper, Express or Next.js installed it); without
- * one it would end at the first `await`, and the breadcrumb would be left in a scope no later capture sees, so the
- * function then runs as before, on the process-wide state.
+ * async function only where the process has an async store. On a server the first call installs one when none is there
+ * (Node 20.16+ and 22.3+); where it cannot (an older Node, an edge runtime) a scope would end at the first `await`, and the
+ * breadcrumb would be left in a scope no later capture sees, so the function runs as before, on the process-wide state.
  */
 function inDataFunctionScope<T>(request: Request, fn: () => T): T {
-  return requestScopeSurvivesAwait() ? inRequestScope(request, fn) : fn();
+  return serverScopeStore() ? inRequestScope(request, fn) : fn();
+}
+
+/** Whether there is an async store, installed here on a server when none is there; a browser never installs one. */
+function serverScopeStore(): boolean {
+  return typeof window === "undefined" && installRequestScopeStore();
 }
 
 // =============================================================================
